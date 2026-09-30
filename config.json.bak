@@ -1,0 +1,55 @@
+{
+  "host": "server.com",
+  "port": 25565,
+  "version": "1.21.1",
+  "ownerUsername": "YourUsername",
+  "registered": false,
+  "botPassword": "yourPassword",
+  "respawn": true,
+  "useProxy": false,
+  "autoMenu": true,
+  "menuCommand": "/menu",
+  "webDashboard": true,
+  "settings": {
+    "pollInterval": 45000,
+    "pollJitter": 10000,
+    "shardItemSlot": 1,
+    "kingSmpSlot": 24,
+    "afkGuiKeyword": "KHU AFK",
+    "afkGuiSlots": 15,
+    "webPort": 3000
+  },
+  "reconnect": {
+    "baseDelay": 1000,
+    "maxDelay": 60000,
+    "jitter": true,
+    "maxRetries": 10,
+    "cooldownMs": 15000,
+    "maxInWindow": 5,
+    "windowMs": 300000,
+    "packetTimeout": 120000,
+    "entityTimeout": 90000
+  },
+  "bots": [
+    {
+      "id": "bot-1",
+      "host": "java.kingmc.vn",
+      "port": 25565,
+      "version": "1.21.11",
+      "username": "Minatodzcuto",
+      "ownerUsername": "YourUsername",
+      "botPassword": "25092010",
+      "registered": false,
+      "useProxy": false,
+      "autoMenu": true,
+      "menuCommand": "/menu",
+      "clientSettings": null,
+      "sendClientSettings": true,
+      "skipValidation": false,
+      "viewDistance": null,
+      "theme": "teal"
+    }
+  ],
+  "proxies": [],
+  "proxyAssignments": {}
+}
