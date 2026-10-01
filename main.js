@@ -4,6 +4,8 @@ const path = require('path');
 const chalk = require('chalk');
 const BotManager = require('./src/services/BotManager');
 const Notifier = require('./src/core/Notifier');
+const HelpCatalog = require('./src/core/HelpCatalog');
+const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 let config;
 try {
   config = require('./config.json');
@@ -119,37 +121,58 @@ function showBanner() {
   console.log(colors.border('╚' + '═'.repeat(width) + '╝'));
   console.log('');
 }
-function showHelp() {
-  const cmds = [
-    ['help, h', 'hiển thị trợ giúp này'],
-    ['list', 'liệt kê tất cả bot'],
-    ['start <id>', 'khởi động một bot'],
-    ['stop <id>', 'dừng một bot'],
-    ['cmd <id> <cmd>', 'gửi lệnh tới bot'],
-    ['cmdall <cmd>', 'gửi lệnh tới TẤT CẢ bot đang online'],
-    ['webhook set/test/off/events', 'cấu hình thông báo Discord'],
-    ['webhook revenue set/test/off', 'webhook RIÊNG cho báo cáo doanh thu autosell_spawn'],
-    ['schedule on <out> <in>', 'lịch tự out/vào bot theo giờ (HH:MM), vd 23:00 06:00'],
-    ['cmd <id> autosell <%> <macro>', 'tự chạy macro khi túi đồ đầy %'],
-    ['cmd <id> autosell_spawn on|off|every 5m|slot 51|now', 'tự click lồng → bấm ô bán → đóng GUI, lặp theo giờ/phút/giây'],
-    ['cmd <id> help', 'xem tất cả lệnh của bot (tpa, macro, afk...)'],
-    ['chatlog', 'bật/tắt hiển thị chat server/player'],
-    ['proxy list', 'liệt kê proxy'],
-    ['proxy add <raw>', 'thêm proxy'],
-    ['proxy addfile <path>', 'thêm nhiều proxy từ file .txt (mỗi dòng 1 proxy)'],
-    ['cmd <id> proxyrotate on|off', 'tự xoay proxy 1-10 phút/lần (ngẫu nhiên)'],
-    ['sys', 'thông số hệ thống'],
-    ['exit, q, e', 'thoát chương trình'],
-  ];
-  const labelW = Math.max(...cmds.map(([l]) => l.length));
-  const innerW = labelW + 4 + Math.max(...cmds.map(([, d]) => d.length));
-  console.log(colors.border('╭─ Commands ' + '─'.repeat(Math.max(0, innerW - 9)) + '╮'));
-  for (const [label, desc] of cmds) {
-    console.log(
-      colors.border('│ ') + colors.key(label.padEnd(labelW)) + colors.muted('  — ' + desc)
-    );
+// Trợ giúp chia phân khu: help | help <phân khu> | help <lệnh> | help all
+// Màn hẹp (điện thoại/Termux): usage 1 dòng, mô tả xuống dòng dưới và tự ngắt dòng cho vừa màn.
+function showHelp(query = '') {
+  const reg = manager.bots[0] ? manager.bots[0].cmdRegistry.list() : null;
+  const { lines } = HelpCatalog.buildHelp({ scope: 'console', query, registry: reg, customs: [] });
+  const cols = process.stdout.columns || 80;
+  const wide = cols >= 100;
+  const uw = Math.min(46, Math.max(8, ...lines.filter(l => l.t === 'cmd').map(l => l.usage.length)));
+  const bar = colors.border('│ ');
+  let open = false;
+  const close = () => { if (open) { console.log(colors.border('╰' + '─'.repeat(10))); open = false; } };
+  const wrapText = (text, width) => {
+    const out = []; let cur = '';
+    for (const w of String(text).split(' ')) {
+      if (cur && (cur + ' ' + w).length > width) { out.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w;
+    }
+    if (cur) out.push(cur);
+    return out;
+  };
+  const put = (indent, text, color) => {
+    const rows = wide ? [text] : wrapText(text, Math.max(20, cols - 3 - indent.length));
+    for (const r of rows) console.log(bar + indent + color(r));
+  };
+  for (const l of lines) {
+    if (l.t === 'title') {
+      close();
+      const [head, ...rest] = l.text.split(' — ');
+      const shown = wide ? l.text : head;
+      console.log(colors.border('╭─ ') + colors.accent(shown) + ' ' + colors.border('─'.repeat(Math.max(2, Math.min(cols - shown.length - 6, 24)))));
+      open = true;
+      if (!wide && rest.length) put('', rest.join(' — '), colors.muted);
+    } else if (l.t === 'menu') {
+      const k = 'help ' + l.key;
+      if (wide) console.log(bar + colors.key(k.padEnd(13)) + colors.muted(l.text));
+      else { console.log(bar + colors.key(k)); put('    ', l.text, colors.muted); }
+    } else if (l.t === 'head') {
+      put('', l.text, colors.title);
+    } else if (l.t === 'cmd') {
+      if (wide && l.usage.length <= uw) {
+        console.log(bar + '  ' + colors.key(l.usage.padEnd(uw)) + colors.muted('  — ' + l.desc));
+      } else {
+        put('  ', l.usage, colors.key);
+        put('      ', l.desc, colors.muted);
+      }
+    } else if (l.t === 'note') {
+      put('', l.text, colors.muted);
+    } else if (l.t === 'warn') {
+      if (!open) { console.log(colors.border('╭─ ') + colors.warn('Trợ giúp')); open = true; }
+      put('', l.text, colors.warn);
+    }
   }
-  console.log(colors.border('╰' + '─'.repeat(innerW + 2) + '╯'));
+  close();
 }
 function statusIcon(state) {
   if (state === 'ONLINE') return colors.ok('●');
@@ -185,33 +208,91 @@ function showSysInfo(m) {
     colors.border('  └──────────────────────────────────────')
   );
 }
+// ===== addbot / delbot / web (localhost) cho CLI =====
+// addbot <tên> mk <mật khẩu> [ip] [port] [ver] [owner]   (hoặc dạng ip=.. port=.. ver=.. owner=.. id=..)
+// Cái nào bỏ trống thì lấy theo bot đầu tiên (hoặc config gốc nếu chưa có bot).
+function cliAddBot(args) {
+  const printUsage = () => {
+    console.log(colors.muted('  Usage: ' + ADDBOT_USAGE));
+    console.log(colors.muted('    vd: addbot 123 mk 123'));
+    console.log(colors.muted('        addbot 123 mk 123 play.abc.vn 25565 1.21.1 Steve'));
+    console.log(colors.muted('        addbot 123 mk 123 ip=play.abc.vn ver=1.21.1     (dấu - = bỏ qua, lấy mặc định)'));
+  };
+  if (!args.length) { printUsage(); return null; }
+  const r = parseAddBotArgs(args);
+  if (!r.ok) { console.log(colors.err('  ✗ ' + r.error)); printUsage(); return null; }
+  const { id, username, password, host: hostArg, port: portArg, version: verArg, owner: ownerArg } = r.data;
+  if (manager.findBot(id)) { console.log(colors.err(`  ✗ ID "${id}" đã tồn tại`)); return null; }
+  const dup = manager.bots.find(b => String(b.cfg.username).toLowerCase() === username.toLowerCase());
+  if (dup) { console.log(colors.err(`  ✗ Tên "${username}" đã được bot "${dup.cfg.id}" dùng`)); return null; }
+  const tpl = (manager.bots[0] && manager.bots[0].cfg) || {};
+  const root = manager._config || {};
+  const host = hostArg || tpl.host || root.host;
+  const port = portArg || parseInt(tpl.port || root.port || 25565, 10);
+  const version = verArg || tpl.version || root.version;
+  const owner = ownerArg || tpl.ownerUsername || root.ownerUsername || '';
+  if (!host) { console.log(colors.err('  ✗ Chưa biết IP server — thêm vào cuối lệnh, vd: addbot ' + username + ' mk ' + password + ' play.abc.vn')); return null; }
+  const bot = manager.createBot({ id, host, port, version, username, password, ownerUsername: owner });
+  try { if (manager.io) manager.io.emit('botAdded', bot.getSummary()); } catch { }
+  console.log(colors.ok(`  ✓ Đã thêm bot "${id}"`));
+  console.log(colors.muted(`    server ${host}:${port}  |  ver ${version || '(mặc định)'}  |  owner ${owner || '(chưa đặt)'}`));
+  console.log(colors.muted(`    Chạy bot: start ${id}   (lần đầu bot tự gửi /dk rồi /dn)`));
+  return bot;
+}
+function cliDelBot(args) {
+  if (!args[0]) { console.log(colors.muted('  Usage: delbot <id>')); return; }
+  const bot = manager.removeBot(args[0]);
+  if (!bot) { console.log(colors.err('  Bot not found: ' + args[0])); return; }
+  try { if (manager.io) manager.io.emit('botRemoved', { id: bot.cfg.id }); } catch { }
+  console.log(colors.ok('  ✓ Đã xoá bot: ' + bot.cfg.id));
+}
+async function webCommand(sub) {
+  sub = String(sub || 'status').toLowerCase();
+  const url = `http://localhost:${dashboard.port}`;
+  if (/^(on|bat|bật)$/.test(sub)) {
+    if (dashboard.isRunning) { console.log(colors.warn('  Web đang BẬT sẵn: ' + url)); return; }
+    const ok = await dashboard.start();
+    if (ok) {
+      manager.persistence.set('webDashboard', true);
+      console.log(colors.ok('  ✓ Web BẬT → ' + url));
+    } else {
+      console.log(colors.err('  ✗ Không bật được web (xem lỗi ở trên)'));
+    }
+  } else if (/^(off|tat|tắt)$/.test(sub)) {
+    if (!dashboard.isRunning) { console.log(colors.warn('  Web đang TẮT sẵn')); return; }
+    await dashboard.stop();
+    manager.persistence.set('webDashboard', false);
+    console.log(colors.ok('  ✓ Web TẮT — bot vẫn chạy bình thường (bật lại: web on)'));
+  } else if (sub === 'status') {
+    console.log(dashboard.isRunning ? colors.ok('  Web: BẬT → ' + url) : colors.warn('  Web: TẮT (bật: web on)'));
+  } else {
+    console.log(colors.muted('  Usage: web on | web off | web status'));
+  }
+}
 let _shuttingDown = false;
-function shutdown() {
+async function shutdown(code = 0) {
   if (_shuttingDown) return;
   _shuttingDown = true;
   console.log(chalk.cyan('\n  Shutting down...'));
-  if (dashboard) dashboard.shutdown();
-  if (manager) manager.shutdown();
-  if (expressServer && expressServer.listening) {
-    expressServer.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 5000);
-  } else {
-    process.exit(0);
-  }
+  const watchdog = setTimeout(() => process.exit(code), 5000); // không để treo nếu đóng cổng chậm
+  if (watchdog.unref) watchdog.unref();
+  try { if (dashboard) dashboard.shutdown(); } catch { }
+  try { if (manager) manager.shutdown(); } catch { }
+  try { if (dashboard) await dashboard.stop(); } catch { }
+  process.exit(code);
 }
 (async () => {
   try {
     showBanner();
     await manager.init();
-    dashboard.start();
-    if (!expressServer.listening) {
-      await new Promise((resolve) => {
-        expressServer.once('listening', resolve);
-        setTimeout(resolve, 5000);
-      });
-    }
+    // config.webDashboard=false (lệnh "web off") -> không mở web khi khởi động.
+    // Luôn mở web nếu chạy AUTO_EXE (Render/Docker) hoặc không có CLI để bật lại.
+    const webWanted = AUTO_EXE || !process.stdin.isTTY || manager._config.webDashboard !== false;
+    const webOk = webWanted ? await dashboard.start() : false;
     console.log(colors.accent(`⬡  Antares Manager started — ${manager.bots.length} bots loaded, none auto-started`));
-    console.log(colors.accent(`   Dashboard: http://localhost:${dashboard.port}`));
+    if (webOk) console.log(colors.accent(`   Dashboard: http://localhost:${dashboard.port}`));
+    else if (!webWanted) console.log(colors.muted('   Dashboard: TẮT — gõ "web on" để bật'));
+    else console.log(colors.warn('   Dashboard: không mở được (xem lỗi phía trên) — CLI vẫn dùng bình thường, thử "web on" sau'));
     console.log('');
     if (!AUTO_EXE && process.stdin.isTTY) {
       rl = readline.createInterface({
@@ -230,12 +311,41 @@ function shutdown() {
           switch (cmd) {
             case 'help':
             case 'h':
-              showHelp();
+            case '?':
+              showHelp(args.join(' '));
               break;
             case 'list':
             case 'ls':
               showBotList(manager.bots);
               break;
+            case 'addbot':
+            case 'add':
+              cliAddBot(args);
+              break;
+            case 'delbot':
+            case 'rmbot':
+            case 'removebot':
+              cliDelBot(args);
+              break;
+            case 'web':
+            case 'localhost':
+            case 'lochost':
+            case 'dashboard':
+              webCommand(args[0])
+                .catch(e => console.log(colors.err('  Error: ' + e.message)))
+                .then(() => { if (rl) { readline.cursorTo(process.stdout, 0); readline.clearLine(process.stdout, 0); rl.prompt(true); } });
+              return;
+            case 'update': {
+              if (!process.env.ANTER_LAUNCHER) { console.log(colors.warn('  Cần chạy bằng launcher: npm start (hoặc node launcher.js) mới dùng được lệnh update')); break; }
+              console.log(colors.muted('  Đang kiểm tra GitHub...'));
+              require('./updater').checkForUpdate().then(info => {
+                if (info.firstRun) console.log(colors.muted('  Chưa có mốc phiên bản — khởi động lại bằng launcher để khởi tạo'));
+                else if (!info.available) console.log(colors.ok('  ✓ Đang là bản mới nhất'));
+                else { console.log(colors.ok(`  Có bản mới: ${info.message} — đang thoát để cập nhật...`)); shutdown(42); return; }
+                if (rl) rl.prompt(true);
+              }).catch(e => { console.log(colors.err('  Không kiểm tra được: ' + e.message)); if (rl) rl.prompt(true); });
+              return;
+            }
             case 'start': {
               if (!args[0]) { console.log(colors.muted('  Usage: start <id>')); break; }
               const b = manager.findBot(args[0]);
@@ -385,8 +495,8 @@ function shutdown() {
     process.exit(1);
   }
 })();
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown());
+process.on('SIGTERM', () => shutdown());
 process.on('uncaughtException', err => {
   console.error(colors.err('[UNCAUGHT]'), err.message || err);
 });

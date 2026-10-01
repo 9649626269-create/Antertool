@@ -1,0 +1,14 @@
+# Dữ liệu cá nhân — KHÔNG đẩy lên GitHub (chứa mật khẩu bot, webhook, proxy)
+config.json
+config.json.bak
+config.json.tmp
+revenue.json
+proxies.txt
+.env
+backups/
+logs/
+data/
+
+# Do tool tự sinh
+node_modules/
+.update-state.json

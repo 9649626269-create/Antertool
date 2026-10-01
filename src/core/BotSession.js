@@ -6,6 +6,7 @@ const { CS, TIMING, IGNORED_ERRORS, DEFAULTS } = require('./constants');
 const { rand, jit, clamp, nowMs, sleep, resolveText, parseShardNum, safeJsonStringify, parseReasonText, normalizeSmallCaps } = require('./utils');
 const PacketMonitor = require('./PacketMonitor');
 const CommandRegistry = require('./CommandRegistry');
+const HelpCatalog = require('./HelpCatalog');
 const { WindowRouter } = require('./WindowRouter');
 const RingBuffer = require('./RingBuffer');
 const SharedPool = require('./SharedPool');
@@ -2035,17 +2036,22 @@ class BotSession extends EventEmitter {
   }
   _registerCommands() {
     const r = this.cmdRegistry;
-    r.register('help', 'Hiện danh sách lệnh của bot (dùng: cmd <id> help)', () => {
-      const cmds = r.list();
-      const w = Math.max(...cmds.map(c => c.name.length));
-      this.log('sys', `— Danh sách lệnh (${cmds.length}) —`);
-      cmds.forEach(c => this.log('sys', `${c.name.padEnd(w)}  ${c.desc}`));
-      const customs = this.cmdRegistry.getCustomCmds();
-      if (customs.length) {
-        this.log('sys', `— Custom commands (${customs.length}) —`);
-        customs.forEach(c => this.log('sys', `${c.name}  →  ${c.cmd}`));
+    // help chia theo phân khu: help | help <phân khu> | help all | help <lệnh>   (alias: h)
+    const helpFn = (args) => {
+      const { lines } = HelpCatalog.buildHelp({
+        scope: 'bot', query: args.join(' '), registry: r.list(), customs: r.getCustomCmds(),
+      });
+      for (const l of lines) {
+        if (l.t === 'title') this.log('sys', `— ${l.text} —`);
+        else if (l.t === 'menu') this.log('sys', `help ${l.key.padEnd(8)} ${l.text}`);
+        else if (l.t === 'head') this.log('sys', `» ${l.text}`);
+        else if (l.t === 'cmd') this.log('sys', `${l.usage}  —  ${l.desc}`);
+        else if (l.t === 'warn') this.log('warn', l.text);
+        else if (l.t === 'note') this.log('sys', l.text);
       }
-    });
+    };
+    r.register('help', 'Trợ giúp theo phân khu: help | help <phân khu> | help all | help <lệnh>', helpFn);
+    r.register('h', 'Như help', helpFn);
     r.register('shard', 'Bật/Tắt Auto Shard', () => {
       if (!this.requireOnline('shard')) return;
       this.state.autoShard = !this.state.autoShard;

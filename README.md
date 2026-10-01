@@ -332,21 +332,45 @@ webhook events moneyGoal,spawnerThreat   # chỉ bật 2 loại này (mặc đ�
 
 ## CLI Commands
 
+Gõ `help` (hoặc `h`, `?`) để xem **menu phân khu**, rồi `help <phân khu>` để xem chi tiết. Lệnh của bot cũng chia phân khu: `cmd <id> help`.
+
 ```
-help                    Show commands
-list                    List all bots (kèm 💰 Money / ✨ Shards)
-start <id>              Start a bot
-stop <id>               Stop a bot
-cmd <id> <command>      Send command to bot
-cmd <id> help           List all bot-level commands (tpa, macro, board, goal...)
-cmd <id> spawnerprotect on|off / addspawner / listspawners
-cmdall <command>        Send command to ALL online bots at once
-chatlog                 Toggle showing server/player chat in this console
-proxy list              List proxies
-proxy add <string>      Add a proxy
-sys                     System metrics
-exit                    Shutdown
+help                    Menu các phân khu
+help <phân khu>         Chi tiết 1 phân khu:  bot | spawn | macro | afk | proxy | notify | system
+help <lệnh>             Cú pháp 1 lệnh, vd: help autosell_spawn · help addbot
+help all                Xem tất cả
+cmd <id> help [phân khu]   Trợ giúp lệnh của bot (không gồm lệnh console)
 ```
+
+| Phân khu | Nội dung |
+|----------|----------|
+| `bot` | list, start, stop, addbot, delbot, cmd, cmdall + status, ping, pos, inv, board, order, tpa, menu, reconnect |
+| `spawn` | autosell_spawn (on/off/now/scan/every/slot/add/remove/clear/revenue/msg/ignorechat), spawnerprotect, addspawner, removespawner, listspawners, webhook revenue |
+| `macro` | macro, stopmacro, listmacro, answer, autosell, goal, addcmd, delcmd, listcmd |
+| `afk` | shard, stats, tshard, afk, wafk, stop, autoeat |
+| `proxy` | proxy list/add/addfile, proxyrotate |
+| `notify` | webhook set/test/off/events, schedule on/off |
+| `system` | web on/off/status, sys, chatlog, update, help, exit |
+
+Lệnh mới đăng ký trong `BotSession` mà chưa xếp phân khu sẽ tự hiện ở `help khac`. Muốn xếp: thêm 1 dòng vào `src/core/HelpCatalog.js`.
+
+### addbot — thêm bot ngay trong Termux
+
+```
+addbot <tên> mk <mật khẩu> [ip] [port] [ver] [owner]
+
+addbot 123 mk 123                                      # chỉ tên + mật khẩu, còn lại lấy theo bot đầu tiên
+addbot 123 mk 123 play.abc.vn 25565 1.21.1 Steve       # đủ ip, port, version, owner
+addbot 123 mk 123 play.abc.vn:25565 1.21.1             # ip:port viết liền
+addbot 123 mk 123 - - 1.21.1                           # dấu "-" = bỏ qua (chỉ đổi version)
+addbot 123 mk 123 ip=play.abc.vn port=25565 ver=1.21.1 owner=Steve id=acc1   # dạng key=value
+```
+
+Bỏ trống ip/port/ver/owner thì lấy theo bot đầu tiên (hoặc `config.json` gốc nếu chưa có bot). Thêm xong gõ `start <id>`.
+
+### Web localhost
+
+`web on` / `web off` / `web status` (hoặc `localhost on|off`) — bật/tắt web, bot vẫn chạy. Trạng thái lưu trong `config.json` (`webDashboard`).
 
 ## Requirements
 

@@ -13,12 +13,76 @@ class WebDashboard {
     this._statusInterval = null;
     this._metricsInterval = null;
   }
+  get isRunning() { return !!this._running; }
+  // Bật web (localhost). Gọi lại nhiều lần được: route/socket chỉ đăng ký 1 lần,
+  // mỗi lần bật chỉ mở lại cổng + timer. Trả về Promise<boolean> (true = đã nghe cổng).
   start() {
-    if (!this.expressApp || !this.io) {
+    if (!this.expressApp || !this.io || !this.expressServer) {
       console.log('[Dashboard] express/socket.io không khả dụng');
-      return;
+      return Promise.resolve(false);
     }
+    if (this._running) return Promise.resolve(true);
+    if (!this._setupDone) { this._setup(); this._setupDone = true; }
     this._prevStatusSnap = '';
+    this._startTimers();
+    return this._listen();
+  }
+  // Tắt web: ngắt mọi client + đóng cổng. Bot vẫn chạy bình thường.
+  async stop() {
+    if (!this._running) return false;
+    this._running = false;
+    this._stopTimers();
+    const srv = this.expressServer;
+    try { this.io.disconnectSockets(true); } catch { }
+    await new Promise(resolve => {
+      let done = false;
+      const fin = () => { if (!done) { done = true; resolve(); } };
+      const t = setTimeout(fin, 3000);
+      if (t.unref) t.unref();
+      try { srv.close(fin); } catch { fin(); return; }
+      try { if (typeof srv.closeAllConnections === 'function') srv.closeAllConnections(); } catch { }
+    });
+    return true;
+  }
+  _stopTimers() {
+    if (this._statusInterval) { clearInterval(this._statusInterval); this._statusInterval = null; }
+    if (this._metricsInterval) { clearInterval(this._metricsInterval); this._metricsInterval = null; }
+  }
+  _listen() {
+    return new Promise(resolve => {
+      const srv = this.expressServer;
+      const onError = err => {
+        srv.removeListener('listening', onListening);
+        this._running = false;
+        this._stopTimers();
+        const msg = err && err.code === 'EADDRINUSE'
+          ? `cổng ${this.port} đang bị chiếm (có thể Antares/ứng dụng khác đang chạy)`
+          : (err && err.message) || String(err);
+        console.log(`\x1b[31m[Dashboard] Không mở được web: ${msg}\x1b[0m`);
+        resolve(false);
+      };
+      const onListening = () => {
+        srv.removeListener('error', onError);
+        const url = `http://localhost:${this.port}`;
+        if (this.autoExe) {
+          console.log(`\x1b[36m╔══════════════════════════════════════╗\x1b[0m`);
+          console.log(`\x1b[36m║  ⬡   Bot Manager — Antares       ║\x1b[0m`);
+          console.log(`\x1b[36m╠══════════════════════════════════════╣\x1b[0m`);
+          console.log(`\x1b[36m║  Web Dashboard:                      ║\x1b[0m`);
+          console.log(`\x1b[36m║  \x1b[33m${url.padEnd(36)}\x1b[36m║\x1b[0m`);
+          console.log(`\x1b[36m╚══════════════════════════════════════╝\x1b[0m`);
+        } else {
+          console.log(`\x1b[36m[Dashboard] Web UI: ${url}\x1b[0m`);
+        }
+        resolve(true);
+      };
+      srv.once('error', onError);
+      srv.once('listening', onListening);
+      this._running = true;
+      srv.listen(this.port);
+    });
+  }
+  _setup() {
     const publicDir = path.join(__dirname, 'public');
     try {
       fs.mkdirSync(path.join(publicDir, 'assets'), { recursive: true });
@@ -653,6 +717,8 @@ class WebDashboard {
         }
       });
     });
+  }
+  _startTimers() {
     const statusInterval = this.manager.profile?.statusInterval || 1500;
     const metricsInterval = this.manager.profile?.metricsInterval || 3000;
     this._statusInterval = setInterval(() => {
@@ -677,23 +743,9 @@ class WebDashboard {
     }, metricsInterval);
     if (this._statusInterval.unref) this._statusInterval.unref();
     if (this._metricsInterval.unref) this._metricsInterval.unref();
-    this.expressServer.listen(this.port, () => {
-      const url = `http://localhost:${this.port}`;
-      if (this.autoExe) {
-        console.log(`\x1b[36m╔══════════════════════════════════════╗\x1b[0m`);
-        console.log(`\x1b[36m║  ⬡   Bot Manager — Antares       ║\x1b[0m`);
-        console.log(`\x1b[36m╠══════════════════════════════════════╣\x1b[0m`);
-        console.log(`\x1b[36m║  Web Dashboard:                      ║\x1b[0m`);
-        console.log(`\x1b[36m║  \x1b[33m${url.padEnd(36)}\x1b[36m║\x1b[0m`);
-        console.log(`\x1b[36m╚══════════════════════════════════════╝\x1b[0m`);
-      } else {
-        console.log(`\x1b[36m[Dashboard] Web UI: ${url}\x1b[0m`);
-      }
-    });
   }
   shutdown() {
-    if (this._statusInterval) clearInterval(this._statusInterval);
-    if (this._metricsInterval) clearInterval(this._metricsInterval);
+    this._stopTimers();
     if (this._rateCleanup) clearInterval(this._rateCleanup);
   }
   _syncBotToConfig(bot) {

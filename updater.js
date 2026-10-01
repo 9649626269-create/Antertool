@@ -44,7 +44,7 @@ function get(url, token, asBuffer) {
       },
       timeout: 20000,
     }, res => {
-      if ([301, 302, 307].includes(res.statusCode) && res.headers.location) {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume();
         return resolve(get(res.headers.location, token, asBuffer));
       }
