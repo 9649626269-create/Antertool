@@ -39,7 +39,7 @@ function get(url, token, asBuffer) {
     const req = https.get(url, {
       headers: {
         'User-Agent': 'anter-updater',
-        Accept: asBuffer ? 'application/octet-stream' : 'application/vnd.github+json',
+        Accept: asBuffer ? '*/*' : 'application/vnd.github+json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       timeout: 20000,
