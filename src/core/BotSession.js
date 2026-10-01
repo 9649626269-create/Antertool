@@ -138,6 +138,16 @@ class BotSession extends EventEmitter {
     this._sellCap = null;
     this._revLastReportAt = 0;
     this._revPending = { amount: 0, cycles: 0 };
+    // Doanh thu của AUTO-SELL MACRO (autosell <%đầy> <macro>): đo tiền server báo vào chat trong lúc macro
+    // bán chạy (+ vài giây sau), ghi vào RevenueTracker (khoá "<id>#macro") rồi gửi báo cáo qua webhook.
+    this.autoSellRevenue = cfg.autoSellRevenue ?? true;
+    this.autoSellMsgKeyword = String(cfg.autoSellMsgKeyword || '');   // chỉ tính tin chứa chữ này (nhiều chữ ngăn bằng |)
+    this.autoSellMsgPattern = String(cfg.autoSellMsgPattern || '');   // regex tuỳ chọn (nhóm 1 = số tiền)
+    this.autoSellIgnoreChat = cfg.autoSellIgnoreChat ?? true;         // bỏ qua chat của người chơi
+    this.autoSellReportMin = Math.max(0, Number(cfg.autoSellReportMin) || 0); // giãn cách tối thiểu giữa 2 báo cáo (phút), 0 = mỗi lần bán 1 báo cáo
+    this._macroSellCap = null;
+    this._macroRevLastReportAt = 0;
+    this._macroRevPending = { amount: 0, cycles: 0 };
     // Xoay proxy tự động — mỗi lần cách nhau ngẫu nhiên (không phải chu kỳ
     // cố định, để tránh tạo pattern dễ nhận ra) trong khoảng min~max phút.
     this.proxyAutoRotate = !!cfg.proxyAutoRotate;
@@ -300,12 +310,16 @@ class BotSession extends EventEmitter {
       const pct = Math.round((usedSlots / TOTAL) * 100);
       this.log('ok', `🎒 Túi đồ đầy ${pct}% (${usedSlots}/${TOTAL}) — tự chạy macro "${this.autoSellMacro}"`);
       this._notify('autoSell', `🎒 ${this.cfg.id}: túi đồ đầy`, `${usedSlots}/${TOTAL} ô (${pct}%) — tự chạy macro "${this.autoSellMacro}".`, 0x38bdf8);
-      this.macroEngine.run(this.autoSellMacro).catch(e => this.log('err', `Auto-sell macro lỗi: ${e.message}`));
+      const cap = this.autoSellRevenue ? this._beginMacroSellCapture(this.autoSellMacro) : null; // bắt đầu đo TRƯỚC khi macro chạy
+      this.macroEngine.run(this.autoSellMacro)
+        .then(ok => { if (cap) this._onMacroSellDone(cap, ok); })
+        .catch(e => { this.log('err', `Auto-sell macro lỗi: ${e.message}`); if (cap) this._onMacroSellDone(cap, false); });
     } else if (usedSlots <= lowSlots) {
       this._autoSellFired = false;
     }
   }
   _cleanupOnDisconnect() {
+    if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch { } }
     if (this._sellCap) { try { this._finalizeSellRevenue(true); } catch { } } // còn doanh thu đang gom dở -> ghi nốt trước khi mất kết nối
     this._clearAllTimers();
     this._spawnerBusy = false;
@@ -702,6 +716,7 @@ class BotSession extends EventEmitter {
           return;
         }
         if (this._sellCap) this._captureSellRevenue(text, pos);
+        if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         this.log('chat', text);
         this.tryChatShard(text);
       } catch (e) {
@@ -930,8 +945,8 @@ class BotSession extends EventEmitter {
   }
   // Trích số tiền từ 1 dòng chat. Mặc định: số có hậu tố k/m/b/t (1.25k, 2,4m, 3b) hoặc có ký hiệu $.
   // Có autoSellSpawnMsgPattern thì dùng regex đó (nhóm 1 = số tiền, không có nhóm thì lấy cả đoạn khớp).
-  _extractSellAmount(text) {
-    const pat = this.autoSellSpawnMsgPattern;
+  _extractSellAmount(text, patOverride) {
+    const pat = patOverride !== undefined ? patOverride : this.autoSellSpawnMsgPattern;
     if (pat) {
       try {
         const m = new RegExp(pat, 'i').exec(text);
@@ -950,8 +965,8 @@ class BotSession extends EventEmitter {
     }
     return null;
   }
-  _sellMsgMatchesKeyword(text) {
-    const kw = this.autoSellSpawnMsgKeyword.trim();
+  _sellMsgMatchesKeyword(text, kwOverride) {
+    const kw = String(kwOverride !== undefined ? kwOverride : this.autoSellSpawnMsgKeyword).trim();
     if (!kw) return true;
     const norm = s => normalizeSmallCaps(String(s)).normalize('NFC').toLowerCase();
     const t = norm(text);
@@ -1005,16 +1020,19 @@ class BotSession extends EventEmitter {
     const est = s.avgPerHour == null ? ' (cần ≥2 vòng liên tiếp để tính tốc độ)' : (s.observedMs < 3600000 ? ' (ước tính — mới đo ' + this._fmtDuration(s.observedMs) + ')' : '');
     return `1h qua: ${fmt(s.last1h)} | TB/giờ: ${s.avgPerHour == null ? '—' : fmt(s.avgPerHour)} | ~/ngày: ${s.perDayEst == null ? '—' : fmt(s.perDayEst)}${est} | hôm nay: ${fmt(s.today)} | 24h: ${fmt(s.last24h)} | tổng: ${fmt(s.total)} (${s.cycles} vòng)`;
   }
-  _buildRevenueEmbed(cap) {
+  _buildRevenueEmbed(cap, kind = 'spawn') {
+    const macro = kind === 'macro';
     const fmt = RevenueTracker.formatMoney;
-    const s = this.getRevenueStats();
+    const s = macro ? this.getMacroRevenueStats() : this.getRevenueStats();
     const id = this.cfg.id;
     const noRate = !s || s.avgPerHour == null;
     const est = s && !noRate && s.observedMs < 3600000;
     const estNote = noRate ? '\n_(cần ≥2 vòng bán liên tiếp để tính tốc độ — vòng đầu là hàng dồn nên không tính)_' : (est ? '\n_(ước tính — mới đo ' + this._fmtDuration(s.observedMs) + ')_' : '');
-    const pend = this._revPending;
+    const pend = macro ? this._macroRevPending : this._revPending;
     const fields = [];
-    if (cap) fields.push({ name: '💰 Vòng này', value: `**+${fmt(cap.sum)}**\n${cap.hits} tin bán / ${cap.done} lồng`, inline: true });
+    if (cap) fields.push({ name: macro ? '💰 Lần bán này' : '💰 Vòng này', value: macro
+      ? `**+${fmt(cap.sum)}**\n${cap.viaBalance ? 'đo theo số dư tăng' : cap.hits + ' tin bán'} · macro "${cap.macro}"`
+      : `**+${fmt(cap.sum)}**\n${cap.hits} tin bán / ${cap.done} lồng`, inline: true });
     if (pend.cycles > 1) fields.push({ name: '🧾 Từ báo cáo trước', value: `**+${fmt(pend.amount)}**\n${pend.cycles} vòng`, inline: true });
     if (s) {
       fields.push({ name: '⏱ Doanh thu / giờ', value: `**${noRate ? '—' : fmt(s.avgPerHour)}**\n1 giờ qua thực tế: ${fmt(s.last1h)}${estNote}`, inline: true });
@@ -1027,8 +1045,8 @@ class BotSession extends EventEmitter {
       fields.push({ name: '📊 Tổng cộng', value: `${fmt(s.total)} trong ${s.cycles} vòng`, inline: false });
     }
     return {
-      title: `💸 ${id}: báo cáo doanh thu Auto-sell Spawn`,
-      description: cap ? `Vòng bán vừa xong: **+${fmt(cap.sum)}**` : 'Báo cáo tổng hợp doanh thu.',
+      title: macro ? `💸 ${id}: báo cáo doanh thu Auto-sell (macro)` : `💸 ${id}: báo cáo doanh thu Auto-sell Spawn`,
+      description: cap ? `${macro ? 'Lần bán vừa xong' : 'Vòng bán vừa xong'}: **+${fmt(cap.sum)}**` : 'Báo cáo tổng hợp doanh thu.',
       color: 0x22c55e,
       fields,
       footer: { text: id },
@@ -1036,14 +1054,14 @@ class BotSession extends EventEmitter {
     };
   }
   // Gửi qua webhook RIÊNG nếu có, không thì qua webhook chung (sự kiện "revenue")
-  _sendRevenueReport(cap) {
-    const embed = this._buildRevenueEmbed(cap);
+  _sendRevenueReport(cap, kind = 'spawn') {
+    const embed = this._buildRevenueEmbed(cap, kind);
     const rn = this._manager?.revenueNotifier;
     let via = null;
     if (rn?.enabled) { rn.send(null, embed); via = 'webhook doanh thu riêng'; }
     else if (this._manager?.notifier?.isEventOn('revenue')) { this._manager.notifier.send('revenue', embed); via = 'webhook chung'; }
-    this._revLastReportAt = nowMs();
-    this._revPending = { amount: 0, cycles: 0 };
+    if (kind === 'macro') { this._macroRevLastReportAt = nowMs(); this._macroRevPending = { amount: 0, cycles: 0 }; }
+    else { this._revLastReportAt = nowMs(); this._revPending = { amount: 0, cycles: 0 }; }
     if (via) this.log('sys', `Đã gửi báo cáo doanh thu (${via})`);
     else this.log('sys', 'Doanh thu đã ghi nhận — chưa cấu hình webhook nên không gửi Discord (webhook revenue set <url>)');
     return !!via;
@@ -1057,6 +1075,110 @@ class BotSession extends EventEmitter {
     this._rev.reset(this.cfg.id);
     this._revPending = { amount: 0, cycles: 0 };
     this.log('sys', 'Đã xoá toàn bộ dữ liệu doanh thu của bot này');
+  }
+  // Sau khi người dùng BẬT autosell / autosell_spawn bằng lệnh: hỏi 1 lần xem có muốn liên kết webhook Discord
+  // để nhận báo cáo doanh thu không. Không trả lời gì / Enter = bỏ qua, bot vẫn chạy bình thường.
+  _askRevenueWebhook() {
+    try { this._manager?.askRevenueWebhook?.(this.cfg.id); } catch { }
+  }
+  // ===== Doanh thu AUTO-SELL MACRO (autosell <%đầy> <macro>) =====
+  get _macroRevKey() { return `${this.cfg.id}#macro`; }
+  _beginMacroSellCapture(macroName) {
+    if (this._macroSellCap) this._finalizeMacroSellRevenue(false); // lần trước chưa chốt
+    this._clearTimer('macroSellFinalize');
+    const m0 = Number(this.state?.money);
+    this._macroSellCap = { start: nowMs(), macro: macroName, ran: false, sum: 0, hits: 0, ignored: [], ignoredCount: 0, money0: Number.isFinite(m0) ? m0 : null };
+    return this._macroSellCap;
+  }
+  // Macro chạy xong (ok=false: không chạy được / hỏng). Chờ thêm 5s cho tin "bán được" cuối kịp về rồi chốt.
+  _onMacroSellDone(cap, ok) {
+    if (this._macroSellCap !== cap) return;
+    if (ok === false && !cap.hits) { this._macroSellCap = null; return; } // macro không chạy / hỏng trước khi bán -> không tính
+    cap.ran = true;
+    this._setTimer('macroSellFinalize', () => this._finalizeMacroSellRevenue(false), 5000);
+  }
+  _captureMacroSellRevenue(text, pos) {
+    const cap = this._macroSellCap;
+    if (!cap) return;
+    const amount = this._extractSellAmount(text, this.autoSellMsgPattern);
+    if (amount === null) return;
+    const isPlayerChat = pos === 'chat';
+    if ((this.autoSellIgnoreChat && isPlayerChat) || !this._sellMsgMatchesKeyword(text, this.autoSellMsgKeyword)) {
+      cap.ignoredCount++;
+      if (cap.ignored.length < 3) cap.ignored.push(`${isPlayerChat ? '[chat] ' : ''}${text.substring(0, 90)}`);
+      return;
+    }
+    cap.sum += amount;
+    cap.hits++;
+    this.log('sys', `Doanh thu auto-sell: +${RevenueTracker.formatMoney(amount)} ← "${text.substring(0, 80)}"`);
+  }
+  // Chốt 1 lần bán: ghi vào tracker + gửi báo cáo (quiet = chỉ ghi, không gửi)
+  _finalizeMacroSellRevenue(quiet = false) {
+    const cap = this._macroSellCap;
+    if (!cap) return null;
+    this._macroSellCap = null;
+    this._clearTimer('macroSellFinalize');
+    if (!cap.ran && !cap.hits) return null;
+    const fmt = RevenueTracker.formatMoney;
+    let amount = cap.sum;
+    if (!cap.hits) {
+      // Không đọc được tin bán nào -> thử dùng số dư (bảng điểm) tăng lên trong lúc bán
+      const m1 = Number(this.state?.money);
+      const delta = Number.isFinite(m1) && cap.money0 > 0 ? m1 - cap.money0 : 0;
+      if (delta > 0) {
+        amount = delta;
+        cap.viaBalance = true;
+        this.log('warn', `Doanh thu auto-sell: không đọc được tin bán nào — tạm tính theo số dư tăng ${fmt(delta)} (có thể lẫn khoản thu khác). Muốn chính xác: autosell revenue keyword <chữ trong tin bán>`);
+      } else {
+        if (cap.ignoredCount) this.log('warn', `Doanh thu auto-sell: không tính được — có ${cap.ignoredCount} tin chứa số tiền bị bỏ qua (vd: "${cap.ignored[0]}"). Nếu đó là tin bán: autosell revenue ignorechat off, hoặc đặt từ khoá: autosell revenue keyword <chữ>`);
+        else this.log('warn', 'Doanh thu auto-sell: lần này không thấy tin báo tiền nào (server dùng định dạng khác? đặt autoSellMsgPattern trong config.json)');
+        return cap;
+      }
+    }
+    cap.sum = amount;
+    // intervalMs 6h: auto-sell macro chạy không đều (khi túi đầy) nên cho phép khoảng cách giữa 2 lần lên tới ~12h mà vẫn tính tốc độ/giờ
+    this._rev.record(this._macroRevKey, amount, { intervalMs: 6 * 3600000, hits: cap.hits });
+    this._macroRevPending.amount += amount;
+    this._macroRevPending.cycles += 1;
+    this.log('ok', `Doanh thu auto-sell lần này: ${fmt(amount)} (macro "${cap.macro}")`);
+    if (quiet) return cap;
+    const gapMs = this.autoSellReportMin * 60000;
+    if (gapMs && nowMs() - this._macroRevLastReportAt < gapMs) return cap; // chưa tới lúc báo — số liệu vẫn cộng dồn cho lần báo sau
+    this._sendRevenueReport(cap, 'macro');
+    return cap;
+  }
+  getMacroRevenueStats() { return this._rev.stats(this._macroRevKey); }
+  getMacroRevenueText() {
+    const s = this.getMacroRevenueStats();
+    if (!s) return 'Chưa có dữ liệu doanh thu auto-sell';
+    const fmt = RevenueTracker.formatMoney;
+    const est = s.avgPerHour == null ? ' (cần ≥2 lần bán để tính tốc độ)' : '';
+    return `1h qua: ${fmt(s.last1h)} | TB/giờ: ${s.avgPerHour == null ? '—' : fmt(s.avgPerHour)} | ~/ngày: ${s.perDayEst == null ? '—' : fmt(s.perDayEst)}${est} | hôm nay: ${fmt(s.today)} | 24h: ${fmt(s.last24h)} | tổng: ${fmt(s.total)} (${s.cycles} lần)`;
+  }
+  sendMacroRevenueReportNow() {
+    if (!this.getMacroRevenueStats()) return { ok: false, message: 'Chưa có dữ liệu doanh thu auto-sell để báo cáo' };
+    const sent = this._sendRevenueReport(null, 'macro');
+    return sent ? { ok: true } : { ok: false, message: 'Chưa cấu hình webhook (webhook revenue set <url> hoặc webhook set <url>)' };
+  }
+  resetMacroRevenue() {
+    this._rev.reset(this._macroRevKey);
+    this._macroRevPending = { amount: 0, cycles: 0 };
+    this.log('sys', 'Đã xoá dữ liệu doanh thu auto-sell (macro) của bot này');
+  }
+  _persistMacroSellCfg() {
+    const data = {
+      autoSellMacro: this.autoSellMacro, autoSellThreshold: this.autoSellThreshold,
+      autoSellRevenue: this.autoSellRevenue, autoSellMsgKeyword: this.autoSellMsgKeyword,
+      autoSellMsgPattern: this.autoSellMsgPattern, autoSellIgnoreChat: this.autoSellIgnoreChat,
+      autoSellReportMin: this.autoSellReportMin,
+    };
+    Object.assign(this.cfg, data);
+    const mgr = this._manager;
+    const list = mgr?._config?.bots;
+    if (!list) return;
+    const c = list.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
+    if (c) Object.assign(c, data);
+    mgr.persistence?.markDirty();
   }
   // ===== Auto-sell Spawn =====
   _sellSpawnIntervalMs() {
@@ -2178,7 +2300,49 @@ class BotSession extends EventEmitter {
       this.log('sys', `— #${args[1]} ${e.item} (slot ${e.slot}) —`);
       (e.raw.length ? e.raw : ['(không có lore)']).forEach(l => this.log('sys', `  ${l}`));
     });
-    r.register('autosell', 'Tự chạy macro khi đầy túi đồ: autosell <%đầy> <macro> | autosell off | autosell', (args) => {
+    r.register('autosell', 'Tự chạy macro khi đầy túi đồ: autosell <%đầy> <macro> | autosell off | autosell | autosell revenue ...', (args) => {
+      const sub0 = String(args[0] || '').toLowerCase();
+      if (sub0 === 'revenue' || sub0 === 'rev' || sub0 === 'doanhthu') {
+        const a1 = String(args[1] || '').toLowerCase();
+        if (a1 === 'report' || a1 === 'send') { const rr = this.sendMacroRevenueReportNow(); this.log(rr.ok ? 'ok' : 'warn', rr.ok ? 'Đã gửi báo cáo doanh thu auto-sell' : rr.message); return; }
+        if (a1 === 'reset') { this.resetMacroRevenue(); return; }
+        if (a1 === 'on' || a1 === 'off') {
+          this.autoSellRevenue = a1 === 'on';
+          if (!this.autoSellRevenue) { this._macroSellCap = null; this._clearTimer('macroSellFinalize'); }
+          this._persistMacroSellCfg();
+          this.log('ok', `Báo cáo doanh thu auto-sell: ${this.autoSellRevenue ? 'BẬT' : 'TẮT'}`);
+          return;
+        }
+        if (a1 === 'every') {
+          const v = String(args[2] || '').toLowerCase();
+          if (v === 'off' || v === '0') { this.autoSellReportMin = 0; this._persistMacroSellCfg(); this.log('ok', 'Báo cáo doanh thu auto-sell: gửi sau MỖI lần bán'); return; }
+          const d = this._parseDuration(args.slice(2).join(' '));
+          if (!d) { this.log('warn', 'Cú pháp: autosell revenue every <thời gian> | off — vd: 30m, 1h'); return; }
+          const min = d.hour * 60 + d.minute + d.second / 60;
+          this.autoSellReportMin = min;
+          this._persistMacroSellCfg();
+          this.log('ok', `Báo cáo doanh thu auto-sell: tối đa 1 báo cáo / ${this._fmtDuration(min * 60000)} (các lần bán ở giữa được cộng dồn)`);
+          return;
+        }
+        if (a1 === 'keyword' || a1 === 'kw') {
+          const v = args.slice(2).join(' ').trim();
+          this.autoSellMsgKeyword = (!v || v.toLowerCase() === 'off') ? '' : v;
+          this._persistMacroSellCfg();
+          this.log('ok', this.autoSellMsgKeyword ? `Chỉ tính tin bán chứa: "${this.autoSellMsgKeyword}"` : 'Đã bỏ lọc từ khoá (tính mọi tin có số tiền)');
+          return;
+        }
+        if (a1 === 'ignorechat') {
+          const v = String(args[2] || '').toLowerCase();
+          if (v !== 'on' && v !== 'off') { this.log('warn', 'Cú pháp: autosell revenue ignorechat on|off'); return; }
+          this.autoSellIgnoreChat = v === 'on';
+          this._persistMacroSellCfg();
+          this.log('ok', `Bỏ qua chat người chơi khi đo doanh thu: ${this.autoSellIgnoreChat ? 'BẬT' : 'TẮT'}`);
+          return;
+        }
+        this.log('sys', `Doanh thu auto-sell [${this.autoSellRevenue ? 'BẬT' : 'TẮT'}]: ${this.getMacroRevenueText()}`);
+        this.log('sys', 'Lệnh: autosell revenue [report|reset|on|off|every <30m>|keyword <chữ|off>|ignorechat on|off]');
+        return;
+      }
       if (!args[0]) {
         if (!this.autoSellMacro) { this.log('sys', 'Chưa đặt auto-sell. Cú pháp: autosell <%đầy, vd 90> <tên macro>'); return; }
         const used = this.state.inventory?.length || 0;
@@ -2188,6 +2352,7 @@ class BotSession extends EventEmitter {
       if (args[0].toLowerCase() === 'off') {
         this.autoSellMacro = null;
         this._autoSellFired = false;
+        this._persistMacroSellCfg();
         this.log('sys', 'Đã tắt auto-sell');
         return;
       }
@@ -2202,7 +2367,9 @@ class BotSession extends EventEmitter {
       this.autoSellThreshold = pct;
       this.autoSellMacro = macroName;
       this._autoSellFired = false;
+      this._persistMacroSellCfg();
       this.log('ok', `Đã đặt auto-sell: ${pct}% đầy → macro "${macroName}"`);
+      this._askRevenueWebhook(); // bật xong -> hỏi liên kết webhook Discord (bỏ trống = bỏ qua)
     });
     r.register('goal', 'Đặt/xem mục tiêu tiền để tự chạy macro: goal <số> <macro> | goal off | goal', (args) => {
       if (!args[0]) {
@@ -2347,7 +2514,12 @@ class BotSession extends EventEmitter {
         const [x, y, z] = args.slice(1, 4).map(Number);
         return (args.length >= 4 && ![x, y, z].some(Number.isNaN)) ? { x: Math.round(x), y: Math.round(y), z: Math.round(z) } : null;
       };
-      if (sub === 'on') { if (!this.requireOnline('autosell_spawn')) return; this.configureSellSpawn({ on: true }); return; }
+      if (sub === 'on') {
+        if (!this.requireOnline('autosell_spawn')) return;
+        const r = this.configureSellSpawn({ on: true });
+        if (!r || r.ok !== false) this._askRevenueWebhook(); // bật xong -> hỏi liên kết webhook Discord (bỏ trống = bỏ qua)
+        return;
+      }
       if (sub === 'off') { this._stopSellSpawn(); return; }
       if (sub === 'now') { if (!this.requireOnline('autosell_spawn')) return; this.runSellSpawnNow(); return; }
       if (sub === 'scan') {

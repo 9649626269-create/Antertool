@@ -38,6 +38,7 @@ const SECTIONS = [
     aliases: ['spawner', 'long', 'lồng', 'sell'],
     con: [
       { name: 'webhook', usage: 'webhook revenue set <url> | test | off', desc: 'webhook RIÊNG cho báo cáo doanh thu autosell_spawn' },
+      { name: 'webhook', usage: 'webhook revenue report | every <30m|1h|off>', desc: 'gửi ngay / tự gửi định kỳ báo cáo TỔNG HỢP doanh thu của tất cả bot' },
     ],
     bot: [
       { name: 'autosell_spawn', usage: 'autosell_spawn on|off|now|scan|status', desc: 'bật/tắt, chạy 1 vòng ngay, quét lồng quanh bot, xem trạng thái' },
@@ -64,6 +65,7 @@ const SECTIONS = [
       { name: 'listmacro', usage: 'listmacro', desc: 'xem danh sách macro (config.json > macros)' },
       { name: 'answer', usage: 'answer <nội dung>', desc: 'trả lời câu hỏi macro đang chờ (ask/askmap/confirm)' },
       { name: 'autosell', usage: 'autosell <%đầy> <macro> | autosell off', desc: 'tự chạy macro khi túi đồ đầy (không có đối số = xem)' },
+      { name: 'autosell', usage: 'autosell revenue [report|reset|on|off|every <30m>|keyword <chữ>|ignorechat on|off]', desc: 'doanh thu của auto-sell macro: xem/gửi báo cáo webhook, lọc tin bán' },
       { name: 'goal', usage: 'goal <số> <macro> | goal off', desc: 'tự chạy macro khi tiền đạt mục tiêu (không có đối số = xem)' },
       { name: 'addcmd', usage: 'addcmd <tên> <lệnh MC>', desc: 'thêm lệnh tuỳ chỉnh' },
       { name: 'delcmd', usage: 'delcmd <tên>', desc: 'xoá lệnh tuỳ chỉnh' },

@@ -32,6 +32,7 @@ class BotManager {
     this._config = this.persistence.load();
     this.notifier.configure(this._config.webhookUrl, this._config.webhookEvents);
     this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
+    this._armRevenueSummary();
     this.autoExe = this._config.autoExe === true || this.autoExe;
     const { env, profile } = this.envDetector.getAdaptiveProfile();
     this.env = env;
@@ -79,6 +80,11 @@ class BotManager {
       moneyGoalMacro: cfg.moneyGoalMacro || this._config.moneyGoalMacro || null,
       autoSellMacro: cfg.autoSellMacro || null,
       autoSellThreshold: cfg.autoSellThreshold ?? 90,
+      autoSellRevenue: cfg.autoSellRevenue ?? true,
+      autoSellMsgKeyword: cfg.autoSellMsgKeyword || '',
+      autoSellMsgPattern: cfg.autoSellMsgPattern || '',
+      autoSellIgnoreChat: cfg.autoSellIgnoreChat ?? true,
+      autoSellReportMin: cfg.autoSellReportMin ?? 0,
       spawnerProtectOn: cfg.spawnerProtectOn ?? this._config.spawnerProtectOn ?? false,
       spawnerProtectRange: cfg.spawnerProtectRange ?? this._config.spawnerProtectRange ?? null,
       spawnerAutoDisconnect: cfg.spawnerAutoDisconnect ?? this._config.spawnerAutoDisconnect ?? false,
@@ -139,6 +145,11 @@ class BotManager {
       moneyGoalMacro: data.moneyGoalMacro || this._config.moneyGoalMacro || null,
       autoSellMacro: data.autoSellMacro || null,
       autoSellThreshold: data.autoSellThreshold ?? 90,
+      autoSellRevenue: data.autoSellRevenue ?? true,
+      autoSellMsgKeyword: data.autoSellMsgKeyword || '',
+      autoSellMsgPattern: data.autoSellMsgPattern || '',
+      autoSellIgnoreChat: data.autoSellIgnoreChat ?? true,
+      autoSellReportMin: data.autoSellReportMin ?? 0,
       spawnerProtectOn: data.spawnerProtectOn ?? this._config.spawnerProtectOn ?? false,
       spawnerProtectRange: data.spawnerProtectRange ?? this._config.spawnerProtectRange ?? null,
       spawnerAutoDisconnect: data.spawnerAutoDisconnect ?? this._config.spawnerAutoDisconnect ?? false,
@@ -357,6 +368,139 @@ class BotManager {
   }
   _hmToMin(hm) { const [h, m] = hm.split(':').map(Number); return h * 60 + m; }
   _scheduleTz() { return this._config?.timezone || process.env.BOT_TZ || 'Asia/Ho_Chi_Minh'; }
+
+  // ===== Hỏi liên kết webhook Discord sau khi bật autosell / autosell_spawn (chỉ khi dùng CLI) =====
+  // Không chặn: bot vẫn chạy bình thường. Dòng kế tiếp người dùng gõ là link webhook -> lưu;
+  // Enter trống -> bỏ qua; gõ lệnh khác -> huỷ câu hỏi và chạy lệnh đó như bình thường.
+  askRevenueWebhook(botId) {
+    if (typeof this.cliAsk !== 'function') return;                      // không có CLI tương tác (dashboard/AUTO_EXE) -> không hỏi
+    if (this._webhookPrompt) return;                                    // đang hỏi rồi (vd cmdall nhiều bot)
+    if (this.revenueNotifier?.enabled || this.notifier?.isEventOn('revenue')) return; // đã liên kết rồi
+    this._webhookPrompt = { botId };
+    this.cliAsk('🔗 Liên kết webhook Discord để nhận báo cáo doanh thu? Dán link vào đây rồi Enter — hoặc Enter trống để bỏ qua (tool vẫn chạy bình thường).');
+  }
+  get hasWebhookPrompt() { return !!this._webhookPrompt; }
+  // true = dòng này đã được xử lý (là link hoặc Enter trống); false = là lệnh khác, để CLI xử lý tiếp
+  answerWebhookPrompt(input) {
+    if (!this._webhookPrompt) return false;
+    this._webhookPrompt = null;
+    const text = String(input || '').trim();
+    if (!text) { this.cliAsk?.('Đã bỏ qua — chạy bình thường. Muốn liên kết sau: webhook revenue set <url>'); return true; }
+    if (/^https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+/i.test(text)) {
+      this.revenueNotifier.configure(text, ['all']);
+      this.persistence.set('revenueWebhookUrl', text);
+      this.cliAsk?.('✓ Đã liên kết webhook Discord cho báo cáo doanh thu. Thử: webhook revenue test');
+      return true;
+    }
+    return false; // không phải link Discord -> coi là lệnh bình thường
+  }
+
+  // ===== Báo cáo doanh thu TỔNG HỢP (gộp tất cả bot) =====
+  // Webhook riêng (webhook revenue set <url>) nếu có, không thì webhook chung (sự kiện "revenue").
+  _revenueSink() {
+    if (this.revenueNotifier?.enabled) return { n: this.revenueNotifier, ev: null, via: 'webhook doanh thu riêng' };
+    if (this.notifier?.isEventOn('revenue')) return { n: this.notifier, ev: 'revenue', via: 'webhook chung' };
+    return null;
+  }
+  _revenueTotalCycles() {
+    let c = 0;
+    for (const b of this.bots) c += (this.revenue.stats(b.cfg.id)?.cycles || 0) + (this.revenue.stats(b.cfg.id + '#macro')?.cycles || 0);
+    return c;
+  }
+  // Gộp thống kê auto-sell spawn + auto-sell macro của cùng 1 bot
+  _mergeRevStats(list) {
+    if (list.length === 1) return list[0];
+    const sum = f => list.reduce((t, s) => t + (f(s) || 0), 0);
+    const rated = list.filter(s => s.avgPerHour != null);
+    const avg = rated.length ? rated.reduce((t, s) => t + s.avgPerHour, 0) : null;
+    return {
+      total: sum(s => s.total), cycles: sum(s => s.cycles), last1h: sum(s => s.last1h), last24h: sum(s => s.last24h),
+      today: sum(s => s.today), yesterday: sum(s => s.yesterday),
+      avgPerHour: avg, perDayEst: avg == null ? null : avg * 24, observedMs: Math.max(...list.map(s => s.observedMs || 0)),
+      hourly: list[0].hourly.map((h, i) => ({ label: h.label, amount: sum(s => s.hourly[i]?.amount) })),
+      daily: list[0].daily.map((d, i) => ({ label: d.label, amount: sum(s => s.daily[i]?.amount) })),
+    };
+  }
+  buildRevenueSummaryEmbed(now = Date.now()) {
+    const fmt = RevenueTracker.formatMoney;
+    const rows = [];
+    for (const b of this.bots) {
+      const list = [this.revenue.stats(b.cfg.id, now), this.revenue.stats(b.cfg.id + '#macro', now)].filter(Boolean);
+      if (list.length) rows.push({ id: String(b.cfg.id), s: this._mergeRevStats(list) });
+    }
+    if (!rows.length) return null;
+    rows.sort((a, b) => b.s.today - a.s.today);
+    const sum = f => rows.reduce((t, r) => t + (f(r.s) || 0), 0);
+    const rated = rows.filter(r => r.s.avgPerHour != null);
+    const avgH = rated.length ? rated.reduce((t, r) => t + r.s.avgPerHour, 0) : null;
+    const pad = (v, n) => String(v).padStart(n, ' ');
+    const MAX = 25;
+    const idW = Math.min(14, Math.max(4, ...rows.slice(0, MAX).map(r => r.id.length)));
+    const cut = (t, n) => (t.length > n ? t.slice(0, n - 1) + '…' : t.padEnd(n, ' '));
+    const lines = [`${cut('Bot', idW)} ${pad('1h', 7)} ${pad('Hôm nay', 8)} ${pad('/giờ', 7)}`];
+    for (const r of rows.slice(0, MAX)) {
+      lines.push(`${cut(r.id, idW)} ${pad(fmt(r.s.last1h), 7)} ${pad(fmt(r.s.today), 8)} ${pad(r.s.avgPerHour == null ? '—' : fmt(r.s.avgPerHour), 7)}`);
+    }
+    if (rows.length > MAX) lines.push(`… và ${rows.length - MAX} bot khác`);
+    const hourly = rows[0].s.hourly.map((h, i) => ({ label: h.label, amount: rows.reduce((t, r) => t + (r.s.hourly[i]?.amount || 0), 0) }));
+    const daily = rows[0].s.daily.map((d, i) => ({ label: d.label, amount: rows.reduce((t, r) => t + (r.s.daily[i]?.amount || 0), 0) }));
+    const hrs = hourly.slice(-6).map(h => `${h.label} ${pad(fmt(h.amount), 8)}`).join('\n');
+    const dys = daily.map(d => `${d.label} ${pad(fmt(d.amount), 8)}`).join('\n');
+    const est = avgH == null ? '\n_(cần ≥2 vòng bán liên tiếp để tính tốc độ)_' : '';
+    return {
+      title: `📊 Tổng hợp doanh thu Auto-sell (${rows.length} bot)`,
+      description: '```\n' + lines.join('\n') + '\n```',
+      color: 0x22c55e,
+      fields: [
+        { name: '💰 Hôm nay', value: `**${fmt(sum(s => s.today))}**\nHôm qua: ${fmt(sum(s => s.yesterday))}`, inline: true },
+        { name: '⏱ 1 giờ qua', value: `**${fmt(sum(s => s.last1h))}**\nTB/giờ: ${avgH == null ? '—' : fmt(avgH)}${est}`, inline: true },
+        { name: '📅 24 giờ qua', value: `**${fmt(sum(s => s.last24h))}**\n~/ngày: ${avgH == null ? '—' : '~' + fmt(avgH * 24)}`, inline: true },
+        { name: '🕒 6 giờ gần nhất (cả dàn)', value: '```\n' + hrs + '\n```', inline: true },
+        { name: '🗓 7 ngày gần nhất (cả dàn)', value: '```\n' + dys + '\n```', inline: true },
+        { name: '📊 Tổng cộng', value: `${fmt(sum(s => s.total))} trong ${sum(s => s.cycles)} vòng`, inline: false },
+      ],
+      footer: { text: 'Tổng hợp tất cả bot (auto-sell macro + auto-sell spawn)' },
+      timestamp: new Date(now).toISOString(),
+    };
+  }
+  sendRevenueSummary() {
+    const embed = this.buildRevenueSummaryEmbed();
+    if (!embed) return { ok: false, message: 'Chưa có dữ liệu doanh thu của bot nào' };
+    const sink = this._revenueSink();
+    if (!sink) return { ok: false, message: 'Chưa cấu hình webhook (webhook revenue set <url> hoặc webhook set <url>)' };
+    sink.n.send(sink.ev, embed);
+    this._revSummaryLastCycles = this._revenueTotalCycles();
+    return { ok: true, via: sink.via };
+  }
+  // Hẹn giờ gửi định kỳ (phút, 0 = tắt). Tới hạn mà không có vòng bán mới nào thì bỏ qua, khỏi gửi trùng.
+  _armRevenueSummary() {
+    if (this._revSummaryTimer) { clearInterval(this._revSummaryTimer); this._revSummaryTimer = null; }
+    const min = Number(this._config?.revenueSummaryEveryMin) || 0;
+    if (min <= 0) return;
+    this._revSummaryTimer = setInterval(() => {
+      try {
+        if (this._revenueTotalCycles() === this._revSummaryLastCycles) return;
+        this.sendRevenueSummary();
+      } catch { }
+    }, Math.max(1, min) * 60000);
+    if (this._revSummaryTimer.unref) this._revSummaryTimer.unref();
+  }
+  setRevenueSummaryEvery(min) {
+    min = Math.max(0, Number(min) || 0);
+    this._config.revenueSummaryEveryMin = min;
+    this.persistence.set('revenueSummaryEveryMin', min);
+    this._armRevenueSummary();
+    return min;
+  }
+  // "30m", "1h", "1h30m", "90" (số trần = phút) -> số phút; null nếu không hiểu
+  static parseEveryMin(text) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t) return null;
+    if (/^\d+$/.test(t)) return Number(t);
+    const m = /^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?$/.exec(t);
+    if (!m || (!m[1] && !m[2])) return null;
+    return Number(m[1] || 0) * 60 + Number(m[2] || 0);
+  }
   _nowMinutes() {
     const tz = this._scheduleTz();
     let parts;
@@ -452,6 +596,7 @@ class BotManager {
     this.persistence.shutdown();
     if (this._poolPruneInterval) clearInterval(this._poolPruneInterval);
     if (this._scheduleInterval) clearInterval(this._scheduleInterval);
+    if (this._revSummaryTimer) clearInterval(this._revSummaryTimer);
     this.sharedPool.reset();
     this.bots = [];
   }

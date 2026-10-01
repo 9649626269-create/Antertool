@@ -301,8 +301,10 @@ async function shutdown(code = 0) {
         prompt: colors.border('⬡ '),
         terminal: true,
       });
+      manager.cliAsk = (msg) => console.log(colors.accent('  ' + msg));
       rl.on('line', line => {
         const input = String(line || '').trim();
+        if (manager.hasWebhookPrompt && manager.answerWebhookPrompt(input)) { rl.prompt(); return; } // trả lời câu hỏi liên kết webhook
         if (!input) { rl.prompt(); return; }
         const parts = input.split(/\s+/);
         const cmd = parts[0].toLowerCase();
@@ -410,11 +412,21 @@ async function shutdown(code = 0) {
                   rn.configure(null, ['all']);
                   manager.persistence.set('revenueWebhookUrl', null);
                   console.log(colors.ok('  ✓ Đã tắt webhook doanh thu riêng — báo cáo sẽ đi qua webhook chung (nếu có)'));
+                } else if (args[1] === 'report' || args[1] === 'send') {
+                  const r = manager.sendRevenueSummary();
+                  console.log(r.ok ? colors.ok(`  ✓ Đã gửi báo cáo tổng hợp doanh thu (${r.via})`) : colors.warn('  ' + r.message));
+                } else if (args[1] === 'every') {
+                  const v = String(args[2] || '').toLowerCase();
+                  const min = (v === 'off' || v === '0') ? 0 : manager.constructor.parseEveryMin(args.slice(2).join(''));
+                  if (min === null || min === undefined) { console.log(colors.warn('  Cú pháp: webhook revenue every <30m|1h|1h30m|off>')); break; }
+                  manager.setRevenueSummaryEvery(min);
+                  console.log(colors.ok(min ? `  ✓ Tự gửi báo cáo tổng hợp mỗi ${min >= 60 && min % 60 === 0 ? (min / 60) + ' giờ' : min + ' phút'} (chỉ gửi khi có vòng bán mới)` : '  ✓ Đã tắt tự gửi báo cáo tổng hợp'));
                 } else if (args[1] === 'test') {
                   if (!rn.enabled) { console.log(colors.warn('  Chưa đặt webhook doanh thu riêng — dùng: webhook revenue set <url>')); break; }
                   rn.test().then(ok => console.log(ok ? colors.ok('  ✓ Đã gửi test, kiểm tra kênh Discord') : colors.err('  ✗ Gửi thất bại — kiểm tra lại URL')));
                 } else {
-                  console.log(colors.muted('  Usage: webhook revenue set <url> | webhook revenue test | webhook revenue off'));
+                  console.log(colors.muted('  Usage: webhook revenue set <url> | test | off | report | every <30m|1h|off>'));
+                  console.log(colors.muted('  Tự gửi tổng hợp: ' + (manager._config?.revenueSummaryEveryMin ? `mỗi ${manager._config.revenueSummaryEveryMin} phút` : 'TẮT')));
                   console.log(colors.muted('  Trạng thái: ' + (rn.enabled ? 'BẬT (webhook riêng)' : (notifier.enabled ? 'dùng webhook chung' : 'TẮT'))));
                 }
                 break;
