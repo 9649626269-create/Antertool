@@ -91,6 +91,14 @@ class BotSession extends EventEmitter {
     // ở cả 2 nơi -> gửi cảnh báo webhook liên tục.
     this.spawnerProtectRange = cfg.spawnerProtectRange || 20;
     this.spawnerSaveRange = cfg.spawnerSaveRange || 5;
+    // Chỉ "canh gác" khi THỰC SỰ đang đứng cạnh lồng: phải có ít nhất 1 lồng đã lưu nằm trong
+    // spawnerArmRange block quanh bot (và chunk đã tải, đúng là block lồng), liên tục ít nhất
+    // spawnerArmDelayMs. Nhờ vậy lúc vừa đăng nhập ở khu spawn (chưa được chuyển về chỗ cũ)
+    // có người chơi đứng gần cũng KHÔNG bị báo nhầm là có người cạnh lồng.
+    this.spawnerArmRange = cfg.spawnerArmRange || 8;
+    this.spawnerArmDelayMs = cfg.spawnerArmDelayMs ?? 3000;
+    this._spawnerZone = 'unknown'; // 'in' = đang cạnh lồng | 'out' = không có lồng quanh bot
+    this._spawnerArmedSince = 0;
     this.spawnerAutoDisconnect = cfg.spawnerAutoDisconnect ?? false;
     this.spawnerAutoMine = cfg.spawnerAutoMine ?? true;
     this.spawnerRequireSilk = cfg.spawnerRequireSilk ?? true; // đào không Silk Touch thì lồng bị phá mất, không rơi ra
@@ -614,6 +622,8 @@ class BotSession extends EventEmitter {
     });
     let _usedProxy = !!proxy;
     mc.on('spawn', () => {
+      this._spawnerZone = 'unknown'; // vào/đổi khu vực -> tính lại việc có lồng cạnh bot không
+      this._spawnerArmedSince = 0;
       if (this._firstSpawn) {
         this._firstSpawn = false;
         this._onConnectComplete();
@@ -1339,7 +1349,11 @@ class BotSession extends EventEmitter {
         }
       }
       const before = this.protectedSpawners.length;
+      const me = mc.entity.position;
       this.protectedSpawners = this.protectedSpawners.filter(p => {
+        // Chỉ kết luận "lồng đã mất" khi bot đang đứng gần toạ độ đó — tránh xoá nhầm khi
+        // bot đang ở khu spawn/thế giới khác (chunk đã tải nhưng không phải nơi đặt lồng).
+        if (me.distanceTo(makeVec3(p.x + .5, p.y + .5, p.z + .5)) > 16) return true;
         const b = mc.blockAt(this._vec(p));
         return !b || this._isSpawnerBlock(b); // b=null: chunk chưa tải -> giữ lại
       });
@@ -1395,10 +1409,41 @@ class BotSession extends EventEmitter {
     }
     return out.sort((a, b) => a.dist - b.dist);
   }
+  // Các lồng đã lưu đang nằm sát bot: trong spawnerArmRange, chunk đã tải và block đúng là lồng
+  _spawnersNearBot() {
+    const mc = this.mc;
+    const me = mc?.entity?.position;
+    if (!me) return [];
+    const out = [];
+    for (const p of this.protectedSpawners) {
+      if (me.distanceTo(makeVec3(p.x + .5, p.y + .5, p.z + .5)) > this.spawnerArmRange) continue;
+      let b = null;
+      try { b = mc.blockAt(this._vec(p)); } catch { }
+      if (this._isSpawnerBlock(b)) out.push(p);
+    }
+    return out;
+  }
+  // true = được phép quét người lạ. Log đúng 1 lần mỗi khi trạng thái đổi (không spam).
+  _spawnerArmed() {
+    const now = nowMs();
+    if (!this._spawnersNearBot().length) {
+      if (this._spawnerZone !== 'out') this.log('sys', 'Bảo vệ Lồng Spawn: không có lồng bên cạnh bot (đang ở khu spawn/khu khác?) — tạm nghỉ, không cảnh báo');
+      this._spawnerZone = 'out';
+      this._spawnerArmedSince = 0;
+      return false;
+    }
+    if (this._spawnerZone !== 'in') {
+      this._spawnerZone = 'in';
+      this._spawnerArmedSince = now;
+      if (this.spawnerArmDelayMs > 0) this.log('sys', `Bảo vệ Lồng Spawn: đã ở cạnh lồng — bắt đầu canh sau ${(this.spawnerArmDelayMs / 1000).toFixed(1)}s`);
+    }
+    return now - this._spawnerArmedSince >= this.spawnerArmDelayMs;
+  }
   _spawnerProtectTick() {
     if (!this.isOnline || !this.mc?.entity?.position) return;
     if (this._spawnerBusy || !this.protectedSpawners.length) return;
     if (nowMs() < this._spawnerRetryAt) return;
+    if (!this._spawnerArmed()) return; // không có lồng cạnh bot -> không báo, không đập
     const strangers = this._nearbyStrangers();
     if (!strangers.length) return;
     // Bảo vệ lồng có ưu tiên cao hơn: ngắt vòng auto-sell spawn, tick 250ms sau sẽ xử lý
