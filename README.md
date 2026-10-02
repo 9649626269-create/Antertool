@@ -230,7 +230,7 @@ Lưu ý:
 
 ### Báo cáo doanh thu (webhook Discord)
 
-Sau mỗi vòng bán, server báo số tiền bán được vào **chat của chính bot** (vd `1.25k`, `2.4m`, `1.1b`). Bot đọc các tin đó trong lúc chạy vòng bán (+4 giây sau lồng cuối), cộng lại, rồi gửi 1 embed lên Discord gồm: **doanh thu vòng này**, **doanh thu/giờ**, **doanh thu/ngày** (ước tính), hôm nay / hôm qua / 24 giờ qua, bảng 6 giờ và 7 ngày gần nhất, tổng cộng.
+Sau mỗi vòng bán, server báo số tiền bán được vào **chat của chính bot** (vd `1.25k`, `2.4m`, `1.1b`). Bot đọc các tin đó trong lúc chạy vòng bán (+4 giây sau lồng cuối), cộng lại, rồi gửi 1 embed lên Discord gồm: **vòng vừa xong** (tiền + số lồng bán thành công/lỗi), **hiệu suất** (trung bình 24h/giờ và giờ vừa qua), **doanh thu** (hôm nay, 24 giờ qua, hôm qua, ước tính/ngày), bảng 6 giờ và 7 ngày gần nhất, **tổng cộng** (số vòng + thời gian chạy) và giờ cập nhật.
 
 ```
 webhook revenue set <url>          # webhook RIÊNG (kênh Discord khác) cho báo cáo doanh thu

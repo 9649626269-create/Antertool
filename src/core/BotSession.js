@@ -1029,7 +1029,7 @@ class BotSession extends EventEmitter {
     this._rev.record(this.cfg.id, cap.sum, { intervalMs: interval, hits: cap.hits });
     this._revPending.amount += cap.sum;
     this._revPending.cycles += 1;
-    this.log('ok', `Doanh thu vòng này: ${fmt(cap.sum)} (${cap.hits} tin / ${cap.done} lồng)`);
+    this.log('ok', `Doanh thu vòng này: ${fmt(cap.sum)} (${cap.hits} tin / ${cap.done}/${cap.total} lồng)`);
     if (quiet) return cap;
     const gapMs = this.autoSellSpawnReportMin * 60000;
     if (gapMs && nowMs() - this._revLastReportAt < gapMs) return cap; // chưa tới lúc báo — số liệu vẫn được cộng dồn cho lần báo sau
@@ -1046,7 +1046,7 @@ class BotSession extends EventEmitter {
   }
   _buildRevenueEmbed(cap, kind = 'spawn') {
     const macro = kind === 'macro';
-    const fmt = RevenueTracker.formatMoney;
+    const fmt = RevenueTracker.formatMoneyFixed; // luôn 2 số lẻ: 2.01m, 31.20m
     const s = macro ? this.getMacroRevenueStats() : this.getRevenueStats();
     const id = this.cfg.id;
     const noRate = !s || s.avgPerHour == null;
@@ -1054,27 +1054,47 @@ class BotSession extends EventEmitter {
     const estNote = noRate ? '\n_(cần ≥2 vòng bán liên tiếp để tính tốc độ — vòng đầu là hàng dồn nên không tính)_' : (est ? '\n_(ước tính — mới đo ' + this._fmtDuration(s.observedMs) + ')_' : '');
     const pend = macro ? this._macroRevPending : this._revPending;
     const fields = [];
-    if (cap) fields.push({ name: macro ? '💰 Lần bán này' : '💰 Vòng này', value: macro
-      ? `**+${fmt(cap.sum)}**\n${cap.viaBalance ? 'đo theo số dư tăng' : cap.hits + ' tin bán'} · macro "${cap.macro}"`
-      : `**+${fmt(cap.sum)}**\n${cap.hits} tin bán / ${cap.done} lồng`, inline: true });
-    if (pend.cycles > 1) fields.push({ name: '🧾 Từ báo cáo trước', value: `**+${fmt(pend.amount)}**\n${pend.cycles} vòng`, inline: true });
+    // 1) Vòng vừa xong: tiền + tỉ lệ lồng bán thành công / lỗi
+    if (cap) {
+      let v;
+      if (macro) {
+        v = `**+${fmt(cap.sum)}**\n${cap.viaBalance ? 'đo theo số dư tăng' : cap.hits + ' tin bán'} · macro "${cap.macro}"`;
+      } else {
+        const total = cap.total || cap.done;
+        const fail = Math.max(0, total - cap.done);
+        v = `**+${fmt(cap.sum)}**\n${cap.done}/${total} lồng bán thành công`;
+        if (fail) v += `\n⚠️ ${fail} lồng lỗi`;
+        if (cap.hits !== cap.done) v += `\n_(đọc được ${cap.hits} tin báo tiền)_`;
+      }
+      fields.push({ name: macro ? '💰 LẦN BÁN VỪA XONG' : '💰 VÒNG VỪA XONG', value: v, inline: true });
+    }
+    if (pend.cycles > 1) fields.push({ name: '🧾 TỪ BÁO CÁO TRƯỚC', value: `**+${fmt(pend.amount)}**\n${pend.cycles} vòng`, inline: true });
     if (s) {
-      fields.push({ name: '⏱ Doanh thu / giờ', value: `**${noRate ? '—' : fmt(s.avgPerHour)}**\n1 giờ qua thực tế: ${fmt(s.last1h)}${estNote}`, inline: true });
-      fields.push({ name: '📅 Doanh thu / ngày', value: `**${noRate ? '—' : '~' + fmt(s.perDayEst)}**${noRate ? '' : ' (ước tính)'}\nHôm nay: ${fmt(s.today)} · Hôm qua: ${fmt(s.yesterday)}\n24 giờ qua: ${fmt(s.last24h)}`, inline: true });
+      // 2) Hiệu suất: ghi rõ trung bình là của 24h, tách khỏi giờ vừa qua
+      fields.push({ name: '⏱️ HIỆU SUẤT', value: `Trung bình 24h: **${noRate ? '—' : fmt(s.avgPerHour) + '/giờ'}**\nGiờ vừa qua: **${fmt(s.last1h)}**${estNote}`, inline: true });
+      // 3) Doanh thu: số thật trước, ước tính để cuối
+      fields.push({ name: '📅 DOANH THU', value: [
+        `Hôm nay: ${fmt(s.today)}`,
+        `24 giờ qua: ${fmt(s.last24h)}`,
+        `Hôm qua: ${fmt(s.yesterday)}`,
+        `Ước tính/ngày: ${noRate ? '—' : '~' + fmt(s.perDayEst)}`,
+      ].join('\n'), inline: true });
       const pad = (str, n) => String(str).padStart(n, ' ');
-      const hours = s.hourly.slice(-6).map(h => `${h.label} ${pad(fmt(h.amount), 8)}`).join('\n');
-      const days = s.daily.map(d => `${d.label} ${pad(fmt(d.amount), 8)}`).join('\n');
-      fields.push({ name: '🕒 6 giờ gần nhất', value: '```\n' + hours + '\n```', inline: true });
-      fields.push({ name: '🗓 7 ngày gần nhất', value: '```\n' + days + '\n```', inline: true });
-      fields.push({ name: '📊 Tổng cộng', value: `${fmt(s.total)} trong ${s.cycles} vòng`, inline: false });
+      const hours = s.hourly.slice(-6).map(h => `${h.label} → ${pad(fmt(h.amount), 6)}`).join('\n');
+      const days = s.daily.map(d => `${d.label} → ${pad(fmt(d.amount), 6)}`).join('\n');
+      fields.push({ name: '🕐 6 GIỜ GẦN NHẤT', value: '```\n' + hours + '\n```', inline: true });
+      fields.push({ name: '📅 7 NGÀY', value: '```\n' + days + '\n```', inline: true });
+      // 4) Tổng cộng + thời gian chạy (tính từ vòng đầu tiên được ghi nhận)
+      const runMin = s.since ? Math.max(0, Math.floor((Date.now() - s.since) / 60000)) : 0;
+      const run = runMin >= 60 ? `${Math.floor(runMin / 60)}h ${String(runMin % 60).padStart(2, '0')}m` : `${runMin}m`;
+      fields.push({ name: '📊 TỔNG CỘNG', value: `**${fmt(s.total)}** • ${s.cycles} vòng${s.since ? `\n⏱️ Thời gian chạy: ${run}` : ''}`, inline: false });
     }
     return {
-      title: macro ? `💸 ${id}: báo cáo doanh thu Auto-sell (macro)` : `💸 ${id}: báo cáo doanh thu Auto-sell Spawn`,
-      description: cap ? `${macro ? 'Lần bán vừa xong' : 'Vòng bán vừa xong'}: **+${fmt(cap.sum)}**` : 'Báo cáo tổng hợp doanh thu.',
+      title: macro ? '💸 BÁO CÁO AUTO-SELL (MACRO)' : '💸 BÁO CÁO AUTO-SELL SPAWN',
+      description: `Acc: **${id}**`,
       color: 0x22c55e,
       fields,
-      footer: { text: id },
-      timestamp: new Date().toISOString(),
+      footer: { text: `🕐 Cập nhật: ${this._rev.clock(Date.now())}` },
     };
   }
   // Gửi qua webhook RIÊNG nếu có, không thì qua webhook chung (sự kiện "revenue")

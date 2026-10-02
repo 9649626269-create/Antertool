@@ -31,6 +31,16 @@ function formatMoney(n) {
   return (neg ? '-' : '') + String(Math.round(a));
 }
 
+// Như formatMoney nhưng luôn 2 số lẻ cho gọn mắt khi đặt cạnh nhau: 2010000 -> "2.01m", 31200000 -> "31.20m", 0 -> "0"
+function formatMoneyFixed(n) {
+  n = Number(n) || 0;
+  const neg = n < 0; const a = Math.abs(n);
+  for (const [v, s] of SUFFIX) {
+    if (a >= v) return (neg ? '-' : '') + (a / v).toFixed(2) + s;
+  }
+  return (neg ? '-' : '') + String(Math.round(a));
+}
+
 // "1.25k" | "2,5m" | "3b" | "$1,250" -> số. Không hiểu thì trả null.
 function parseMoneyToken(tok) {
   const m = /^\s*\$?\s*(\d+(?:[.,]\d+)*)\s*([kmbt])?\s*$/i.exec(String(tok || ''));
@@ -99,6 +109,12 @@ class RevenueTracker {
     const p = this._fmt(ts, { year: 'numeric', month: '2-digit', day: '2-digit' });
     const g = t => p.find(x => x.type === t).value;
     return `${g('year')}-${g('month')}-${g('day')}`;
+  }
+  // "02:15" theo múi giờ config
+  clock(ts) {
+    const p = this._fmt(ts, { hour: '2-digit', minute: '2-digit' });
+    const g = t => p.find(x => x.type === t).value;
+    return `${String(Number(g('hour')) % 24).padStart(2, '0')}:${g('minute')}`;
   }
   hourKey(ts) {
     const p = this._fmt(ts, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' });
@@ -177,5 +193,6 @@ class RevenueTracker {
   }
 }
 RevenueTracker.formatMoney = formatMoney;
+RevenueTracker.formatMoneyFixed = formatMoneyFixed;
 RevenueTracker.parseMoneyToken = parseMoneyToken;
 module.exports = RevenueTracker;
