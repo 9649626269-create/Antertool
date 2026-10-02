@@ -442,6 +442,20 @@ async function shutdown(code = 0) {
               } else if (args[0] === 'test') {
                 if (!notifier.enabled) { console.log(colors.warn('  Chưa cấu hình webhook — dùng: webhook set <url>')); break; }
                 notifier.test().then(ok => console.log(ok ? colors.ok('  ✓ Đã gửi test, kiểm tra kênh Discord') : colors.err('  ✗ Gửi thất bại — kiểm tra lại URL')));
+              } else if (args[0] === 'mention' || args[0] === 'tag') {
+                const v = args.slice(1).join(' ').trim();
+                if (!v) {
+                  console.log(colors.muted('  Tag hiện tại: ' + (notifier.mention || '(chưa đặt)') + ' — áp dụng cho: ' + [...notifier.mentionEvents].join(', ')));
+                  console.log(colors.muted('  Usage: webhook mention <ID Discord | @tên | off> | webhook mention test'));
+                  console.log(colors.muted('  Muốn PING thật phải dùng ID số (Discord: Cài đặt > Nâng cao > Chế độ nhà phát triển, rồi chuột phải tên > Sao chép ID). @tên chỉ hiện chữ.'));
+                } else if (v.toLowerCase() === 'test') {
+                  if (!notifier.enabled) { console.log(colors.warn('  Chưa cấu hình webhook — dùng: webhook set <url>')); break; }
+                  notifier.testMention().then(ok => console.log(ok ? colors.ok('  ✓ Đã gửi tin thử, kiểm tra kênh Discord') : colors.err('  ✗ Gửi thất bại — kiểm tra lại URL')));
+                } else {
+                  notifier.setMention(v);
+                  manager.persistence.set('webhookMention', v);
+                  console.log(notifier.mention ? colors.ok('  ✓ Đã đặt tag: ' + notifier.mention + (/^<@/.test(notifier.mention) || /^@(everyone|here)$/.test(notifier.mention) ? '' : '  (chỉ hiện chữ, không ping — muốn ping hãy dùng ID số)')) : colors.ok('  ✓ Đã tắt tag'));
+                }
               } else if (args[0] === 'events') {
                 if (!args[1]) {
                   console.log(colors.muted('  Đang bật: ' + [...notifier.events].join(', ')));

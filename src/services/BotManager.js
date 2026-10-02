@@ -31,6 +31,7 @@ class BotManager {
   async init() {
     this._config = this.persistence.load();
     this.notifier.configure(this._config.webhookUrl, this._config.webhookEvents);
+    this.notifier.setMention(this._config.webhookMention, this._config.webhookMentionEvents);
     this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
     this._armRevenueSummary();
     this.autoExe = this._config.autoExe === true || this.autoExe;

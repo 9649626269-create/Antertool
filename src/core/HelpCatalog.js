@@ -38,6 +38,7 @@ const SECTIONS = [
     aliases: ['spawner', 'long', 'lồng', 'sell'],
     con: [
       { name: 'webhook', usage: 'webhook revenue set <url> | test | off', desc: 'webhook RIÊNG cho báo cáo doanh thu autosell_spawn' },
+      { name: 'webhook', usage: 'webhook mention <ID|@tên|off> | test', desc: 'tag người nhận ở cuối thông báo kick/hết reconnect/cảnh báo lồng' },
       { name: 'webhook', usage: 'webhook revenue report | every <30m|1h|off>', desc: 'gửi ngay / tự gửi định kỳ báo cáo TỔNG HỢP doanh thu của tất cả bot' },
     ],
     bot: [

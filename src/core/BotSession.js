@@ -197,14 +197,36 @@ class BotSession extends EventEmitter {
   }
   // Gửi thông báo Discord webhook (dùng chung, cấu hình ở BotManager) —
   // im lặng bỏ qua nếu chưa cấu hình webhook hoặc loại sự kiện này bị tắt.
-  _notify(eventKey, title, description, color = 0x64748b) {
+  _notify(eventKey, title, description, color = 0x64748b, headline = null) {
     const n = this._manager?.notifier;
     if (!n?.isEventOn(eventKey)) return;
     n.send(eventKey, {
       title, description, color,
       footer: { text: this.cfg.id },
       timestamp: new Date().toISOString(),
-    });
+    }, headline);
+  }
+  // Thông báo kick kiểu: "❌ BOT BỊ KICK @tag" + lý do + ⏰ giờ + 🔄 sắp reconnect sau bao lâu (lần mấy).
+  // Chờ tối đa 2.5s để biết thời gian reconnect (do scheduleReconnect tính) rồi mới gửi 1 tin duy nhất.
+  _queueKickNotify(kickMsg) {
+    this._flushKickNotify(null);
+    const pend = { kickMsg, at: Date.now(), timer: null };
+    pend.timer = setTimeout(() => this._flushKickNotify(null), 2500);
+    if (pend.timer.unref) pend.timer.unref();
+    this._kickPending = pend;
+  }
+  _flushKickNotify(info) {
+    const pend = this._kickPending;
+    if (!pend) return;
+    this._kickPending = null;
+    clearTimeout(pend.timer);
+    let tz = 'Asia/Ho_Chi_Minh';
+    try { tz = this._manager?._scheduleTz?.() || tz; } catch { }
+    let when;
+    try { when = new Date(pend.at).toLocaleTimeString('en-US', { timeZone: tz }); } catch { when = new Date(pend.at).toLocaleTimeString('en-US'); }
+    const lines = [String(pend.kickMsg).replace(/§[0-9a-fk-orx#]/gi, ''), `⏰ ${when}`]; // bỏ mã màu Minecraft (§c, §7...) cho dễ đọc
+    if (info) lines.push(`🔄 Reconnecting in ${Math.round(info.delay / 1000)}s... (lần thứ ${info.attempt}/${info.max})`);
+    this._notify('disconnect', `🟠 ${this.cfg.id}: bị kick`, lines.join('\n'), 0xf97316, '❌ BOT BỊ KICK');
   }
   static _VALID_TRANSITIONS = new Map([
     [CS.DISCONNECTED, new Set([CS.CONNECTING, CS.STOPPING])],
@@ -396,8 +418,9 @@ class BotSession extends EventEmitter {
     this._destroyMc();
     if (this.state.reconnects >= this._reconnectMaxRetries) {
       this.log('err', `Đã đạt giới hạn ${this._reconnectMaxRetries} reconnect — thử lại sau 15 phút`);
+      this._flushKickNotify(null);
       this._notify('reconnectFailed', `🔴 ${this.cfg.id}: hết lượt reconnect`,
-        `Đã thử ${this._reconnectMaxRetries} lần không thành công${reason ? ` (lý do gần nhất: ${reason})` : ''}. Sẽ tự thử lại sau 15 phút.`, 0xef4444);
+        `Đã thử ${this._reconnectMaxRetries} lần không thành công${reason ? ` (lý do gần nhất: ${reason})` : ''}. Sẽ tự thử lại sau 15 phút.`, 0xef4444, '🔴 BOT HẾT LƯỢT RECONNECT');
       this._setState(CS.DISCONNECTED);
       this._reconnectScheduled = false;
       this._setTimer('reconnect_longwait', () => {
@@ -426,6 +449,7 @@ class BotSession extends EventEmitter {
     const delay = this._reconnectJitter ? jit(base, Math.round(base * 0.3)) : base;
     this.state.reconnects++;
     const maxRetryStr = this._reconnectMaxRetries >= 999 ? '∞' : String(this._reconnectMaxRetries);
+    this._flushKickNotify({ delay, attempt: this.state.reconnects, max: maxRetryStr });
     this.log('warn', `Mất kết nối${reason ? ' (' + reason + ')' : ''}${fastKick ? ' [FAST KICK x' + this._fastKicks + ']' : ''} — thử lại lần ${this.state.reconnects}/${maxRetryStr} sau ${(delay / 1000).toFixed(1)}s (backoff)`);
     this.emit('disconnectReason', { id: this.cfg.id, reason, fastKick, retry: this.state.reconnects });
     if (this.socketRooms?.io) {
@@ -772,7 +796,7 @@ class BotSession extends EventEmitter {
       }
       const kickMsg = m || '(không rõ lý do)';
       this.log('warn', 'Bị kick: ' + kickMsg);
-      this._notify('disconnect', `🟠 ${this.cfg.id}: bị kick`, kickMsg, 0xf97316);
+      this._queueKickNotify(kickMsg);
       this.emit('kicked', { id: this.cfg.id, reason: kickMsg, raw: reason });
       if (this.socketRooms?.io) {
         this.socketRooms.io.emit('kicked', { id: this.cfg.id, reason: kickMsg });
@@ -1583,7 +1607,7 @@ class BotSession extends EventEmitter {
     const now = nowMs();
     if (now - (this._spawnerAlertedAt.get(key) || 0) < minMs) return false;
     this._spawnerAlertedAt.set(key, now);
-    this._notify('spawnerThreat', title, desc, color);
+    this._notify('spawnerThreat', title, desc, color, '🚨 CẢNH BÁO LỒNG SPAWN');
     return true;
   }
   _itemHasSilk(item) {
