@@ -36,7 +36,7 @@ const WindowRouter = {
   },
   _handleUnknown(bot, win, title) {
     if (!title || !title.trim()) {
-      if (bot.cfg.autoMenu && bot.cfg.menuCommand && !bot._menuSuccess) {
+      if (bot.cfg.autoMenu && bot.cfg.menuCommand && (!bot._menuSuccess || Date.now() < (bot._manualMenuUntil || 0))) {
         bot.log('sys', 'WindowRouter: GUI rỗng (đang menu retry) — fall-through xử lý');
       } else {
         bot.log('sys', 'WindowRouter: GUI rỗng — đóng ngay');
@@ -51,18 +51,22 @@ const WindowRouter = {
       : 'no items'
     bot.log('sys', `GUI debug: title="${title.substring(0, 50)}" slots=${win.slots?.length || 0} type=${win.type || '?'} ${_firstInfo}`)
     const slot = bot.settings.kingSmpSlot || DEFAULTS.kingSmpSlot;
-    if (win.slots?.length > slot && win.slots[slot]) {
+    // Chỉ tự click ô vào server khi đang ở bước menu (hoặc bạn vừa gõ lệnh "menu" tay). Sau khi vào server xong, GUI lạ
+    // (vd GUI của /home) bị ĐÓNG chứ không click bừa ô 24.
+    const menuStep = !bot._menuSuccess || Date.now() < (bot._manualMenuUntil || 0);
+    if (menuStep && win.slots?.length > slot && win.slots[slot]) {
       const isMenu = /menu|kingsmp|mở rộng|gui/i.test(title);
       if (isMenu || bot.cfg.autoMenu) {
+        const first = !bot._menuSuccess;
         bot._menuSuccess = true;
-        bot.mc.clickWindow(slot, 0, 0);
+        Promise.resolve(bot.mc.clickWindow(slot, 0, 0)).catch(() => {});
         bot.log('sys', `Click slot ${slot} trong [${title}]`);
-        bot._resumeIntendedStates();
+        if (first) bot._onMenuDone(`click ô ${slot}`); // xong bước menu -> mới bật spawnerprotect/autosell (qua cổng vị trí)
       } else {
-        bot.mc.closeWindow(win);
+        try { bot.mc.closeWindow(win); } catch {}
       }
     } else {
-      bot.mc.closeWindow(win);
+      try { bot.mc.closeWindow(win); } catch {}
     }
   },
 };

@@ -14,6 +14,14 @@ const EventEmitter = require('events');
  *                                này thì dừng macro ngay — dùng để tránh
  *                                bấm mua lặp lại vô ích khi đã biết chắc
  *                                sẽ thất bại (vd "stopif Bạn cần có")
+ *   loop [tối_đa_lượt]          đánh dấu ĐẦU vòng lặp (mặc định tối đa 500 lượt)
+ *   until <chữ>                 CUỐI vòng lặp: nếu trong lượt vừa rồi server
+ *                                báo tin chứa đoạn chữ này thì DỪNG macro,
+ *                                chưa thấy thì quay lại sau "loop" chạy lượt
+ *                                nữa — dùng để mua liên tục tới khi hết tiền
+ *                                (vd "until Bạn cần có"). Gõ "stopmacro" để
+ *                                dừng tay bất cứ lúc nào.
+ *   closewin                    đóng GUI đang mở (nếu có)
  *   ask <câu hỏi>                dừng macro lại, hỏi và CHỜ người dùng trả
  *                                lời bằng lệnh "answer <nội dung>". Câu trả
  *                                lời được lưu vào biến $answer để dùng ở
@@ -203,7 +211,9 @@ class MacroEngine {
       .split('\n')
       .map(l => l.trim())
       .filter(Boolean);
-    for (let line of lines) {
+    let loopStart = -1, loopMax = 500, loopCount = 0, iterStart = 0;
+    for (let pc = 0; pc < lines.length; pc++) {
+      let line = lines[pc];
       if (this._stopRequested) {
         this.bot.log('sys', 'Macro: đã dừng theo yêu cầu');
         return true;
@@ -262,6 +272,31 @@ class MacroEngine {
           return true;
         }
         this.bot.log(got ? 'ok' : 'warn', got ? `Macro: đã thấy "${text}"` : `Macro: hết ${timeoutMs}ms, không thấy "${text}" — chạy tiếp`);
+      } else if (op === 'loop') {
+        const n = parseInt(parts[1], 10);
+        loopStart = pc; loopCount = 0; iterStart = Date.now();
+        loopMax = n > 0 ? n : 500;
+        this.bot.log('sys', `Macro: bắt đầu vòng lặp (tối đa ${loopMax} lượt, dừng khi gặp "until" khớp hoặc gõ stopmacro)`);
+      } else if (op === 'until') {
+        const text = line.slice(line.indexOf(' ') + 1).trim();
+        if (!text || text.toLowerCase() === 'until') { this.bot.log('warn', 'Macro until: thiếu đoạn chữ cần chờ — cú pháp: until <chữ>'); continue; }
+        if (loopStart < 0) { this.bot.log('warn', 'Macro until: cần có dòng "loop" phía trên — bỏ qua'); continue; }
+        loopCount++;
+        if (this._lastChatContains(text, Date.now() - iterStart + 500, 80)) {
+          this.bot.log('warn', `Macro: lượt ${loopCount} server báo "${text}" — DỪNG mua`);
+          return true;
+        }
+        if (loopCount >= loopMax) {
+          this.bot.log('warn', `Macro: đã lặp ${loopMax} lượt mà chưa thấy "${text}" — dừng`);
+          return true;
+        }
+        this.bot.log('sys', `Macro: xong lượt ${loopCount}, chưa thấy "${text}" — mua tiếp`);
+        await this._sleep(500);
+        iterStart = Date.now();
+        pc = loopStart; // vòng for tự +1 => chạy tiếp từ dòng ngay sau "loop"
+        continue;
+      } else if (op === 'closewin') {
+        try { const w = this.bot.mc?.currentWindow; if (w) this.bot.mc.closeWindow(w); } catch { }
       } else if (op === 'stopif') {
         const text = line.slice(line.indexOf(' ') + 1).trim();
         if (!text) {

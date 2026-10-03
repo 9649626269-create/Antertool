@@ -191,6 +191,42 @@ Cảnh báo webhook dùng chung sự kiện `spawnerThreat`: người lạ tới
 
 Giới hạn cần biết: bot **không tự đi tới** lồng ngoài tầm với (chỉ đập lồng trong tầm với từ chỗ đang đứng, sát lồng là đủ) và chỉ đi thẳng vài block để nhặt item rơi. Phát hiện người lạ dựa trên danh sách người chơi client đã "thấy" được, nên người ở quá xa/chưa load thì chưa phát hiện được. Chưa test trên server thật — lần đầu nên thử với 1 lồng và cúp Silk Touch trong túi.
 
+## Trình tự khởi động & tự về `/home treolong`
+
+Mỗi lần bot vào server (kể cả sau khi bị kick/reconnect), mọi thứ chạy **đúng thứ tự**, bước sau chỉ bắt đầu khi bước trước xong:
+
+1. **Đăng nhập** — bot gõ `/dn`, rồi **đợi server báo** `SẢNH ➞ Đăng nhập thành công, nếu chưa tạo mã pin, hãy vào discord.kingmc.vn để tạo` (tin `Bạn đã đăng nhập!` cũng được tính). Quá 45s không thấy tin này thì cảnh báo trong log và vẫn đi tiếp.
+2. **Menu** — gửi `/menu`, click ô 24 trong GUI menu để vào server.
+3. **Cổng vị trí** — chưa bật gì cả. Bot chờ tới khi **đứng cạnh lồng** (≥1 lồng trong danh sách `autosell_spawn` nằm trong 6 block, hoặc ≥1 lồng của `spawnerprotect` trong 8 block) và đứng yên ~2.5s. Sau khi vào menu 12s mà vẫn chưa ở gần lồng (server không tự đưa bot về chỗ cũ) thì **tự gõ `/home treolong`**, chờ 20s cho teleport rồi kiểm tra lại, tối đa 5 lần.
+4. **Bật tính năng** — lúc này mới bật **spawnerprotect → autosell_spawn → autosell macro** (macro bán khi túi đầy), và gửi **webhook** `✅ đã bật spawnerprotect + autosell_spawn` (kèm vị trí, số lồng trong tầm, số lần đã gõ `/home`).
+
+Sau khi đã bật, bot **vẫn canh vị trí**: nếu không còn ở gần lồng liên tục ≥4s (chết rồi hồi sinh ở spawn, bị đá về sảnh, bị teleport đi…) thì gửi webhook `🏠 lệch khỏi vị trí treo lồng`, **tự gõ `/home treolong`** (cách nhau 20s), tạm hoãn vòng bán của `autosell_spawn` cho tới khi về, rồi gửi webhook `✅ đã về lại vị trí treo lồng`. Gõ 5 lần vẫn không về được → báo động webhook (`spawnerThreat`, có tag) và thử thưa dần 5 phút/lần. Không can thiệp khi macro đang chạy hoặc bot đang đập lồng/đang bán. Lồng đã bị phá (chunk đã tải mà block không còn là spawner) không bị tính là "lệch vị trí".
+
+```
+cmd s1 spawnhome status          # xem: bật/tắt, lệnh, đang ở gần lồng hay không
+cmd s1 spawnhome on|off          # bật/tắt tự về home (lưu vào config.json)
+cmd s1 spawnhome now             # gõ lệnh về home ngay
+cmd s1 spawnhome cmd /home abc   # đổi lệnh (mặc định /home treolong)
+```
+
+Lưu ý: macro như `tpa_owner` cố ý đưa bot đi chỗ khác — trong lúc macro chạy bot không bị kéo về, nhưng ngay sau khi macro xong (và lệch ≥4s) bot sẽ tự về `/home treolong`. Muốn ở lại chỗ mới thì `spawnhome off`.
+
+| Field (`config.json`, cấp bot hoặc toàn cục) | Mặc định | Ý nghĩa |
+|---|---|---|
+| `spawnHomeEnabled` | `true` | tự về home khi lệch vị trí |
+| `spawnHomeCommand` | `/home treolong` | lệnh về chỗ treo lồng |
+| `spawnHomeGraceMs` | `12000` | sau khi vào menu, chờ chừng này cho server tự đưa bot về trước khi gõ lệnh |
+| `spawnHomeConfirmMs` | `4000` | phải lệch liên tục chừng này mới coi là rời vị trí |
+| `spawnHomeCooldownMs` | `20000` | giãn cách giữa 2 lần gõ lệnh |
+| `spawnHomeMaxTries` | `5` | quá số lần này vẫn chưa về → báo động + thử thưa |
+| `spawnHomeSlowMs` | `300000` | giãn cách thử lại sau khi quá số lần |
+| `spawnPositionSettleMs` | `2500` | phải thấy lồng cạnh bot + đứng yên chừng này mới bật tính năng |
+| `spawnGateTimeoutMs` | `180000` | quá lâu chưa về được vị trí → báo webhook + vẫn bật autosell macro (spawnerprotect/autosell_spawn vẫn chờ) |
+| `loginSuccessPattern` | *(trống)* | regex nhận tin "đã đăng nhập" nếu server dùng câu khác (mặc định nhận "đăng nhập thành công" / "đã đăng nhập") |
+| `loginConfirmTimeoutMs` | `45000` | quá lâu không thấy tin xác nhận đăng nhập thì vẫn đi tiếp |
+
+Webhook có 2 loại sự kiện mới: `featuresReady` và `homeReturn` (tự thêm 1 lần vào danh sách `webhook events` đã lưu; tắt bằng `webhook events ...` nếu không muốn nhận). Sau khi vào server xong, GUI lạ mở ra (vd GUI của `/home`) bị **đóng**, không còn bị click bừa ô 24 như trước.
+
 ## Auto-sell Spawn (tự bán ở lồng theo chu kỳ)
 
 Bot định kỳ đi qua từng lồng trong danh sách: **chuột phải vào lồng** (mở GUI, *không* đập block) → **click ô số 51** → **đóng GUI** → sang lồng kế tiếp. Hết vòng thì chờ tới chu kỳ sau.
@@ -345,7 +381,7 @@ cmd <id> help [phân khu]   Trợ giúp lệnh của bot (không gồm lệnh co
 | Phân khu | Nội dung |
 |----------|----------|
 | `bot` | list, start, stop, addbot, delbot, cmd, cmdall + status, ping, pos, inv, board, order, tpa, menu, reconnect |
-| `spawn` | autosell_spawn (on/off/now/scan/every/slot/add/remove/clear/revenue/msg/ignorechat), spawnerprotect, addspawner, removespawner, listspawners, webhook revenue |
+| `spawn` | autosell_spawn (on/off/now/scan/every/slot/add/remove/clear/revenue/msg/ignorechat), spawnhome (on/off/now/status/cmd), spawnerprotect, addspawner, removespawner, listspawners, webhook revenue |
 | `macro` | macro, stopmacro, listmacro, answer, autosell, goal, addcmd, delcmd, listcmd |
 | `afk` | shard, stats, tshard, afk, wafk, stop, autoeat |
 | `proxy` | proxy list/add/addfile, proxyrotate |
@@ -426,6 +462,10 @@ Render injects `PORT` env var automatically. The app prioritizes `process.env.PO
 
 ## Changelog (bổ sung gần đây)
 
+- **Mới:** Macro lặp `loop` / `until <chữ>` (+ `closewin`) — macro `mualong` mua liên tục tới khi server báo `Bạn cần có…` thì tự dừng (tối đa 500 lượt, `stopmacro` dừng tay). Macro đang có trong `config.json` của bạn: thêm dòng `loop 500` trước `chat /shop`, và thay dòng cuối `stopif Bạn cần có` bằng 3 dòng `delay 1200` / `closewin` / `until Bạn cần có`.
+- **Mới:** Tự về `/home treolong` (`spawnhome`) — phát hiện bot không còn ở gần lồng spawn (sau đăng nhập hoặc đang treo) thì tự gõ lệnh về, có giãn cách/giới hạn số lần, webhook `homeReturn` khi lệch và khi đã về.
+- **Sửa lỗi:** `spawnerprotect`, `autosell_spawn` và `autosell` (macro túi đầy) từng bật ngay lúc spawn, trước khi đăng nhập/vào menu xong và trước khi bot về tới chỗ treo lồng (gây báo nhầm người lạ, "quá xa/chunk chưa tải", macro bán chạy ngoài sảnh). Giờ đi đúng thứ tự: đợi tin `SẢNH ➞ Đăng nhập thành công…` → `/menu` + click ô 24 → chờ đứng cạnh lồng → mới bật cả ba và gửi webhook `featuresReady`.
+- **Sửa lỗi:** `WindowRouter` tự click ô 24 ở **mọi** GUI lạ khi `autoMenu` bật (kể cả sau khi đã vào server); nay chỉ click ở bước menu (hoặc ngay sau lệnh `menu` gõ tay), GUI lạ khác bị đóng.
 - **Mới:** Báo cáo doanh thu Auto-sell Spawn — đọc số tiền server báo (1.xxk/m/b), gom thành doanh thu vòng/giờ/ngày, gửi embed qua webhook riêng (`webhook revenue set <url>`) hoặc webhook chung.
 - **Mới:** Auto-sell Spawn (`autosell_spawn`) — định kỳ chuột phải từng lồng → click ô 51 → đóng GUI → lồng kế tiếp; chu kỳ giờ/phút/giây tuỳ chỉnh, có UI web và lệnh CLI.
 - **Sửa lỗi:** SOCKS4 proxy gửi sai định dạng khi target là domain (SOCKS4a) — thiếu byte NUL kết thúc thật sự, khiến nhiều proxy SOCKS4 từ chối/treo khi connect tới server bằng tên miền.

@@ -20,7 +20,11 @@ const EVENT_LABELS = {
   autoSell: 'Đầy túi đồ (Auto-sell)',
   schedule: 'Lịch tự out/vào',
   revenue: 'Báo cáo doanh thu Auto-sell Spawn',
+  featuresReady: 'Đã bật spawnerprotect + autosell_spawn (sau đăng nhập/menu, đúng vị trí)',
+  homeReturn: 'Lệch vị trí treo lồng → tự gõ /home treolong (và khi đã về)',
 };
+// Các loại sự kiện thêm sau này — BotManager tự thêm 1 lần vào danh sách đã lưu của người dùng (xem migrateWebhookEvents)
+const NEW_EVENTS = ['featuresReady', 'homeReturn'];
 const DEFAULT_EVENTS = Object.keys(EVENT_LABELS);
 // Các sự kiện "báo động" có dòng tiêu đề + tag người nhận (kiểu: ❌ BOT BỊ KICK @ai-đó)
 const DEFAULT_MENTION_EVENTS = ['disconnect', 'reconnectFailed', 'spawnerThreat'];
@@ -63,6 +67,7 @@ class Notifier {
     return this.enabled && (!eventKey || this.events.has(eventKey) || this.events.has('all'));
   }
   static get EVENT_LABELS() { return EVENT_LABELS; }
+  static get NEW_EVENTS() { return NEW_EVENTS; }
   // headline (tuỳ chọn): dòng chữ nằm TRÊN embed, ví dụ "❌ BOT BỊ KICK"; sự kiện nằm trong mentionEvents thì thêm tag phía sau.
   send(eventKey, embed, headline) {
     if (!this.isEventOn(eventKey)) return Promise.resolve(false);

@@ -30,6 +30,7 @@ class BotManager {
   }
   async init() {
     this._config = this.persistence.load();
+    this._migrateWebhookEvents();
     this.notifier.configure(this._config.webhookUrl, this._config.webhookEvents);
     this.notifier.setMention(this._config.webhookMention, this._config.webhookMentionEvents);
     this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
@@ -48,6 +49,35 @@ class BotManager {
       this.bots.push(bot);
     }
     return this;
+  }
+  // Các cài đặt của trình tự khởi động / tự về home (đọc từ bot, không có thì lấy ở cấp toàn cục config.json, không có nữa thì dùng mặc định của BotSession)
+  static STARTUP_KEYS = [
+    'loginSuccessPattern', 'loginConfirmTimeoutMs',
+    'spawnHomeEnabled', 'spawnHomeCommand', 'spawnHomeGraceMs', 'spawnHomeConfirmMs', 'spawnHomeCooldownMs', 'spawnHomeMaxTries', 'spawnHomeSlowMs',
+    'spawnPositionSettleMs', 'spawnGateTimeoutMs',
+  ];
+  _startupFields(src) {
+    const out = {};
+    for (const k of BotManager.STARTUP_KEYS) {
+      const v = src?.[k] !== undefined ? src[k] : this._config?.[k];
+      if (v !== undefined && v !== null) out[k] = v;
+    }
+    return out;
+  }
+  // Danh sách loại sự kiện webhook người dùng đã lưu từ trước chưa có các loại mới -> thêm 1 lần cho mỗi loại mới
+  // (sau đó bạn tắt bớt bằng "webhook events ..." thì giữ nguyên, không tự thêm lại).
+  _migrateWebhookEvents() {
+    const c = this._config;
+    if (!c) return;
+    const done = new Set(Array.isArray(c.webhookEventsMigrated) ? c.webhookEventsMigrated : []);
+    const add = Notifier.NEW_EVENTS.filter(k => !done.has(k));
+    if (!add.length) return;
+    c.webhookEventsMigrated = [...done, ...add];
+    this.persistence.set('webhookEventsMigrated', c.webhookEventsMigrated);
+    if (Array.isArray(c.webhookEvents) && c.webhookEvents.length && !c.webhookEvents.includes('all')) {
+      c.webhookEvents = [...new Set([...c.webhookEvents, ...add])];
+      this.persistence.set('webhookEvents', c.webhookEvents);
+    }
   }
   _wireBotLog(bot) {
     if (this.onBotLog) {
@@ -111,6 +141,7 @@ class BotManager {
       proxyAutoRotate: cfg.proxyAutoRotate ?? this._config.proxyAutoRotate ?? false,
       proxyRotateMinMinutes: cfg.proxyRotateMinMinutes ?? this._config.proxyRotateMinMinutes ?? 1,
       proxyRotateMaxMinutes: cfg.proxyRotateMaxMinutes ?? this._config.proxyRotateMaxMinutes ?? 10,
+      ...this._startupFields(cfg),
     };
     const theme = pickTheme(merged.theme, index);
     const bot = new BotSession(merged, theme, this.proxyManager, { io: this.io });
@@ -176,6 +207,7 @@ class BotManager {
       proxyAutoRotate: data.proxyAutoRotate ?? this._config.proxyAutoRotate ?? false,
       proxyRotateMinMinutes: data.proxyRotateMinMinutes ?? this._config.proxyRotateMinMinutes ?? 1,
       proxyRotateMaxMinutes: data.proxyRotateMaxMinutes ?? this._config.proxyRotateMaxMinutes ?? 10,
+      ...this._startupFields(data),
     };
     const theme = pickTheme(cfg.theme, index);
     const bot = new BotSession(cfg, theme, this.proxyManager, { io: this.io });

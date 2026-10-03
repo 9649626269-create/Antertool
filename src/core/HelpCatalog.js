@@ -50,6 +50,8 @@ const SECTIONS = [
       { name: 'autosell_spawn', usage: 'autosell_spawn revenue [report|reset|on|off|every <30m>]', desc: 'xem/gửi/xoá/bật tắt báo cáo doanh thu, giới hạn tần suất báo cáo' },
       { name: 'autosell_spawn', usage: 'autosell_spawn msg <chữ|off>', desc: 'chỉ tính tin bán có chứa chữ này (nhiều chữ ngăn bằng |)' },
       { name: 'autosell_spawn', usage: 'autosell_spawn ignorechat on|off', desc: 'bỏ qua/tính tin ở kênh chat của người chơi' },
+      { name: 'spawnhome', usage: 'spawnhome on|off|now|status', desc: 'tự gõ /home treolong khi bot không còn ở gần lồng (sau đăng nhập và cả khi đang treo); now = gõ ngay, status = xem' },
+      { name: 'spawnhome', usage: 'spawnhome cmd </home tên>', desc: 'đổi lệnh về vị trí treo lồng (mặc định /home treolong)' },
       { name: 'spawnerprotect', usage: 'spawnerprotect on|off', desc: 'bảo vệ lồng (bật = tự lưu lồng trong 5 block quanh bot)' },
       { name: 'addspawner', usage: 'addspawner [x y z]', desc: 'thêm lồng cần bảo vệ (bỏ trống = vị trí hiện tại)' },
       { name: 'removespawner', usage: 'removespawner <x> <y> <z>', desc: 'bỏ lồng khỏi danh sách bảo vệ' },

@@ -14,6 +14,7 @@ const RevenueTracker = require('./RevenueTracker');
 const MacroEngine = require('./MacroEngine');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
+const SELL_SPAWN_REACH = 6; // block — tầm chuột phải vào lồng của auto-sell spawn (từ mắt bot); cũng là ngưỡng "đang đứng đúng chỗ treo lồng"
 class BotSession extends EventEmitter {
   constructor(cfg, theme, proxyManager, socketRooms = null) {
     super();
@@ -148,6 +149,35 @@ class BotSession extends EventEmitter {
     this._macroSellCap = null;
     this._macroRevLastReportAt = 0;
     this._macroRevPending = { amount: 0, cycles: 0 };
+    // ===== Trình tự khởi động =====
+    // 1) chờ server báo "SẢNH ➞ Đăng nhập thành công…"  2) gửi /menu + click ô vào server  3) chờ bot đứng đúng chỗ
+    // cạnh lồng (nếu lệch thì tự gõ spawnHomeCommand)  4) MỚI bật spawnerprotect + autosell_spawn + autosell macro
+    // và gửi webhook báo đã bật. Sau đó vẫn canh vị trí: lệch khỏi chỗ treo lồng là tự gõ lại spawnHomeCommand.
+    this.loginSuccessPattern = String(cfg.loginSuccessPattern || '');         // regex tuỳ chọn; mặc định nhận "đăng nhập thành công" / "đã đăng nhập"
+    this.loginConfirmTimeoutMs = cfg.loginConfirmTimeoutMs ?? 45000;          // quá lâu không thấy tin xác nhận thì vẫn đi tiếp (kèm cảnh báo)
+    this.spawnHomeEnabled = cfg.spawnHomeEnabled ?? true;                     // tự về home khi lệch khỏi vị trí treo lồng
+    this.spawnHomeCommand = String(cfg.spawnHomeCommand || '/home treolong').trim() || '/home treolong';
+    this.spawnHomeGraceMs = cfg.spawnHomeGraceMs ?? 12000;                    // sau khi vào menu, chờ chừng này cho server tự đưa bot về chỗ cũ rồi mới gõ lệnh
+    this.spawnHomeConfirmMs = cfg.spawnHomeConfirmMs ?? 4000;                 // phải lệch liên tục chừng này mới coi là "đã rời vị trí" (tránh nhầm lúc chunk nháy)
+    this.spawnHomeCooldownMs = cfg.spawnHomeCooldownMs ?? 20000;              // giãn cách giữa 2 lần gõ lệnh (đợi teleport xong)
+    this.spawnHomeMaxTries = cfg.spawnHomeMaxTries ?? 5;                      // quá số lần này vẫn chưa về -> báo webhook + thử thưa dần
+    this.spawnHomeSlowMs = cfg.spawnHomeSlowMs ?? 300000;                     // giãn cách thử lại sau khi quá số lần (5 phút)
+    this.spawnPositionSettleMs = cfg.spawnPositionSettleMs ?? 2500;           // phải thấy lồng cạnh bot + đứng yên chừng này mới bật tính năng
+    this.spawnGateTimeoutMs = cfg.spawnGateTimeoutMs ?? 180000;               // quá lâu chưa về được vị trí -> báo webhook + vẫn bật autosell macro
+    this._loginConfirmed = false;
+    this._menuFlowStarted = false;
+    this._menuDoneAt = 0;
+    this._manualMenuUntil = 0;
+    this._featuresActive = false;   // đã qua cổng vị trí và bật spawnerprotect/autosell_spawn
+    this._autoSellArmed = false;    // autosell macro (túi đầy) chỉ chạy sau khi vào server xong
+    this._gateStartedAt = 0;
+    this._gateTimedOut = false;
+    this._posNearSince = 0;
+    this._posAwaySince = 0;
+    this._posLastPos = null;
+    this._posLost = false;          // đang lệch khỏi vị trí treo lồng
+    this._homeOutage = null;        // { since, tries, notified } của lần lệch hiện tại
+    this._homeNextAt = 0;
     // Xoay proxy tự động — mỗi lần cách nhau ngẫu nhiên (không phải chu kỳ
     // cố định, để tránh tạo pattern dễ nhận ra) trong khoảng min~max phút.
     this.proxyAutoRotate = !!cfg.proxyAutoRotate;
@@ -155,9 +185,7 @@ class BotSession extends EventEmitter {
     this.proxyRotateMaxMs = Math.max(this.proxyRotateMinMs, (cfg.proxyRotateMaxMinutes ?? 10) * 60000);
     this.packetMgr.on('anomaly', data => {
       this.emit('packetAnomaly', data);
-      if (this.socketRooms?.io) {
-        this.socketRooms.io.emit('packetAnomaly', data);
-      }
+      this._emitIO('packetAnomaly', data);
     });
     this._registerCommands();
   }
@@ -165,9 +193,7 @@ class BotSession extends EventEmitter {
     const entry = { id: this.cfg.id, time: nowMs(), level, msg };
     this._logBuffer.push(entry);
     this.emit('log', { level, id: this.cfg.id, msg, theme: this.theme, entry });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.to(`bot:${this.cfg.id}`).emit('log', entry);
-    }
+    this._emitIO('log', entry, `bot:${this.cfg.id}`);
   }
   getLogs() {
     return this._logBuffer.toArray();
@@ -248,10 +274,18 @@ class BotSession extends EventEmitter {
     }
     this.state.connState = newState;
     this.emit('stateChange', { prev, now: newState, id: this.cfg.id });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('botState', { id: this.cfg.id, state: newState });
-    }
+    this._emitIO('botState', { id: this.cfg.id, state: newState });
   }
+  // Phát sự kiện socket.io (bỏ qua nếu chưa có socket). room: chỉ gửi cho 1 room.
+  _emitIO(event, data, room) {
+    const io = this.socketRooms?.io;
+    if (!io) return;
+    (room ? io.to(room) : io).emit(event, data);
+  }
+  // B1: bot đã bị tắt / đang dừng -> mọi luồng start/reconnect phải bỏ qua
+  get _shouldNotRun() { return this._disabled || this.isStopping; }
+  // A1: đang có routine khác chiếm quyền điều khiển (macro / bảo vệ lồng / auto-sell spawn)
+  get _isBusy() { return !!(this.macroEngine?.running || this._spawnerBusy || this._sellSpawnBusy); }
   get isOnline()        { return this.state.connState === CS.ONLINE; }
   get isConnected()     { return [CS.ONLINE, CS.SPAWNING, CS.AUTHENTICATING].includes(this.state.connState); }
   get isStopping()      { return this.state.connState === CS.STOPPING; }
@@ -269,18 +303,14 @@ class BotSession extends EventEmitter {
     const prev = this.state.shard;
     this.state.shard = n;
     this.emit('shard', { prev, now: n, id: this.cfg.id });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('shard', { id: this.cfg.id, shard: n });
-    }
+    this._emitIO('shard', { id: this.cfg.id, shard: n });
   }
   _updateMoney(n) {
     if (n === null || n === this.state.money) return;
     const prev = this.state.money;
     this.state.money = n;
     this.emit('money', { prev, now: n, id: this.cfg.id });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('money', { id: this.cfg.id, money: n });
-    }
+    this._emitIO('money', { id: this.cfg.id, money: n });
     if (this.moneyGoal) {
       if (n >= this.moneyGoal && !this._moneyGoalFired) {
         this._moneyGoalFired = true;
@@ -312,9 +342,7 @@ class BotSession extends EventEmitter {
       }
       this.state.inventory = inv;
       this.emit('inventory', { id: this.cfg.id, items: inv });
-      if (this.socketRooms?.io) {
-        this.socketRooms.io.emit('inventory', { id: this.cfg.id, items: inv });
-      }
+      this._emitIO('inventory', { id: this.cfg.id, items: inv });
       this._checkAutoSell(items.length);
     } catch (e) {
       this.log('err', 'Lỗi đọc inventory: ' + e.message);
@@ -324,6 +352,7 @@ class BotSession extends EventEmitter {
   // của chính bot chỉ trả về đúng vùng này, không tính giáp/offhand/crafting).
   _checkAutoSell(usedSlots) {
     if (!this.autoSellMacro) return;
+    if (!this._autoSellArmed) return; // chưa đăng nhập/vào menu/vào đúng vị trí xong thì chưa chạy macro bán
     const TOTAL = 36;
     const highSlots = Math.ceil(TOTAL * this.autoSellThreshold / 100);
     const lowSlots = Math.max(0, highSlots - 4);
@@ -344,6 +373,8 @@ class BotSession extends EventEmitter {
     if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch { } }
     if (this._sellCap) { try { this._finalizeSellRevenue(true); } catch { } } // còn doanh thu đang gom dở -> ghi nốt trước khi mất kết nối
     this._clearAllTimers();
+    this._featuresActive = false;
+    this._autoSellArmed = false;
     this._spawnerBusy = false;
     this._sellSpawnAbort = true; // vòng auto-sell spawn đang chạy (nếu có) sẽ tự thoát và tự trả cờ busy
     this.packetMgr.detach();
@@ -375,7 +406,7 @@ class BotSession extends EventEmitter {
     this._isCleanedUp = true;
   }
   scheduleReconnect(reason) {
-    if (this._disabled || this.isStopping) return;
+    if (this._shouldNotRun) return;
     if (this._reconnectScheduled) return;
     if (this.isReconnecting) return;
     const now = nowMs();
@@ -452,12 +483,10 @@ class BotSession extends EventEmitter {
     this._flushKickNotify({ delay, attempt: this.state.reconnects, max: maxRetryStr });
     this.log('warn', `Mất kết nối${reason ? ' (' + reason + ')' : ''}${fastKick ? ' [FAST KICK x' + this._fastKicks + ']' : ''} — thử lại lần ${this.state.reconnects}/${maxRetryStr} sau ${(delay / 1000).toFixed(1)}s (backoff)`);
     this.emit('disconnectReason', { id: this.cfg.id, reason, fastKick, retry: this.state.reconnects });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('disconnectReason', { id: this.cfg.id, reason, fastKick, retry: this.state.reconnects });
-    }
+    this._emitIO('disconnectReason', { id: this.cfg.id, reason, fastKick, retry: this.state.reconnects });
     this._setTimer('reconnect', () => {
       this._reconnectScheduled = false;
-      if (this._disabled || this.isStopping) return;
+      if (this._shouldNotRun) return;
       this.start();
     }, delay);
   }
@@ -483,9 +512,7 @@ class BotSession extends EventEmitter {
     }
     this.log('warn', `⚠️ Proxy đã bị tắt tự động sau ${TIMING.PROXY_FAIL_THRESHOLD} lần fail liên tiếp — chuyển sang kết nối thẳng`);
     this.emit('proxyFallback', { id: this.cfg.id });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('proxyFallback', { id: this.cfg.id });
-    }
+    this._emitIO('proxyFallback', { id: this.cfg.id });
   }
   forceReconnect() {
     this.log('sys', 'Force reconnect...');
@@ -504,7 +531,7 @@ class BotSession extends EventEmitter {
     }, 500);
   }
   async start() {
-    if (this._disabled || this.isStopping) return;
+    if (this._shouldNotRun) return;
     if (this.isConnected) {
       this.log('warn', 'start() gọi khi bot đã kết nối — bỏ qua');
       return;
@@ -521,9 +548,10 @@ class BotSession extends EventEmitter {
     this._firstSpawn = true;
     this._spawnTime = 0;
     this._healthProbed = false;
-    this._loginCmdDone = false;    
-    this._wasKicked = false;       
-    this._proxyDisabledByFallback = false;  
+    this._loginCmdDone = false;
+    this._wasKicked = false;
+    this._proxyDisabledByFallback = false;
+    this._resetStartupState();
     this._setState(CS.CONNECTING);
     this._connectCompleted = false;
     if (this._manager) this._manager._activeConnects = (this._manager._activeConnects || 0) + 1;
@@ -544,7 +572,7 @@ class BotSession extends EventEmitter {
         }
       }
     }
-    if (this._disabled || this.isStopping) {
+    if (this._shouldNotRun) {
       if (proxySocket) { try { proxySocket.destroy(); } catch {} }
       this._onConnectComplete();
       this._setState(CS.DISCONNECTED);
@@ -627,7 +655,7 @@ class BotSession extends EventEmitter {
       this._setTimer('loginCmd', () => {
         if (!this.isConnected) return;
         try {
-          if (!cfg.botPassword) { this._loginCmdDone = true; return; }
+          if (!cfg.botPassword) { this._loginCmdDone = true; this._continueAfterLogin(); return; }
           if (cfg.registered === false) {
             mc.chat(`/dk ${cfg.botPassword}`);
             cfg.registered = true;
@@ -638,10 +666,11 @@ class BotSession extends EventEmitter {
                 mc.chat(`/dn ${cfg.botPassword}`);
                 this.log('ok', 'Đã gửi /dn');
                 this._loginCmdDone = true;
-                this._startMenuIfPending();
+                this._continueAfterLogin();
               } catch (e) {
                 this.log('err', 'Lỗi gửi /dn: ' + e.message);
                 this._loginCmdDone = true;
+                this._continueAfterLogin();
               }
             }, rand(1500, 2500));
           } else {
@@ -650,7 +679,7 @@ class BotSession extends EventEmitter {
             this._loginCmdDone = true;
             this._setTimer('loginDnDelay', () => {
               if (!this.isConnected) return;
-              this._startMenuIfPending();
+              this._continueAfterLogin();
             }, rand(1500, 2500));
           }
         } catch (e) {
@@ -682,15 +711,9 @@ class BotSession extends EventEmitter {
           jit(this.settings.pollInterval, this.settings.pollJitter / 2));
         this._setTimer('healthStart', () => this._startHealthCheck(), TIMING.HEALTH_GRACE_MS);
         this._setTimer('invUpdate', () => this._updateInventory(), 3000);
-        if (cfg.autoMenu && cfg.menuCommand) {
-          if (!cfg.botPassword || (cfg.registered && this._loginCmdDone)) {
-            this._menuRetryCount = 0;
-            this._menuSuccess = false;
-            this._scheduleMenuRetry();
-          }
-        } else {
-          this._resumeIntendedStates();
-        }
+        // Không còn bật tính năng ngay lúc spawn: đi tuần tự đăng nhập -> menu -> đúng vị trí -> bật (xem _continueAfterLogin)
+        if (!cfg.botPassword) this._loginCmdDone = true; // không có mật khẩu thì không có bước /dn để chờ
+        this._continueAfterLogin();
       } else {
         this.log('sys', 'Đã hồi sinh (respawn)');
         this._resumeIntendedStates();
@@ -706,9 +729,7 @@ class BotSession extends EventEmitter {
     mc.on('ping', p => {
       s.ping = typeof p === 'number' ? p : -1;
       this.emit('ping', { id: cfg.id, ping: s.ping });
-      if (this.socketRooms?.io) {
-        this.socketRooms.io.emit('ping', { id: cfg.id, ping: s.ping });
-      }
+      this._emitIO('ping', { id: cfg.id, ping: s.ping });
     });
     mc.on('move', () => {
       if (mc.entity?.position) {
@@ -722,9 +743,7 @@ class BotSession extends EventEmitter {
         this._eatFood().catch(() => {});
       }
       this.emit('health', { id: cfg.id, health: s.health, food: s.food });
-      if (this.socketRooms?.io) {
-        this.socketRooms.io.emit('health', { id: cfg.id, health: s.health, food: s.food });
-      }
+      this._emitIO('health', { id: cfg.id, health: s.health, food: s.food });
     });
     const scheduleInvUpdate = (delay) =>
       this._setTimer('invDebounce', () => this._updateInventory(), delay);
@@ -742,6 +761,7 @@ class BotSession extends EventEmitter {
         if (this._sellCap) this._captureSellRevenue(text, pos);
         if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         this.log('chat', text);
+        if (!this._loginConfirmed && this._isLoginSuccessText(text)) this._onLoginConfirmed();
         this.tryChatShard(text);
       } catch (e) {
         this.log('err', 'Lỗi message: ' + e.message);
@@ -759,8 +779,7 @@ class BotSession extends EventEmitter {
       } catch { }
     });
     mc.on('windowOpen', win => {
-      if (this._spawnerBusy) return; // routine bảo vệ lồng đang tự điều khiển ender chest
-      if (this._sellSpawnBusy) return; // routine auto-sell spawn đang tự điều khiển GUI lồng
+      if (this._spawnerBusy || this._sellSpawnBusy) return; // routine bảo vệ lồng / auto-sell spawn đang tự điều khiển GUI
       if (this.macroEngine?._running) {
         // Macro đang chạy (winclick) — không để WindowRouter tự động
         // click/đóng GUI đè lên, nhường toàn quyền điều khiển cho macro.
@@ -778,7 +797,7 @@ class BotSession extends EventEmitter {
               this._clearTimer('menuRetry');
               this.log('ok', `Đã vào server thành công qua menu: [${title.substring(0, 40)}]`);
               WindowRouter.route(this, win);
-              this._resumeIntendedStates();
+              this._onMenuDone(`GUI [${title.substring(0, 30)}]`);
               return;
             }
           }
@@ -798,18 +817,14 @@ class BotSession extends EventEmitter {
       this.log('warn', 'Bị kick: ' + kickMsg);
       this._queueKickNotify(kickMsg);
       this.emit('kicked', { id: this.cfg.id, reason: kickMsg, raw: reason });
-      if (this.socketRooms?.io) {
-        this.socketRooms.io.emit('kicked', { id: this.cfg.id, reason: kickMsg });
-      }
+      this._emitIO('kicked', { id: this.cfg.id, reason: kickMsg });
     });
     mc.once('end', reason => {
       this._onConnectComplete();
       const m = parseReasonText(reason);
       const endReason = m || 'connection ended';
       this.emit('disconnected', { id: this.cfg.id, reason: endReason });
-      if (this.socketRooms?.io) {
-        this.socketRooms.io.emit('botDisconnected', { id: this.cfg.id, reason: endReason });
-      }
+      this._emitIO('botDisconnected', { id: this.cfg.id, reason: endReason });
       if (_usedProxy && this._spawnTime === 0) {
         this._consecutiveProxyFails++;
         if (this._consecutiveProxyFails >= TIMING.PROXY_FAIL_THRESHOLD) {
@@ -951,8 +966,13 @@ class BotSession extends EventEmitter {
     }
     if (this.state.autoStats) this._startAutoStats();
     if (this.state.autoShard) this._startAutoShard();
-    if (this._spawnerProtectOn) this._startSpawnerProtect();
-    if (this._sellSpawnOn && !this._timers.has('sellSpawn') && !this._sellSpawnBusy) this._startSellSpawn(true);
+    // spawnerprotect / autosell_spawn / autosell macro KHÔNG bật ở đây: chúng chỉ được bật 1 lần ở
+    // _activateGatedFeatures() sau khi đã đăng nhập + vào menu + đứng đúng cạnh lồng. Ở đây (vd sau khi chết/hồi sinh)
+    // chỉ dựng lại những timer đã mất nếu các tính năng đó đã được bật rồi.
+    if (this._featuresActive) {
+      if (this._spawnerProtectOn && !this._timers.has('spawnerProtect') && this.protectedSpawners.length) this._startSpawnerProtect();
+      if (this._sellSpawnOn && !this._timers.has('sellSpawn') && !this._sellSpawnBusy) this._startSellSpawn(true);
+    }
     if (this.proxyAutoRotate) this._scheduleProxyRotate();
   }
   // ===== Doanh thu Auto-sell Spawn =====
@@ -996,21 +1016,41 @@ class BotSession extends EventEmitter {
     const t = norm(text);
     return kw.split('|').map(s => norm(s.trim())).filter(Boolean).some(k => t.includes(k));
   }
-  _captureSellRevenue(text, pos) {
-    const cap = this._sellCap;
-    if (!cap) return;
-    const amount = this._extractSellAmount(text);
+  // Ghi nhận 1 tin "bán được" vào cap (dùng chung cho auto-sell spawn và auto-sell macro)
+  // `... revenue every <thời gian>|off` -> số phút, 'off' (hoặc 0) = gửi mỗi lần, null = sai cú pháp
+  _parseEveryMinutes(args) {
+    const v = String(args[2] || '').toLowerCase();
+    if (v === 'off' || v === '0') return 'off';
+    const d = this._parseDuration(args.slice(2).join(' '));
+    return d ? d.hour * 60 + d.minute + d.second / 60 : null;
+  }
+  // Hành vi "nhiễu" chung của cả jump-AFK và walk-AFK
+  _afkNoise(mc) {
+    if (Math.random() < 0.02 && mc._client) {
+      try { mc._client.write('tab_complete', { text: '/', assumeCommand: false }); } catch { }
+    }
+    if (Math.random() < 0.03) {
+      try { mc.setQuickBarSlot(rand(0, 8)); } catch { }
+    }
+  }
+  _captureRevenueInto(cap, text, pos, { pattern, keyword, ignoreChat, label, keepLines }) {
+    const amount = this._extractSellAmount(text, pattern);
     if (amount === null) return;
     const isPlayerChat = pos === 'chat';
-    if ((this.autoSellSpawnIgnoreChat && isPlayerChat) || !this._sellMsgMatchesKeyword(text)) {
+    if ((ignoreChat && isPlayerChat) || !this._sellMsgMatchesKeyword(text, keyword)) {
       cap.ignoredCount++;
       if (cap.ignored.length < 3) cap.ignored.push(`${isPlayerChat ? '[chat] ' : ''}${text.substring(0, 90)}`);
       return;
     }
     cap.sum += amount;
     cap.hits++;
-    if (cap.lines.length < 40) cap.lines.push(text.substring(0, 90));
-    this.log('sys', `Doanh thu: +${RevenueTracker.formatMoney(amount)} ← "${text.substring(0, 80)}"`);
+    if (keepLines && cap.lines.length < 40) cap.lines.push(text.substring(0, 90));
+    this.log('sys', `${label}: +${RevenueTracker.formatMoney(amount)} ← "${text.substring(0, 80)}"`);
+  }
+  _captureSellRevenue(text, pos) {
+    const cap = this._sellCap;
+    if (!cap) return;
+    this._captureRevenueInto(cap, text, pos, { ignoreChat: this.autoSellSpawnIgnoreChat, label: 'Doanh thu', keepLines: true });
   }
   // Chốt vòng: ghi vào tracker + gửi báo cáo webhook (quiet = chỉ ghi, không gửi — dùng khi đang mất kết nối)
   _finalizeSellRevenue(quiet = false) {
@@ -1144,17 +1184,7 @@ class BotSession extends EventEmitter {
   _captureMacroSellRevenue(text, pos) {
     const cap = this._macroSellCap;
     if (!cap) return;
-    const amount = this._extractSellAmount(text, this.autoSellMsgPattern);
-    if (amount === null) return;
-    const isPlayerChat = pos === 'chat';
-    if ((this.autoSellIgnoreChat && isPlayerChat) || !this._sellMsgMatchesKeyword(text, this.autoSellMsgKeyword)) {
-      cap.ignoredCount++;
-      if (cap.ignored.length < 3) cap.ignored.push(`${isPlayerChat ? '[chat] ' : ''}${text.substring(0, 90)}`);
-      return;
-    }
-    cap.sum += amount;
-    cap.hits++;
-    this.log('sys', `Doanh thu auto-sell: +${RevenueTracker.formatMoney(amount)} ← "${text.substring(0, 80)}"`);
+    this._captureRevenueInto(cap, text, pos, { pattern: this.autoSellMsgPattern, keyword: this.autoSellMsgKeyword, ignoreChat: this.autoSellIgnoreChat, label: 'Doanh thu auto-sell' });
   }
   // Chốt 1 lần bán: ghi vào tracker + gửi báo cáo (quiet = chỉ ghi, không gửi)
   _finalizeMacroSellRevenue(quiet = false) {
@@ -1330,7 +1360,8 @@ class BotSession extends EventEmitter {
   async _sellSpawnTick() {
     if (!this._sellSpawnOn || !this.isOnline) return;
     // đang bận việc khác (bảo vệ lồng / macro / vòng trước) -> hẹn lại vài giây sau
-    if (this._spawnerBusy || this._sellSpawnBusy || this.macroEngine.running) { this._scheduleSellSpawn(5000); return; }
+    // (_posLost: đang lệch khỏi chỗ treo lồng, đang chờ /home — không bán lúc này kẻo spam "quá xa/chunk chưa tải")
+    if (this._isBusy || this._posLost) { this._scheduleSellSpawn(5000); return; }
     const t0 = nowMs();
     try { await this._runSellSpawnCycle(); }
     catch (e) { this.log('err', 'Auto-sell Spawn lỗi: ' + e.message); }
@@ -1396,7 +1427,7 @@ class BotSession extends EventEmitter {
     if (block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: không có block ở đây — bỏ qua`); return false; }
     const center = makeVec3(p.x + 0.5, p.y + 0.5, p.z + 0.5);
     const dist = mc.entity.position.offset(0, 1.62, 0).distanceTo(center);
-    if (dist > 6) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: quá xa (${dist.toFixed(1)} block) — bot không tự di chuyển, bỏ qua`); return false; }
+    if (dist > SELL_SPAWN_REACH) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: quá xa (${dist.toFixed(1)} block) — bot không tự di chuyển, bỏ qua`); return false; }
     if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch { } await sleep(300); }
     try { await mc.lookAt(center, true); } catch { }
     await sleep(jit(250, 80));
@@ -1880,14 +1911,288 @@ class BotSession extends EventEmitter {
     this.forceReconnect();
     this._scheduleProxyRotate();
   }
-  _startMenuIfPending() {
-    if (!this.isOnline || this._menuSuccess) return;
-    if (!this.cfg.autoMenu || !this.cfg.menuCommand) return;
+  // ===== Trình tự khởi động: đăng nhập -> menu -> đúng vị trí -> bật tính năng =====
+  _resetStartupState() {
+    this._clearTimer('loginConfirmWait');
+    this._clearTimer('posKeeper');
+    this._loginConfirmed = false;
+    this._menuFlowStarted = false;
+    this._menuDoneAt = 0;
+    this._featuresActive = false;
+    this._autoSellArmed = false;
+    this._gateStartedAt = 0;
+    this._gateTimedOut = false;
+    this._posNearSince = 0;
+    this._posAwaySince = 0;
+    this._posLastPos = null;
+    this._posLost = false;
+    this._homeOutage = null;
+    this._homeNextAt = 0;
+    this._gateWaitLogAt = 0;
+  }
+  // Tin server báo đã đăng nhập, vd "SẢNH ➞ Đăng nhập thành công, nếu chưa tạo mã pin, hãy vào discord.kingmc.vn để tạo"
+  // (hoặc "Bạn đã đăng nhập!" khi /dn gửi lúc đã đăng nhập sẵn). Server khác câu chữ thì đặt loginSuccessPattern (regex) trong config.json.
+  _isLoginSuccessText(text) {
+    const t = normalizeSmallCaps(String(text || '')).normalize('NFC');
+    if (this.loginSuccessPattern) {
+      try { return new RegExp(this.loginSuccessPattern, 'i').test(t); }
+      catch (e) {
+        if (!this._loginPatWarned) { this._loginPatWarned = true; this.log('warn', `loginSuccessPattern không hợp lệ (${e.message}) — dùng câu mặc định`); }
+      }
+    }
+    return /đăng\s*nhập\s*thành\s*công|đã\s*đăng\s*nhập|dang\s*nhap\s*thanh\s*cong|logged\s*in\s*successfully|successfully\s*logged\s*in/i.test(t);
+  }
+  _onLoginConfirmed() {
+    if (this._loginConfirmed) return;
+    this._loginConfirmed = true;
+    this._clearTimer('loginConfirmWait');
+    this.log('ok', 'Server xác nhận đăng nhập thành công — tiếp tục vào menu');
+    this._continueAfterLogin();
+  }
+  // Gọi lại được nhiều lần (spawn, sau /dn, khi nhận tin xác nhận...) — chỉ chạy tiếp khi đủ điều kiện, và chỉ 1 lần.
+  _continueAfterLogin() {
+    if (!this.isOnline || this._disabled || this._menuFlowStarted || this._menuDoneAt) return;
     if (!this._loginCmdDone) return;
-    this.log('sys', 'Login hoàn tất — bắt đầu menu retry...');
-    this._menuRetryCount = 0;
-    this._menuSuccess = false;
-    this._scheduleMenuRetry();
+    if (this.cfg.botPassword && !this._loginConfirmed) {
+      if (!this._timers.has('loginConfirmWait')) {
+        const ms = this.loginConfirmTimeoutMs;
+        this.log('sys', 'Đã gửi lệnh đăng nhập — chờ server báo "Đăng nhập thành công" rồi mới vào menu...');
+        this._setTimer('loginConfirmWait', () => {
+          if (!this.isOnline || this._loginConfirmed) return;
+          this._loginConfirmed = true;
+          this.log('warn', `Quá ${Math.round(ms / 1000)}s chưa thấy tin "Đăng nhập thành công" — vẫn đi tiếp (server dùng câu khác? đặt loginSuccessPattern trong config.json)`);
+          this._continueAfterLogin();
+        }, ms);
+      }
+      return;
+    }
+    this._clearTimer('loginConfirmWait');
+    this._menuFlowStarted = true;
+    if (this.cfg.autoMenu && this.cfg.menuCommand) {
+      this.log('sys', 'Login hoàn tất — bắt đầu menu retry...');
+      this._menuRetryCount = 0;
+      this._menuSuccess = false;
+      this._scheduleMenuRetry();
+    } else {
+      this._onMenuDone('autoMenu tắt');
+    }
+  }
+  // Bước menu xong (đã click vào server). Từ đây mới bắt đầu canh vị trí để bật spawnerprotect/autosell.
+  _onMenuDone(src = '') {
+    this._menuSuccess = true;
+    this._clearTimer('menuRetry');
+    if (this._menuDoneAt) return;
+    this._menuDoneAt = nowMs();
+    this.log('ok', `Menu xong${src ? ` (${src})` : ''} — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell`);
+    this._resumeIntendedStates();
+    this._beginFeatureGate();
+  }
+  _beginFeatureGate() {
+    if (this._timers.has('posKeeper')) return;
+    this._gateStartedAt = nowMs();
+    this._gateTimedOut = false;
+    this._posNearSince = 0;
+    this._posAwaySince = 0;
+    this._posLastPos = null;
+    const want = [this._spawnerProtectOn && 'spawnerprotect', this._sellSpawnOn && 'autosell_spawn', this.autoSellMacro && 'autosell macro'].filter(Boolean);
+    this.log('sys', want.length
+      ? `Cổng vị trí: sẽ bật ${want.join(' + ')} khi bot ở gần lồng spawn${this.spawnHomeEnabled ? ` (lệch vị trí → tự gõ ${this.spawnHomeCommand})` : ''}`
+      : 'Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng');
+    this._setTimer('posKeeper', () => this._posKeeperTick(), 1000, true);
+  }
+  // Số lồng nằm trong tầm so với bot. Lồng nào đã bị phá (chunk tải rồi, bot đứng trong 16 block mà block không còn là spawner)
+  // thì bỏ qua — không coi là "bot đi lạc". Chunk chưa tải / block khác ở xa = đang ở chỗ khác.
+  _checkSpawnPosition() {
+    const mc = this.mc;
+    const me = mc?.entity?.position;
+    const out = { hasTargets: false, ok: false, sell: null, prot: null };
+    if (!me) return out;
+    const scan = (list, base, reach) => {
+      let total = 0, near = 0, gone = 0;
+      for (const p of list) {
+        let b = null;
+        try { b = mc.blockAt(this._vec(p)); } catch { }
+        const d = base.distanceTo(makeVec3(p.x + .5, p.y + .5, p.z + .5));
+        if (b && !this._isSpawnerBlock(b) && d <= 16) { gone++; continue; }
+        total++;
+        if (b && this._isSpawnerBlock(b) && d <= reach) near++;
+      }
+      return { total, near, gone, listed: list.length };
+    };
+    if (this._sellSpawnOn) out.sell = scan(this.sellSpawnList, me.offset(0, 1.62, 0), SELL_SPAWN_REACH);
+    if (this._spawnerProtectOn) out.prot = scan(this.protectedSpawners, me, this.spawnerArmRange);
+    out.hasTargets = !!((out.sell && out.sell.total) || (out.prot && out.prot.total));
+    out.ok = !!((out.sell && out.sell.near) || (out.prot && out.prot.near));
+    return out;
+  }
+  _fmtPosCheck(chk) {
+    const parts = [];
+    if (chk.sell) parts.push(`autosell_spawn ${chk.sell.near}/${chk.sell.total} lồng trong tầm`);
+    if (chk.prot) parts.push(`spawnerprotect ${chk.prot.near}/${chk.prot.total} lồng cạnh bot`);
+    return parts.join(', ') || 'không có lồng để đối chiếu';
+  }
+  _fmtXYZ(p) { return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : '?'; }
+  // 1 timer duy nhất, 1 giây/lần, chạy suốt phiên: trước khi bật = cổng vị trí; sau khi bật = canh vị trí + tự về home.
+  _posKeeperTick() {
+    const mc = this.mc;
+    if (!this.isOnline || this._disabled || !mc?.entity?.position) return;
+    if (this.cfg.botPassword && !this._loginConfirmed) return; // giữ đúng thứ tự: đăng nhập trước, rồi mới tới đây
+    try {
+      const chk = this._checkSpawnPosition();
+      const now = nowMs();
+      if (!this._featuresActive) this._gateTick(chk, now);
+      else this._watchTick(chk, now);
+    } catch (e) {
+      this.log('err', 'Canh vị trí lỗi: ' + e.message);
+    }
+  }
+  _gateTick(chk, now) {
+    const pos = this.mc.entity.position;
+    const moved = !!this._posLastPos && pos.distanceTo(this._posLastPos) > 1.5; // vừa bị teleport/đẩy đi -> chưa tính là đứng yên
+    this._posLastPos = pos.clone();
+    const settle = this.spawnPositionSettleMs;
+    if (!chk.hasTargets) {
+      // không có toạ độ lồng nào để đối chiếu (đều tắt hoặc danh sách trống) -> chỉ chờ ổn định rồi bật
+      if (!this._posNearSince) this._posNearSince = now;
+      if (now - this._posNearSince >= Math.max(settle, 5000)) this._activateGatedFeatures(chk, 'không có lồng để đối chiếu vị trí');
+      return;
+    }
+    if (chk.ok && !moved) {
+      if (!this._posNearSince) {
+        this._posNearSince = now;
+        this.log('sys', `Cổng vị trí: đã thấy lồng cạnh bot (${this._fmtPosCheck(chk)}) — xác nhận đứng yên ${(settle / 1000).toFixed(1)}s`);
+      }
+      if (now - this._posNearSince >= settle) this._activateGatedFeatures(chk);
+      return;
+    }
+    this._posNearSince = 0;
+    if (chk.ok) return; // đang ở gần nhưng còn bị dịch chuyển — chờ tick sau
+    if (!this._gateWaitLogAt || now - this._gateWaitLogAt >= 15000) {
+      this._gateWaitLogAt = now;
+      this.log('sys', `Cổng vị trí: bot CHƯA ở gần lồng (${this._fmtPosCheck(chk)}) — chưa bật spawnerprotect/autosell`);
+    }
+    this._tryGoHome('gate', chk, now);
+    if (!this._gateTimedOut && now - this._gateStartedAt >= this.spawnGateTimeoutMs) this._onGateTimeout(chk);
+  }
+  _onGateTimeout(chk) {
+    this._gateTimedOut = true;
+    const secs = Math.round(this.spawnGateTimeoutMs / 1000);
+    const tries = this._homeOutage?.tries || 0;
+    this.log('warn', `Cổng vị trí: ${secs}s vẫn chưa về được chỗ treo lồng (${this._fmtPosCheck(chk)}${tries ? `, đã gõ ${this.spawnHomeCommand} ${tries} lần` : ''}) — spawnerprotect/autosell_spawn vẫn CHỜ; bật autosell macro trước`);
+    this._spawnerAlert('gateTimeout', 600000, `⚠️ ${this.cfg.id}: chưa về được vị trí treo lồng`,
+      `Sau ${secs}s kể từ lúc vào menu bot vẫn không ở gần lồng (${this._fmtPosCheck(chk)}).\n${this.spawnHomeEnabled ? `Đã gõ ${this.spawnHomeCommand} ${tries} lần.` : 'Tự về home đang TẮT (spawnhome on).'}\nspawnerprotect/autosell_spawn chưa bật — sẽ tự bật khi bot về tới nơi.`, 0xf59e0b);
+    this._armAutoSell();
+  }
+  _armAutoSell(results = null) {
+    if (this._autoSellArmed) return;
+    this._autoSellArmed = true;
+    if (!this.autoSellMacro) return;
+    this.log('ok', `Đã bật autosell macro: túi đầy ${this.autoSellThreshold}% → macro "${this.autoSellMacro}"`);
+    if (results) results.push({ name: 'autosell macro', ok: true, detail: `túi đầy ${this.autoSellThreshold}% → macro "${this.autoSellMacro}"` });
+    this._autoSellFired = false;
+    this._setTimer('autoSellFirstCheck', () => this._updateInventory(), 1500); // túi đã đầy sẵn thì chạy luôn, khỏi chờ lần quét túi sau
+  }
+  // Bot đã đứng đúng chỗ: bật spawnerprotect -> autosell_spawn -> autosell macro, rồi báo webhook.
+  _activateGatedFeatures(chk, note = '') {
+    if (this._featuresActive) return;
+    this._featuresActive = true;
+    this._posNearSince = 0;
+    const outage = this._homeOutage;
+    this._homeOutage = null; this._posLost = false; this._homeNextAt = 0;
+    const results = [];
+    if (this._spawnerProtectOn) {
+      let ok = false, detail;
+      if (!this.protectedSpawners.length) detail = 'danh sách lồng trống — đứng sát lồng rồi gõ: spawnerprotect on';
+      else { ok = this._startSpawnerProtect(); detail = ok ? `${this.protectedSpawners.length} lồng, quét người lạ ${this.spawnerProtectRange} block` : 'không bật được (không thấy lồng quanh bot)'; }
+      results.push({ name: 'spawnerprotect', ok, detail });
+    }
+    if (this._sellSpawnOn) {
+      const ok = this._startSellSpawn(true);
+      results.push({ name: 'autosell_spawn', ok, detail: ok ? `${this.sellSpawnList.length} lồng, click ô ${this.autoSellSpawnSlot}, mỗi ${this._fmtDuration(this._sellSpawnIntervalMs())}` : 'danh sách lồng trống — đứng sát lồng rồi gõ: autosell_spawn on' });
+    }
+    this._armAutoSell(results);
+    const names = results.filter(r => r.name !== 'autosell macro');
+    const allOk = results.every(r => r.ok);
+    this.log(allOk ? 'ok' : 'warn', `Đã bật: ${results.map(r => `${r.ok ? '✓' : '✗'} ${r.name}`).join(' | ') || '(không có tính năng nào cần bật)'}${note ? ` — ${note}` : ''}`);
+    if (!names.length) return;
+    const pos = this.mc?.entity?.position;
+    const lines = results.map(r => `${r.ok ? '✅' : '⚠️'} ${r.name}: ${r.detail}`);
+    lines.push(`📍 Vị trí: ${this._fmtXYZ(pos)} (${this._fmtPosCheck(chk)})`);
+    if (outage?.tries) lines.push(`🏠 Đã gõ ${this.spawnHomeCommand} ${outage.tries} lần để về vị trí treo lồng`);
+    if (this._menuDoneAt) lines.push(`⏱️ ${Math.round((nowMs() - this._menuDoneAt) / 1000)}s sau khi vào menu`);
+    this._notify('featuresReady', `${allOk ? '✅' : '⚠️'} ${this.cfg.id}: đã bật ${names.map(r => r.name).join(' + ')}`, lines.join('\n'), allOk ? 0x22c55e : 0xf59e0b);
+  }
+  // Sau khi đã bật: canh vị trí. Lệch khỏi chỗ treo lồng -> báo + tự gõ spawnHomeCommand; về tới nơi -> báo lại.
+  _watchTick(chk, now) {
+    if (!chk.hasTargets) { this._posAwaySince = 0; return; }
+    if (chk.ok) {
+      this._posAwaySince = 0;
+      if (this._posLost) this._onPositionRestored(chk, now);
+      return;
+    }
+    if (this._isBusy) { this._posAwaySince = 0; return; } // đang làm việc khác (macro/bảo vệ lồng/bán) — không can thiệp
+    if (!this._posAwaySince) this._posAwaySince = now;
+    if (now - this._posAwaySince < this.spawnHomeConfirmMs) return;
+    if (!this._posLost) {
+      this._posLost = true;
+      this._homeOutage = this._homeOutage || { since: this._posAwaySince, tries: 0, notified: false };
+      this.log('warn', `Phát hiện bot KHÔNG còn ở gần vị trí treo lồng (${this._fmtPosCheck(chk)}) tại ${this._fmtXYZ(this.mc.entity.position)}${this.spawnHomeEnabled ? ` — tự gõ ${this.spawnHomeCommand}` : ' — tự về home đang TẮT (spawnhome on)'}`);
+    }
+    this._tryGoHome('watch', chk, now);
+  }
+  _onPositionRestored(chk, now) {
+    const o = this._homeOutage;
+    this._posLost = false;
+    this._homeOutage = null;
+    this._homeNextAt = 0;
+    const secs = o ? Math.max(1, Math.round((now - o.since) / 1000)) : 0;
+    this.log('ok', `Đã về lại vị trí treo lồng${o ? ` sau ${secs}s${o.tries ? ` (đã gõ ${this.spawnHomeCommand} ${o.tries} lần)` : ''}` : ''} (${this._fmtPosCheck(chk)})`);
+    if (o?.notified) {
+      this._notify('homeReturn', `✅ ${this.cfg.id}: đã về lại vị trí treo lồng`,
+        `Vị trí: ${this._fmtXYZ(this.mc?.entity?.position)}\n${o.tries ? `Đã gõ ${this.spawnHomeCommand} ${o.tries} lần, ` : ''}mất ${secs}s.\nautosell_spawn / spawnerprotect tiếp tục chạy.`, 0x22c55e);
+    }
+  }
+  // Gõ spawnHomeCommand (mặc định "/home treolong") để quay về chỗ treo lồng. Có giãn cách, giới hạn số lần, không can thiệp khi đang bận.
+  _tryGoHome(phase, chk, now = nowMs()) {
+    if (!this.spawnHomeEnabled || !this.spawnHomeCommand) return false;
+    const mc = this.mc;
+    if (!mc || now < this._homeNextAt) return false;
+    if (mc.isAlive === false || (mc.health ?? 20) <= 0) return false; // đang chết, chờ hồi sinh
+    if (this._isBusy) return false;
+    if (phase === 'gate' && now - this._menuDoneAt < this.spawnHomeGraceMs) return false; // cho server tự đưa bot về chỗ cũ trước đã
+    const o = this._homeOutage || (this._homeOutage = { since: now, tries: 0, notified: false });
+    o.tries++;
+    const slow = o.tries > this.spawnHomeMaxTries;
+    this._homeNextAt = now + (slow ? this.spawnHomeSlowMs : this.spawnHomeCooldownMs);
+    const cmd = this.spawnHomeCommand.startsWith('/') ? this.spawnHomeCommand : `/${this.spawnHomeCommand}`;
+    try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
+    try {
+      mc.chat(cmd);
+      this.log('sys', `Không ở gần vị trí treo lồng — đã gõ ${cmd} (lần ${o.tries}${slow ? ', thử thưa' : ''}) — chờ teleport...`);
+    } catch (e) {
+      this.log('err', `Lỗi gửi ${cmd}: ${e.message}`);
+      return false;
+    }
+    if (phase === 'watch' && !o.notified) {
+      o.notified = true;
+      this._notify('homeReturn', `🏠 ${this.cfg.id}: lệch khỏi vị trí treo lồng — gõ ${cmd}`,
+        `Bot không còn ở gần lồng (${this._fmtPosCheck(chk)}).\nVị trí hiện tại: ${this._fmtXYZ(mc.entity?.position)}\nĐã tự gõ ${cmd} để quay về.`, 0x38bdf8);
+    }
+    if (o.tries === this.spawnHomeMaxTries + 1) {
+      this._spawnerAlert('homeFail', 600000, `🚨 ${this.cfg.id}: gõ ${cmd} nhiều lần vẫn không về được vị trí treo lồng`,
+        `Đã gõ ${o.tries - 1} lần, bot vẫn không ở gần lồng (${this._fmtPosCheck(chk)}).\nVị trí hiện tại: ${this._fmtXYZ(mc.entity?.position)}\nKiểm tra home "${cmd}" còn tồn tại không / bot có bị kẹt ở khu khác không. Bot sẽ thử lại thưa dần (${Math.round(this.spawnHomeSlowMs / 60000)} phút/lần).`, 0xef4444);
+    }
+    return true;
+  }
+  _persistSpawnHomeCfg() {
+    const data = { spawnHomeEnabled: this.spawnHomeEnabled, spawnHomeCommand: this.spawnHomeCommand };
+    Object.assign(this.cfg, data);
+    const mgr = this._manager;
+    const list = mgr?._config?.bots;
+    if (!list) return;
+    const c = list.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
+    if (c) Object.assign(c, data);
+    mgr.persistence?.markDirty();
   }
   _scheduleMenuRetry() {
     const MAX_MENU_RETRIES = 100;
@@ -2039,12 +2344,7 @@ class BotSession extends EventEmitter {
             try { if (this.isOnline) mc.setControlState('sneak', false); } catch { }
           }, rand(300, 900));
         }
-        if (Math.random() < 0.02 && mc._client) {
-          try { mc._client.write('tab_complete', { text: '/', assumeCommand: false }); } catch { }
-        }
-        if (Math.random() < 0.03) {
-          try { mc.setQuickBarSlot(rand(0, 8)); } catch { }
-        }
+        this._afkNoise(mc);
       } catch (e) {
         this.log('err', 'AFK jump lỗi: ' + e.message);
       }
@@ -2053,9 +2353,7 @@ class BotSession extends EventEmitter {
     this._setTimer('afk', tick, jit(700, 200));
     this.log('afk', 'Jump AFK bật');
     this.emit('afk', { id: this.cfg.id, mode: 'jump' });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('afk', { id: this.cfg.id, mode: 'jump' });
-    }
+    this._emitIO('afk', { id: this.cfg.id, mode: 'jump' });
   }
   afkWalk() {
     this._clearTimer('afk');
@@ -2090,12 +2388,7 @@ class BotSession extends EventEmitter {
           }, rand(100, 300));
         }
         if (Math.random() < 0.05) mc.swingArm();
-        if (Math.random() < 0.02 && mc._client) {
-          try { mc._client.write('tab_complete', { text: '/', assumeCommand: false }); } catch { }
-        }
-        if (Math.random() < 0.03) {
-          try { mc.setQuickBarSlot(rand(0, 8)); } catch { }
-        }
+        this._afkNoise(mc);
         const currPos = mc.entity?.position;
         if (lastPos && currPos) {
           const dist = Math.sqrt(
@@ -2119,9 +2412,7 @@ class BotSession extends EventEmitter {
     this._setTimer('wafk', tick, jit(400, 100));
     this.log('afk', 'Walk AFK bật');
     this.emit('afk', { id: this.cfg.id, mode: 'walk' });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('afk', { id: this.cfg.id, mode: 'walk' });
-    }
+    this._emitIO('afk', { id: this.cfg.id, mode: 'walk' });
   }
   afkStop() {
     this._clearTimer('afk');
@@ -2142,9 +2433,7 @@ class BotSession extends EventEmitter {
     this.state.intendedAfk = null;
     this.log('sys', 'AFK đã dừng');
     this.emit('afk', { id: this.cfg.id, mode: null });
-    if (this.socketRooms?.io) {
-      this.socketRooms.io.emit('afk', { id: this.cfg.id, mode: null });
-    }
+    this._emitIO('afk', { id: this.cfg.id, mode: null });
   }
   static FOODS = [
     'golden_apple', 'enchanted_golden_apple', 'cooked_beef', 'cooked_porkchop',
@@ -2358,11 +2647,9 @@ class BotSession extends EventEmitter {
           return;
         }
         if (a1 === 'every') {
-          const v = String(args[2] || '').toLowerCase();
-          if (v === 'off' || v === '0') { this.autoSellReportMin = 0; this._persistMacroSellCfg(); this.log('ok', 'Báo cáo doanh thu auto-sell: gửi sau MỖI lần bán'); return; }
-          const d = this._parseDuration(args.slice(2).join(' '));
-          if (!d) { this.log('warn', 'Cú pháp: autosell revenue every <thời gian> | off — vd: 30m, 1h'); return; }
-          const min = d.hour * 60 + d.minute + d.second / 60;
+          const min = this._parseEveryMinutes(args);
+          if (min === null) { this.log('warn', 'Cú pháp: autosell revenue every <thời gian> | off — vd: 30m, 1h'); return; }
+          if (min === 'off') { this.autoSellReportMin = 0; this._persistMacroSellCfg(); this.log('ok', 'Báo cáo doanh thu auto-sell: gửi sau MỖI lần bán'); return; }
           this.autoSellReportMin = min;
           this._persistMacroSellCfg();
           this.log('ok', `Báo cáo doanh thu auto-sell: tối đa 1 báo cáo / ${this._fmtDuration(min * 60000)} (các lần bán ở giữa được cộng dồn)`);
@@ -2520,9 +2807,40 @@ class BotSession extends EventEmitter {
       if (!this.requireOnline('menu')) return;
       if (!this.cfg.menuCommand) { this.log('warn', 'Chưa có menuCommand'); return; }
       try {
+        this._manualMenuUntil = nowMs() + 20000; // cho phép WindowRouter tự click ô menu cho lần gõ tay này (sau khi vào server, GUI lạ mặc định bị đóng chứ không click)
         this.mc.chat(this.cfg.menuCommand);
         this.log('sys', `Gửi menu: ${this.cfg.menuCommand}`);
       } catch (e) { this.log('err', e.message); }
+    });
+    r.register('spawnhome', 'Tự gõ /home treolong khi bot không còn ở gần lồng spawn: spawnhome on|off|now|status|cmd <lệnh>', (args) => {
+      const sub = (args[0] || 'status').toLowerCase();
+      if (sub === 'on' || sub === 'off') {
+        this.spawnHomeEnabled = sub === 'on';
+        this._persistSpawnHomeCfg();
+        this.log('ok', `Tự về vị trí treo lồng: ${this.spawnHomeEnabled ? `BẬT (gõ ${this.spawnHomeCommand} khi không còn ở gần lồng)` : 'TẮT'}`);
+        return;
+      }
+      if (sub === 'cmd' || sub === 'command') {
+        const c = args.slice(1).join(' ').trim();
+        if (!c) { this.log('sys', `Lệnh về vị trí treo lồng: ${this.spawnHomeCommand} — đổi: spawnhome cmd /home <tên>`); return; }
+        this.spawnHomeCommand = c.startsWith('/') ? c : `/${c}`;
+        this._persistSpawnHomeCfg();
+        this.log('ok', `Lệnh về vị trí treo lồng: ${this.spawnHomeCommand}`);
+        return;
+      }
+      if (sub === 'now') {
+        if (!this.requireOnline('spawnhome')) return;
+        const cmd = this.spawnHomeCommand.startsWith('/') ? this.spawnHomeCommand : `/${this.spawnHomeCommand}`;
+        try { this.mc.chat(cmd); this.log('ok', `Đã gõ ${cmd}`); } catch (e) { this.log('err', `Lỗi gửi ${cmd}: ${e.message}`); }
+        return;
+      }
+      if (sub === 'status') {
+        const chk = this.isOnline && this.mc?.entity?.position ? this._checkSpawnPosition() : null;
+        this.log('sys', `Tự về vị trí treo lồng: ${this.spawnHomeEnabled ? 'BẬT' : 'TẮT'} — lệnh ${this.spawnHomeCommand} | tính năng lồng: ${this._featuresActive ? 'ĐÃ bật (đang canh vị trí)' : 'chưa bật (đang chờ vào đúng vị trí / chưa xong menu)'}`);
+        if (chk) this.log('sys', `Vị trí ${this._fmtXYZ(this.mc.entity.position)}: ${chk.hasTargets ? (chk.ok ? 'ĐANG ở gần lồng' : 'KHÔNG ở gần lồng') : 'không có lồng để đối chiếu'} (${this._fmtPosCheck(chk)})${this._homeOutage ? ` | đã gõ lệnh ${this._homeOutage.tries} lần cho lần lệch này` : ''}`);
+        return;
+      }
+      this.log('warn', 'Cú pháp: spawnhome on|off|now|status | spawnhome cmd </home tên>');
     });
     r.register('addcmd', 'Thêm custom command: addcmd <tên> <lệnh MC>', (args) => {
       if (args.length < 2) { this.log('warn', 'Cú pháp: addcmd <tên> <lệnh>'); return; }
@@ -2610,11 +2928,9 @@ class BotSession extends EventEmitter {
         if (a1 === 'report' || a1 === 'send') { const r = this.sendRevenueReportNow(); this.log(r.ok ? 'ok' : 'warn', r.ok ? 'Đã gửi báo cáo doanh thu' : r.message); return; }
         if (a1 === 'on' || a1 === 'off') { this.configureSellSpawn({ revenue: a1 === 'on' }); this.log('ok', `Báo cáo doanh thu: ${this.autoSellSpawnRevenue ? 'BẬT' : 'TẮT'}`); return; }
         if (a1 === 'every') {
-          const v = (args[2] || '').toLowerCase();
-          if (v === 'off' || v === '0') { this.configureSellSpawn({ reportMin: 0 }); this.log('ok', 'Báo cáo doanh thu: gửi sau MỖI vòng bán'); return; }
-          const d = this._parseDuration(args.slice(2).join(' '));
-          if (!d) { this.log('warn', 'Cú pháp: autosell_spawn revenue every <thời gian> | off — vd: 30m, 1h'); return; }
-          const min = d.hour * 60 + d.minute + d.second / 60;
+          const min = this._parseEveryMinutes(args);
+          if (min === null) { this.log('warn', 'Cú pháp: autosell_spawn revenue every <thời gian> | off — vd: 30m, 1h'); return; }
+          if (min === 'off') { this.configureSellSpawn({ reportMin: 0 }); this.log('ok', 'Báo cáo doanh thu: gửi sau MỖI vòng bán'); return; }
           this.configureSellSpawn({ reportMin: min });
           this.log('ok', `Báo cáo doanh thu: tối đa 1 báo cáo / ${this._fmtDuration(min * 60000)} (doanh thu các vòng ở giữa được cộng dồn)`);
           return;
@@ -2695,6 +3011,10 @@ class BotSession extends EventEmitter {
       loginTime: s.loginTime,
       menuRetries: this._menuRetryCount ?? 0,
       menuSuccess: this._menuSuccess ?? false,
+      loginConfirmed: this._loginConfirmed,
+      spawnFeaturesActive: this._featuresActive,
+      spawnPositionLost: this._posLost,
+      spawnHome: this.spawnHomeEnabled ? this.spawnHomeCommand : null,
       registered: this.cfg.registered,
       cfg: {
         autoMenu: this.cfg.autoMenu,
