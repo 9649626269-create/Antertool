@@ -30,7 +30,12 @@ class BotSession extends EventEmitter {
     this.proxy = null;
     this.mc = null;
     this.packetMgr = new PacketMonitor(cfg.id);
-    this.protocolGuard = new ProtocolGuard({ botId: cfg.id, log: (lvl, m) => this.log(lvl, m) });
+    this.protocolGuard = new ProtocolGuard({
+      botId: cfg.id,
+      log: (lvl, m) => this.log(lvl, m),
+      skipBadPackets: cfg.skipBadPackets !== false,   // gói parse lỗi -> bỏ riêng gói đó, KHÔNG để luồng đọc chết (xem ProtocolGuard.js)
+      onDead: () => { if (this.isOnline) this.scheduleReconnect('protocol stream dead'); },
+    });
     this.cmdRegistry = new CommandRegistry(this);
     this.macroEngine = new MacroEngine(this);
     this._logBuffer = new RingBuffer(800);
@@ -2105,6 +2110,7 @@ class BotSession extends EventEmitter {
     const secs = (ev.ms / 1000).toFixed(0);
     let why;
     if (ev.selfMoved) why = `Bot bị xê dịch ${ev.drift.toFixed(1)} block trong lúc chờ → nhiều khả năng teleport bị HỦY vì bot di chuyển (hoặc bị đẩy).`;
+    else if (this.packetMgr.isStale(5000)) why = `Bot KHÔNG nhận được gói nào từ server trong ${Math.round((nowMs() - (this.packetMgr.lastPacketAt || 0)) / 1000)}s qua → kết nối đang "câm" (thường do lỗi đọc gói tin), không phải lỗi lệnh /home.`;
     else if (!ev.msgs.length) why = 'Server KHÔNG trả lời gì → kiểm tra: home "treolong" còn tồn tại không, có đang cooldown/bị chặn lệnh không, bot có quyền dùng /home không.';
     else why = 'Bot đứng yên nhưng server vẫn không teleport — xem tin server ở trên.';
     this.log('warn', `Gõ ${ev.cmd} đã ${secs}s mà KHÔNG bị dịch chuyển.${said} ${why}`);

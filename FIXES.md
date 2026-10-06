@@ -1,3 +1,20 @@
+# Bản sửa lỗi (fixed7) — bot "điếc" sau lỗi `declare_recipes` (nguyên nhân thật của lỗi `/home treolong`)
+
+**Log mới cho thấy:** bot gõ `/home treolong` nhưng server **không trả lời gì**, rồi đúng 30s sau lỗi `declare_recipes` thì có `client timed out after 30000 milliseconds`. Ở log cũ cũng vậy: lệnh gõ **trước** lỗi thì server trả lời "Đang dịch chuyển…", lệnh gõ **sau** lỗi thì im lặng.
+
+**Nguyên nhân:** `ProtocolGuard` chỉ ghi nhớ gói lỗi rồi **ném lỗi lên lại**. Với `minecraft-protocol`, lỗi parse trong luồng giải mã làm luồng bị **huỷ** → bot không đọc thêm được gói nào: không thấy chat, không thấy gói teleport, không trả lời `keep_alive` → 30s sau là timeout. Server gửi `declare_recipes` mỗi lần vào server / đổi world (sau `/menu`, sau `/home`…) nên bot "câm" đúng lúc teleport. Ghi chú ở fixed3 ("lỗi này không làm đứt kết nối, bot vẫn chạy bình thường") là **sai** — mình đã đoán mà chưa kiểm chứng. Bản fixed6 (bot đứng yên khi chờ teleport) vẫn hữu ích nhưng **không phải** nguyên nhân chính.
+
+**Đã sửa:**
+- `ProtocolGuard`: bọc `parsePacketBuffer`; gói parse lỗi → trả **gói giả `unparsed_packet`** thay vì ném lỗi ⇒ luồng đọc sống tiếp, các gói sau (chat, vị trí, keep_alive…) vẫn tới. Log chỉ cảnh báo 1 lần/loại gói: `… Đã BỎ QUA riêng gói này, giữ nguyên kết nối.`
+- Lưới an toàn: nếu luồng đọc vẫn bị huỷ sau lỗi parse → log `[ERR] Luồng đọc gói tin đã bị huỷ…` và **reconnect ngay** (không chờ 30s).
+- Chẩn đoán teleport: nếu hết hạn mà bot không nhận được gói nào từ server trong ≥5s → báo "kết nối đang câm (lỗi đọc gói tin), không phải lỗi lệnh /home" thay vì đoán home bị lỗi.
+- Tắt chế độ bỏ qua nếu cần: `"skipBadPackets": false` trong config của bot (không khuyên dùng).
+- Test mới (`npm test`): luồng `Transform` mô phỏng `FullPacketParser` — đường cũ thì luồng chết và mất các gói sau, đường mới thì giữ nguyên các gói sau.
+
+**Cần kiểm tra khi chạy thật:** sau dòng `Đã BỎ QUA riêng gói này`, phải **không** còn `client timed out`, tin server (chat, "Đang dịch chuyển…") phải hiện bình thường, và vị trí bot đổi sang chỗ treo lồng. Khoảng cách 18.881 block tới lồng ở log vừa rồi là bot đang ở gần spawn (0,0), nên chưa có chunk lồng — bình thường cho tới khi `/home` hoàn tất. Nếu vẫn lỗi, gửi lại log + file `logs/protocol-errors.log`.
+
+---
+
 # Bản sửa lỗi (fixed6) — `/home treolong` không teleport + không thấy thông báo server
 
 **Triệu chứng:** bot gõ `/home treolong`, server báo "Đang dịch chuyển…" (đếm ngược ~5s) nhưng bot không về được chỗ treo lồng, không có thêm thông báo nào.

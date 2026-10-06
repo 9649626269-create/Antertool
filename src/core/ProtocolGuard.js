@@ -1,10 +1,16 @@
 'use strict';
 // ProtocolGuard — xử lý lỗi parse gói tin server->client của minecraft-protocol, ví dụ:
 //   "Parse error for play.toClient: Read error for undefined : array size is abnormally large, not reading: 210986572"
-// Lỗi này KHÔNG làm đứt kết nối: chỉ 1 gói bị bỏ, các gói sau vẫn đọc bình thường. Việc cần làm là
+// CẢNH BÁO (đã kiểm chứng bằng log thật): nếu để lỗi này ném lên như bình thường thì minecraft-protocol gọi cb(err) trong
+// luồng giải mã -> luồng bị HUỶ -> bot không đọc thêm được gói nào (không thấy chat, không thấy teleport, không trả lời
+// keep_alive) cho tới khi \"client timed out after 30000 milliseconds\". Gói lỗi hay gặp nhất là play.declare_recipes —
+// server gửi nó mỗi lần vào server / đổi world (kể cả sau /menu và /home), nên bot hay \"câm\" đúng lúc teleport.
+// Cách xử lý ở đây:
+//   0) (chính) bọc parsePacketBuffer: gói parse lỗi -> trả về gói giả 'unparsed_packet' thay vì ném lỗi => luồng sống tiếp,
 //   1) không báo [ERR] liên tục (gộp + giới hạn tần suất),
 //   2) cho biết CHÍNH XÁC gói nào đang hỏng (tên + id + vài byte đầu) để biết nguyên nhân,
-//   3) nếu lỗi dồn dập (lệch phiên bản giao thức) thì nói rõ cách xử lý.
+//   3) nếu lỗi dồn dập (lệch phiên bản giao thức) thì nói rõ cách xử lý,
+//   4) lưới an toàn: nếu luồng đọc vẫn bị huỷ thì báo ngay + gọi onDead (reconnect) thay vì chờ 30s.
 const fs = require('fs');
 const path = require('path');
 
@@ -41,9 +47,13 @@ const FLOOD_WINDOW_MS = 60000;
 const REPEAT_LOG_MS = 60000;
 
 class ProtocolGuard {
-  constructor({ botId = '?', log = () => {}, logDir = path.join(process.cwd(), 'logs') } = {}) {
+  constructor({ botId = '?', log = () => {}, logDir = path.join(process.cwd(), 'logs'), skipBadPackets = true, onDead = null } = {}) {
     this.botId = botId;
     this._log = log;
+    this.skipBadPackets = skipBadPackets !== false;   // true: gói lỗi -> gói giả, giữ kết nối (khuyên dùng)
+    this._onDead = typeof onDead === 'function' ? onDead : null;
+    this._deadNotified = false;
+    this.skipped = 0;
     this._logDir = logDir;
     this._client = null;
     this._mc = null;
@@ -61,6 +71,7 @@ class ProtocolGuard {
     if (!client) return;
     this._mc = mc;
     this._client = client;
+    this._deadNotified = false;
     // deserializer được tạo lại mỗi lần đổi state (login -> configuration -> play) nên phải hook lại
     this._onState = () => this._hook(client);
     try { client.on('state', this._onState); } catch { }
@@ -85,9 +96,20 @@ class ProtocolGuard {
         try {
           return orig.call(this, buf);
         } catch (e) {
-          // PartialReadError do protodef tự nuốt; chỉ các lỗi còn lại mới thành sự kiện 'error'
-          if (!e || !e.partialReadError) { try { self._remember(client, buf); } catch { } }
-          throw e;
+          // PartialReadError do protodef tự nuốt (chờ thêm dữ liệu) — không đụng vào
+          if (e && e.partialReadError) throw e;
+          try { self._remember(client, buf); } catch { }
+          if (!self.skipBadPackets) throw e;   // chế độ cũ: ném lỗi lên (nguy cơ làm chết luồng đọc)
+          // Chế độ mới: bỏ riêng gói này, trả về gói giả để luồng giải mã KHÔNG bị huỷ.
+          const id = self._last?.id ?? null;
+          self.skipped++;
+          try { self.handleError(e, { skipped: true }); } catch { }
+          return {
+            data: { name: 'unparsed_packet', params: { id, error: String(e?.message || e).slice(0, 200) } },
+            metadata: { name: 'unparsed_packet', size: buf ? buf.length : 0 },
+            buffer: buf,
+            fullBuffer: buf,
+          };
         }
       };
       d.__protocolGuard = true;
@@ -109,9 +131,9 @@ class ProtocolGuard {
   }
 
   // Trả true nếu đã xử lý (là lỗi parse) -> caller KHÔNG cần log [ERR] nữa.
-  handleError(err) {
+  handleError(err, opts = {}) {
     const msg = err?.message || String(err);
-    if (!isParseError(msg)) return false;
+    if (!opts.skipped && !isParseError(msg)) return false;
     const now = Date.now();
     this.total++;
 
@@ -127,7 +149,9 @@ class ProtocolGuard {
       const detail = rec
         ? `gói "${key}" (id 0x${(rec.id ?? 0).toString(16)}, ${rec.size} byte)`
         : 'không xác định được gói nào';
-      this._log('warn', `Lỗi đọc gói tin từ server: ${detail} — ${this._short(msg)}. Gói này bị bỏ qua, bot vẫn chạy bình thường.`);
+      this._log('warn', `Lỗi đọc gói tin từ server: ${detail} — ${this._short(msg)}. ` + (opts.skipped
+        ? 'Đã BỎ QUA riêng gói này, giữ nguyên kết nối.'
+        : 'Gói này bị bỏ, NHƯNG luồng đọc gói có thể đã hỏng — nếu sau đó không thấy tin server nào thì bot sẽ tự reconnect.'));
       st.lastLogged = now;
     } else if (now - st.lastLogged >= REPEAT_LOG_MS) {
       this._log('warn', `Lỗi đọc gói "${key}" đã lặp ${st.count} lần (bỏ qua, bot vẫn chạy).`);
@@ -135,6 +159,7 @@ class ProtocolGuard {
     }
 
     if (st.written < FILE_MAX_PER_KEY) { st.written++; this._writeFile(key, rec, msg); }
+    if (!opts.skipped) this._checkDead();
 
     this._recent.push(now);
     while (this._recent.length && now - this._recent[0] > FLOOD_WINDOW_MS) this._recent.shift();
@@ -147,6 +172,21 @@ class ProtocolGuard {
         '(3) gửi file logs/protocol-errors.log để dò gói bị lỗi.');
     }
     return true;
+  }
+
+  // Luồng giải mã bị huỷ sau lỗi parse = bot đã điếc. Báo ngay + reconnect thay vì chờ keep_alive timeout 30s.
+  _checkDead() {
+    const client = this._client;
+    setImmediate(() => {
+      try {
+        if (this._client !== client || this._deadNotified) return;
+        const d = client?.deserializer;
+        if (!d || d.destroyed !== true) return;
+        this._deadNotified = true;
+        this._log('err', 'Luồng đọc gói tin đã bị huỷ sau lỗi parse — bot không nhận được gì từ server nữa, reconnect ngay.');
+        if (this._onDead) this._onDead();
+      } catch { }
+    });
   }
 
   _short(msg) {
