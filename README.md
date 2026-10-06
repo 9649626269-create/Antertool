@@ -227,6 +227,8 @@ Lưu ý: macro như `tpa_owner` cố ý đưa bot đi chỗ khác — trong lúc
 | `spawnHomeCooldownMs` | `20000` | giãn cách giữa 2 lần gõ lệnh |
 | `spawnHomeMaxTries` | `5` | quá số lần này vẫn chưa về → báo động + thử thưa |
 | `spawnHomeSlowMs` | `300000` | giãn cách thử lại sau khi quá số lần |
+| `spawnHomeWarmupMs` | `5000` | thời gian server đếm ngược trước khi teleport — bot **đứng yên hoàn toàn** (không nhảy/đi/xoay, AFK tạm dừng) suốt thời gian này |
+| `spawnHomeMarginMs` | `3000` | chờ thêm sau đếm ngược; quá mức này mà bot vẫn đứng nguyên thì log cảnh báo "KHÔNG bị dịch chuyển" kèm tin server và nguyên nhân khả dĩ |
 | `spawnPositionSettleMs` | `2500` | phải thấy lồng cạnh bot + đứng yên chừng này mới bật tính năng |
 | `spawnGateTimeoutMs` | `180000` | quá lâu chưa về được vị trí → báo webhook + vẫn bật autosell macro (spawnerprotect/autosell_spawn vẫn chờ) |
 | `loginSuccessPattern` | *(trống)* | regex nhận tin "đã đăng nhập" nếu server dùng câu khác (mặc định nhận "đăng nhập thành công" / "đã đăng nhập") |

@@ -12,10 +12,14 @@ const { WindowRouter } = require('./WindowRouter');
 const RingBuffer = require('./RingBuffer');
 const SharedPool = require('./SharedPool');
 const RevenueTracker = require('./RevenueTracker');
+const TeleportWatch = require('./TeleportWatch');
 const MacroEngine = require('./MacroEngine');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
 const SELL_SPAWN_REACH = 6; // block — tầm chuột phải vào lồng của auto-sell spawn (từ mắt bot); cũng là ngưỡng "đang đứng đúng chỗ treo lồng"
+const TP_PRESEND_MS = 600; // thả hết phím + chờ vận tốc về 0 rồi mới gõ lệnh teleport
+// tin action bar / title chỉ hiện ra log khi đang chờ teleport hoặc khớp mẫu này (tránh spam bảng điểm/HUD)
+const TP_HUD_RE = /teleport|dịch chuyển|dich chuyen|home|hủy|huy bo|cancel|di chuyển|đứng yên|dung yen|cooldown|hồi chiêu|chờ|please wait|don't move|do not move|moved/i;
 class BotSession extends EventEmitter {
   constructor(cfg, theme, proxyManager, socketRooms = null) {
     super();
@@ -164,6 +168,10 @@ class BotSession extends EventEmitter {
     this.spawnHomeCooldownMs = cfg.spawnHomeCooldownMs ?? 20000;              // giãn cách giữa 2 lần gõ lệnh (đợi teleport xong)
     this.spawnHomeMaxTries = cfg.spawnHomeMaxTries ?? 5;                      // quá số lần này vẫn chưa về -> báo webhook + thử thưa dần
     this.spawnHomeSlowMs = cfg.spawnHomeSlowMs ?? 300000;                     // giãn cách thử lại sau khi quá số lần (5 phút)
+    this.spawnHomeWarmupMs = cfg.spawnHomeWarmupMs ?? 5000;                   // server đếm ngược chừng này trước khi teleport — bot đứng yên hoàn toàn (không nhảy/đi/AFK)
+    this.spawnHomeMarginMs = cfg.spawnHomeMarginMs ?? 3000;                   // chờ thêm sau đếm ngược cho gói teleport + tải chunk, quá mà vẫn đứng nguyên thì báo "teleport không xảy ra"
+    this._tp = new TeleportWatch({ warmupMs: this.spawnHomeWarmupMs, marginMs: this.spawnHomeMarginMs });
+    this._hudLast = { text: '', at: 0 };
     this.spawnPositionSettleMs = cfg.spawnPositionSettleMs ?? 2500;           // phải thấy lồng cạnh bot + đứng yên chừng này mới bật tính năng
     this.spawnGateTimeoutMs = cfg.spawnGateTimeoutMs ?? 180000;               // quá lâu chưa về được vị trí -> báo webhook + vẫn bật autosell macro
     this._loginConfirmed = false;
@@ -395,6 +403,7 @@ class BotSession extends EventEmitter {
     const mc = this.mc;
     this.mc = null;
     const c = mc._client;
+    try { this._tp.cancel(); this._clearTimer('tpSend'); } catch { } // bỏ theo dõi teleport dở dang (reconnect)
     try { this.packetMgr.detach(); } catch { }
     try { this.protocolGuard.detach(); } catch { }
     // Gỡ listener để 'end'/'error' đến muộn không kích hoạt reconnect; giữ 1 handler 'error' rỗng để không văng uncaught.
@@ -744,11 +753,13 @@ class BotSession extends EventEmitter {
         if (!text.trim()) return;
         if (pos === 'game_info' || pos === 'action_bar') {
           this.tryChatShard(text);
+          this._logHud(text, 'ActionBar');
           return;
         }
         if (this._sellCap) this._captureSellRevenue(text, pos);
         if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         this.log('chat', text);
+        if (pos !== 'chat') this._tp.note(text, nowMs()); // tin hệ thống trong lúc chờ teleport (không tính chat người chơi)
         if (!this._loginConfirmed && this._isLoginSuccessText(text)) this._onLoginConfirmed();
         this.tryChatShard(text);
       } catch (e) {
@@ -757,6 +768,13 @@ class BotSession extends EventEmitter {
     });
     mc.on('messagestr', (msg, pos) => {
       try { if (pos === 'gameInfo') this.tryChatShard(msg); } catch { }
+    });
+    // Title / subtitle: nhiều server báo "Teleport bị hủy / Đừng di chuyển" bằng title chứ không phải chat
+    mc.on('title', (text, type) => {
+      try {
+        const t = typeof text === 'string' ? text : resolveText(text?.json ?? text);
+        this._logHud(t, type === 'subtitle' ? 'Subtitle' : 'Title');
+      } catch { }
     });
     mc.on('scoreboardUpdated', () => {
       try {
@@ -2038,6 +2056,59 @@ class BotSession extends EventEmitter {
     out.ok = !!((out.sell && out.sell.near) || (out.prot && out.prot.near));
     return out;
   }
+  // Hiện tin action bar/title của server. Chỉ khi đang chờ teleport hoặc khớp TP_HUD_RE; cùng 1 tin lặp lại trong 4s thì bỏ.
+  _logHud(text, label) {
+    const t = String(text || '').trim();
+    if (!t) return;
+    const now = nowMs();
+    this._tp.note(t, now);
+    if (!(this._tp.active || this._tp.frozen(now) || TP_HUD_RE.test(t))) return;
+    if (this._hudLast.text === t && now - this._hudLast.at < 4000) return;
+    this._hudLast = { text: t, at: now };
+    this.log('chat', `[${label}] ${t}`);
+  }
+  // Thả hết phím + huỷ các timer AFK còn treo để bot đứng im (teleport bị hủy nếu bot di chuyển/nhảy).
+  _tpHoldStill(now = nowMs()) {
+    this._tp.hold(now, TP_PRESEND_MS + 400);
+    for (const k of ['afkJumpOff', 'afkSneak', 'wafkKey', 'wafkJump']) this._clearTimer(k);
+    try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) this.mc?.setControlState(k, false); } catch { }
+  }
+  // Lồng gần nhất + trạng thái block đó: phân biệt "chunk chưa tải" / "toạ độ lồng lưu sai" / "bot đứng quá xa".
+  _describeCageDistance() {
+    const mc = this.mc;
+    const me = mc?.entity?.position;
+    if (!me) return '';
+    const lists = [];
+    if (this._sellSpawnOn) lists.push(...this.sellSpawnList);
+    if (this._spawnerProtectOn) lists.push(...this.protectedSpawners);
+    let best = null;
+    for (const p of lists) {
+      const d = me.distanceTo(makeVec3(p.x + .5, p.y + .5, p.z + .5));
+      if (!best || d < best.d) best = { p, d };
+    }
+    if (!best) return '';
+    let st = 'chunk chưa tải';
+    try {
+      const b = mc.blockAt(this._vec(best.p));
+      if (b) st = this._isSpawnerBlock(b) ? 'spawner OK' : `không phải spawner, đang là ${b.name}`;
+    } catch { }
+    return `lồng gần nhất ${this._fmtXYZ(best.p)} cách ${best.d.toFixed(1)} block (${st})`;
+  }
+  _onTeleportEvent(ev) {
+    const pos = this.mc?.entity?.position;
+    const said = ev.msgs.length ? ` Server nói: ${ev.msgs.map(m => `"${m}"`).join(' | ')}.` : '';
+    const cage = this._describeCageDistance();
+    if (ev.type === 'arrived') {
+      this.log('ok', `Đã dịch chuyển ${ev.dist.toFixed(0)} block sau ${(ev.ms / 1000).toFixed(1)}s (${ev.cmd}) → ${this._fmtXYZ(pos)}.${said}${cage ? ' ' + cage : ''}`);
+      return;
+    }
+    const secs = (ev.ms / 1000).toFixed(0);
+    let why;
+    if (ev.selfMoved) why = `Bot bị xê dịch ${ev.drift.toFixed(1)} block trong lúc chờ → nhiều khả năng teleport bị HỦY vì bot di chuyển (hoặc bị đẩy).`;
+    else if (!ev.msgs.length) why = 'Server KHÔNG trả lời gì → kiểm tra: home "treolong" còn tồn tại không, có đang cooldown/bị chặn lệnh không, bot có quyền dùng /home không.';
+    else why = 'Bot đứng yên nhưng server vẫn không teleport — xem tin server ở trên.';
+    this.log('warn', `Gõ ${ev.cmd} đã ${secs}s mà KHÔNG bị dịch chuyển.${said} ${why}`);
+  }
   _fmtPosCheck(chk) {
     const parts = [];
     if (chk.sell) parts.push(`autosell_spawn ${chk.sell.near}/${chk.sell.total} lồng trong tầm`);
@@ -2053,6 +2124,8 @@ class BotSession extends EventEmitter {
     try {
       const chk = this._checkSpawnPosition();
       const now = nowMs();
+      const tpEv = this._tp.tick(mc.entity.position, now);
+      if (tpEv) this._onTeleportEvent(tpEv);
       if (!this._featuresActive) this._gateTick(chk, now);
       else this._watchTick(chk, now);
     } catch (e) {
@@ -2082,7 +2155,8 @@ class BotSession extends EventEmitter {
     if (chk.ok) return; // đang ở gần nhưng còn bị dịch chuyển — chờ tick sau
     if (!this._gateWaitLogAt || now - this._gateWaitLogAt >= 15000) {
       this._gateWaitLogAt = now;
-      this.log('sys', `Cổng vị trí: bot CHƯA ở gần lồng (${this._fmtPosCheck(chk)}) — chưa bật spawnerprotect/autosell`);
+      const cageInfo = this._describeCageDistance();
+      this.log('sys', `Cổng vị trí: bot CHƯA ở gần lồng (${this._fmtPosCheck(chk)}${cageInfo ? '; ' + cageInfo : ''}) — chưa bật spawnerprotect/autosell`);
     }
     this._tryGoHome('gate', chk, now);
     if (!this._gateTimedOut && now - this._gateStartedAt >= this.spawnGateTimeoutMs) this._onGateTimeout(chk);
@@ -2173,19 +2247,26 @@ class BotSession extends EventEmitter {
     if (mc.isAlive === false || (mc.health ?? 20) <= 0) return false; // đang chết, chờ hồi sinh
     if (this._isBusy) return false;
     if (phase === 'gate' && now - this._menuDoneAt < this.spawnHomeGraceMs) return false; // cho server tự đưa bot về chỗ cũ trước đã
+    if (this._tp.active || this._tp.frozen(now)) return false; // lần teleport trước còn đang đếm ngược — gõ thêm sẽ làm đếm lại từ đầu
     const o = this._homeOutage || (this._homeOutage = { since: now, tries: 0, notified: false });
     o.tries++;
     const slow = o.tries > this.spawnHomeMaxTries;
-    this._homeNextAt = now + (slow ? this.spawnHomeSlowMs : this.spawnHomeCooldownMs);
+    const minGap = TP_PRESEND_MS + this._tp.deadlineMs + this._tp.settleMs + 1000; // không bao giờ gõ lại khi lần trước chưa kết thúc
+    this._homeNextAt = now + Math.max(minGap, slow ? this.spawnHomeSlowMs : this.spawnHomeCooldownMs);
     const cmd = this.spawnHomeCommand.startsWith('/') ? this.spawnHomeCommand : `/${this.spawnHomeCommand}`;
     try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
-    try {
-      mc.chat(cmd);
-      this.log('sys', `Không ở gần vị trí treo lồng — đã gõ ${cmd} (lần ${o.tries}${slow ? ', thử thưa' : ''}) — chờ teleport...`);
-    } catch (e) {
-      this.log('err', `Lỗi gửi ${cmd}: ${e.message}`);
-      return false;
-    }
+    // 1) đứng yên hoàn toàn  2) sau TP_PRESEND_MS mới gõ lệnh  3) giữ yên suốt thời gian đếm ngược (AFK nhảy/đi bị chặn bởi _tp.frozen)
+    this._tpHoldStill(now);
+    this._setTimer('tpSend', () => {
+      if (!this.isOnline || this.mc !== mc) return;
+      try {
+        mc.chat(cmd);
+        this._tp.begin({ cmd, pos: mc.entity?.position, now: nowMs() });
+        this.log('sys', `Không ở gần vị trí treo lồng — đã gõ ${cmd} (lần ${o.tries}${slow ? ', thử thưa' : ''}) — đứng yên chờ teleport ${(this.spawnHomeWarmupMs / 1000).toFixed(0)}s...`);
+      } catch (e) {
+        this.log('err', `Lỗi gửi ${cmd}: ${e.message}`);
+      }
+    }, TP_PRESEND_MS);
     if (phase === 'watch' && !o.notified) {
       o.notified = true;
       this._notify('homeReturn', `🏠 ${this.cfg.id}: lệch khỏi vị trí treo lồng — gõ ${cmd}`,
@@ -2340,6 +2421,7 @@ class BotSession extends EventEmitter {
     const mc = this.mc;
     const tick = () => {
       if (!this.isOnline || this.state.afk !== 'jump') return;
+      if (this._tp.frozen(nowMs())) { this._setTimer('afk', tick, 500); return; } // đang chờ teleport: không nhảy/xoay
       try {
         mc.setControlState('jump', true);
         this._setTimer('afkJumpOff', () => {
@@ -2381,6 +2463,7 @@ class BotSession extends EventEmitter {
     let stuckTicks = 0;
     const tick = () => {
       if (!this.isOnline || this.state.afk !== 'walk') return;
+      if (this._tp.frozen(nowMs())) { lastPos = null; stuckTicks = 0; this._setTimer('wafk', tick, 500); return; } // đang chờ teleport: không đi/xoay
       try {
         if (Math.random() < 0.06) dir = -dir;
         yaw += rand(2, 10) * 0.09 * dir;
@@ -2844,7 +2927,17 @@ class BotSession extends EventEmitter {
       if (sub === 'now') {
         if (!this.requireOnline('spawnhome')) return;
         const cmd = this.spawnHomeCommand.startsWith('/') ? this.spawnHomeCommand : `/${this.spawnHomeCommand}`;
-        try { this.mc.chat(cmd); this.log('ok', `Đã gõ ${cmd}`); } catch (e) { this.log('err', `Lỗi gửi ${cmd}: ${e.message}`); }
+        // Cùng quy trình với tự về home: thả phím -> gõ lệnh -> đứng yên suốt thời gian đếm ngược -> báo kết quả
+        const mc = this.mc;
+        this._tpHoldStill();
+        this._setTimer('tpSend', () => {
+          if (!this.isOnline || this.mc !== mc) return;
+          try {
+            mc.chat(cmd);
+            this._tp.begin({ cmd, pos: mc.entity?.position, now: nowMs() });
+            this.log('ok', `Đã gõ ${cmd} — đứng yên chờ teleport ${(this.spawnHomeWarmupMs / 1000).toFixed(0)}s...`);
+          } catch (e) { this.log('err', `Lỗi gửi ${cmd}: ${e.message}`); }
+        }, TP_PRESEND_MS);
         return;
       }
       if (sub === 'status') {

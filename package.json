@@ -11,7 +11,7 @@
     "docker:build": "docker build -t antares-manager .",
     "docker:run": "docker run -p 3000:3000 --env-file .env antares-manager",
     "start:nolauncher": "node main.js",
-    "test": "node test/protocol-guard.test.js && node test/security.test.js && node test/loader.test.js"
+    "test": "node test/protocol-guard.test.js && node test/teleport-watch.test.js && node test/security.test.js && node test/loader.test.js"
   },
   "dependencies": {
     "boxen": "^6.2.1",
