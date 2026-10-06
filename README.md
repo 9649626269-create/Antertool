@@ -46,6 +46,13 @@ npm install
 node main.js
 ```
 
+### Chạy bằng `load.js` (tự lấy code từ GitHub)
+Chỉ cần copy **`load.js`** vào 1 thư mục trống rồi chạy:
+```bash
+node load.js
+```
+Lần đầu nó tải code + cài thư viện vào `.anter/`; các lần sau chỉ tải khi GitHub có commit mới. `config.json` (mật khẩu, bot…), `revenue.json`, `proxies.txt`, `logs/` nằm ngay cạnh `load.js` và không bị ghi đè khi update. Gõ `update` trong tool để cập nhật ngay không cần tắt tay. Chi tiết: xem `FIXES.md` mục 4.
+
 Open **http://localhost:3000** in your browser.
 
 ## Configuration

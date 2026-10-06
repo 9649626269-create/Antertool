@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const security = require('./security');
 class WebDashboard {
   constructor(botManager, options = {}) {
     this.manager = botManager;
@@ -87,10 +88,35 @@ class WebDashboard {
     try {
       fs.mkdirSync(path.join(publicDir, 'assets'), { recursive: true });
     } catch { }
+    // Health-check cho Render/Docker: luôn mở (không lộ dữ liệu), đặt TRƯỚC middleware xác thực
+    this.expressApp.get('/healthz', (req, res) => res.status(200).send('ok'));
+    // ---- Bảo mật: token (tuỳ chọn) + chặn truy cập chéo nguồn ----
+    const token = String(process.env.DASHBOARD_TOKEN || this.manager._config?.dashboardToken || '');
+    if (token) {
+      this.expressApp.use((req, res, next) => {
+        if (security.isAuthorized(token, req.headers.authorization)) return next();
+        res.setHeader('WWW-Authenticate', 'Basic realm="Antares Dashboard", charset="UTF-8"');
+        res.status(401).send('Unauthorized');
+      });
+      this.io.use((socket, next) => {
+        const h = socket.handshake || {};
+        const given = security.tokenFromHeader(h.headers && h.headers.authorization) || (h.auth && h.auth.token) || '';
+        if (security.tokenEquals(token, given)) return next();
+        next(new Error('unauthorized'));
+      });
+      console.log('\x1b[32m[Dashboard] Đã bật xác thực (tên đăng nhập tuỳ ý, mật khẩu = DASHBOARD_TOKEN)\x1b[0m');
+    } else {
+      console.log('\x1b[33m[Dashboard] ⚠ Chưa đặt DASHBOARD_TOKEN: ai truy cập được cổng ' + this.port +
+        ' đều điều khiển được bot (kể cả khi deploy lên Render/Docker). Đặt biến môi trường DASHBOARD_TOKEN hoặc "dashboardToken" trong config.json.\x1b[0m');
+    }
+    // Yêu cầu ghi (POST/PATCH/DELETE) từ trang web khác nguồn -> từ chối
+    this.expressApp.use((req, res, next) => {
+      if (!security.isSameOrigin(req)) return res.status(403).send('Forbidden origin');
+      next();
+    });
     this.expressApp.use(require('express').static(publicDir, {
       maxAge: 0,
       setHeaders: (res) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Cache-Control', 'no-cache');
       },
     }));
@@ -100,10 +126,15 @@ class WebDashboard {
     });
     this.expressApp.use(require('express').json());
     this.expressApp.use('/api', (req, res, next) => {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-      if (req.method === 'OPTIONS') return res.sendStatus(200);
+      // Mặc định chỉ cùng nguồn. Muốn cho UI ở nguồn khác: đặt DASHBOARD_CORS_ORIGIN=https://site1,https://site2
+      const origin = req.headers.origin;
+      if (origin && security.allowedOrigins().includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      }
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
       next();
     });
     const _rateMap = new Map();

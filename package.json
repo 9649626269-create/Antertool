@@ -7,13 +7,11 @@
   },
   "main": "main.js",
   "scripts": {
-    "start": "node launcher.js",
-    "start:pm2": "pm2 start ecosystem.config.js",
-    "start:win": "powershell -ExecutionPolicy Bypass -File start-windows.ps1",
-    "clean": "node cleanup.js",
+    "start": "node load.js",
     "docker:build": "docker build -t antares-manager .",
     "docker:run": "docker run -p 3000:3000 --env-file .env antares-manager",
-    "start:nolauncher": "node main.js"
+    "start:nolauncher": "node main.js",
+    "test": "node test/protocol-guard.test.js && node test/security.test.js && node test/loader.test.js"
   },
   "dependencies": {
     "boxen": "^6.2.1",
@@ -23,7 +21,6 @@
     "mineflayer": "^4.0.0",
     "socket.io": "^4.8.3",
     "strip-ansi": "^7.2.0",
-    "vec3": "^0.1.8",
-    "adm-zip": "^0.5.16"
+    "vec3": "^0.1.8"
   }
 }

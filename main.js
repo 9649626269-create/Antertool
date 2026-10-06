@@ -8,7 +8,8 @@ const HelpCatalog = require('./src/core/HelpCatalog');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 let config;
 try {
-  config = require('./config.json');
+  // đọc từ thư mục dữ liệu (cwd) — khi chạy qua load.js, code nằm ở .anter/code còn config.json nằm cạnh load.js
+  config = JSON.parse(require('fs').readFileSync(path.join(process.cwd(), 'config.json'), 'utf8'));
 } catch {
   config = {};
 }
@@ -19,8 +20,11 @@ try {
   const socketIo = require('socket.io');
   expressApp = express();
   expressServer = http.createServer(expressApp);
+  const security = require('./src/web/security');
+  const corsOrigins = security.allowedOrigins();
   io = new socketIo.Server(expressServer, {
-    cors: { origin: '*' },
+    ...(corsOrigins.length ? { cors: { origin: corsOrigins } } : {}), // mặc định: chỉ cùng nguồn (trước đây '*' -> trang web bất kỳ điều khiển được bot)
+    allowRequest: security.allowSocketRequest,
     transports: ['websocket', 'polling'],
     pingTimeout: 20000,
     pingInterval: 10000,
@@ -338,11 +342,10 @@ async function shutdown(code = 0) {
                 .then(() => { if (rl) { readline.cursorTo(process.stdout, 0); readline.clearLine(process.stdout, 0); rl.prompt(true); } });
               return;
             case 'update': {
-              if (!process.env.ANTER_LAUNCHER) { console.log(colors.warn('  Cần chạy bằng launcher: npm start (hoặc node launcher.js) mới dùng được lệnh update')); break; }
+              if (!process.env.ANTER_LOADER) { console.log(colors.warn('  Cần chạy bằng load.js: node load.js (hoặc npm start) mới dùng được lệnh update')); break; }
               console.log(colors.muted('  Đang kiểm tra GitHub...'));
-              require('./updater').checkForUpdate().then(info => {
-                if (info.firstRun) console.log(colors.muted('  Chưa có mốc phiên bản — khởi động lại bằng launcher để khởi tạo'));
-                else if (!info.available) console.log(colors.ok('  ✓ Đang là bản mới nhất'));
+              require(process.env.ANTER_LOADER).checkForUpdate().then(info => {
+                if (!info.available) console.log(colors.ok('  ✓ Đang là bản mới nhất'));
                 else { console.log(colors.ok(`  Có bản mới: ${info.message} — đang thoát để cập nhật...`)); shutdown(42); return; }
                 if (rl) rl.prompt(true);
               }).catch(e => { console.log(colors.err('  Không kiểm tra được: ' + e.message)); if (rl) rl.prompt(true); });

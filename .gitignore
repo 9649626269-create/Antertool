@@ -9,6 +9,7 @@ backups/
 logs/
 data/
 
-# Do tool tự sinh
+# Do tool / load.js tự sinh
 node_modules/
-.update-state.json
+.anter/
+auth_cache/

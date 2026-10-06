@@ -5,6 +5,7 @@ const mineflayer = require('mineflayer');
 const { CS, TIMING, IGNORED_ERRORS, DEFAULTS } = require('./constants');
 const { rand, jit, clamp, nowMs, sleep, resolveText, parseShardNum, safeJsonStringify, parseReasonText, normalizeSmallCaps } = require('./utils');
 const PacketMonitor = require('./PacketMonitor');
+const ProtocolGuard = require('./ProtocolGuard');
 const CommandRegistry = require('./CommandRegistry');
 const HelpCatalog = require('./HelpCatalog');
 const { WindowRouter } = require('./WindowRouter');
@@ -25,6 +26,7 @@ class BotSession extends EventEmitter {
     this.proxy = null;
     this.mc = null;
     this.packetMgr = new PacketMonitor(cfg.id);
+    this.protocolGuard = new ProtocolGuard({ botId: cfg.id, log: (lvl, m) => this.log(lvl, m) });
     this.cmdRegistry = new CommandRegistry(this);
     this.macroEngine = new MacroEngine(this);
     this._logBuffer = new RingBuffer(800);
@@ -378,6 +380,7 @@ class BotSession extends EventEmitter {
     this._spawnerBusy = false;
     this._sellSpawnAbort = true; // vòng auto-sell spawn đang chạy (nếu có) sẽ tự thoát và tự trả cờ busy
     this.packetMgr.detach();
+    this.protocolGuard.detach();
     this.afkStop();
     this.state.afk = null;
     this.state.intendedAfk = null;
@@ -391,18 +394,17 @@ class BotSession extends EventEmitter {
     if (!this.mc) return;
     const mc = this.mc;
     this.mc = null;
-    try {
-      const c = mc._client;
-      if (c) {
-        c.removeAllListeners();
-        if (this.packetMgr._origWrite && c.write === this.packetMgr._boundWrite) {
-          c.write = this.packetMgr._origWrite;
-        }
-        c.end = () => {};
-      }
-    } catch { }
-    try { mc.removeAllListeners(); } catch { }
-    try { mc.end('cleanup'); } catch { }
+    const c = mc._client;
+    try { this.packetMgr.detach(); } catch { }
+    try { this.protocolGuard.detach(); } catch { }
+    // Gỡ listener để 'end'/'error' đến muộn không kích hoạt reconnect; giữ 1 handler 'error' rỗng để không văng uncaught.
+    try { mc.removeAllListeners(); mc.on('error', () => { }); } catch { }
+    try { if (c) { c.removeAllListeners(); c.on('error', () => { }); } } catch { }
+    // PHẢI đóng socket thật. Bản cũ gán c.end = () => {} rồi mới gọi mc.end() nên socket cũ bị bỏ lại mở:
+    // rò rỉ kết nối, server vẫn thấy bot online -> lần reconnect sau dễ bị "already logged in"/kick.
+    try { if (c && !c.ended) c.end('cleanup'); } catch { }
+    try { c?.socket?.destroy(); } catch { }
+    try { c?.stream?.destroy?.(); } catch { }
     this._isCleanedUp = true;
   }
   scheduleReconnect(reason) {
@@ -578,7 +580,6 @@ class BotSession extends EventEmitter {
       this._setState(CS.DISCONNECTED);
       return;
     }
-    try { await this._sharedPool.resolveDns(cfg.host); } catch { }
     if (proxySocket) this._sharedPool.optimizeSocket(proxySocket);
     const botOpts = {
       host: cfg.host,
@@ -616,6 +617,7 @@ class BotSession extends EventEmitter {
     }
     this.mc = mc;
     this.packetMgr.attach(mc);
+    this.protocolGuard.attach(mc);
     this._bindEvents(mc, proxy);
   }
   _onConnectComplete() {
@@ -635,22 +637,8 @@ class BotSession extends EventEmitter {
       if (mc._client?.socket) {
         this._sharedPool.optimizeSocket(mc._client.socket);
       }
-      if (cfg.sendClientSettings !== false && mc._client && !mc._client.ended) {
-        try {
-          mc._client.write('settings', cfg.clientSettings || {
-            locale: 'en_US',
-            viewDistance: 2,
-            chatMode: 0,
-            chatColors: true,
-            displayedSkinParts: 255,
-            mainHand: 1,
-            enableTextFiltering: false,
-            allowServerListings: true,
-          });
-          this.log('sys', 'Đã gửi client settings (vanilla profile)');
-        } catch (e) {
-          this.log('err', 'Lỗi settings: ' + e.message);
-        }
+      if (cfg.sendClientSettings !== false && this._sendClientSettings(mc)) {
+        this.log('sys', 'Đã gửi client settings (vanilla profile)');
       }
       this._setTimer('loginCmd', () => {
         if (!this.isConnected) return;
@@ -836,10 +824,40 @@ class BotSession extends EventEmitter {
     });
     mc.on('error', err => {
       const m = err?.message || String(err);
+      if (this.protocolGuard.handleError(err)) return; // lỗi parse gói tin: gộp + chẩn đoán, không coi là lỗi kết nối
       if (IGNORED_ERRORS.some(k => m.includes(k))) return;
       this.log('err', m);
       this.emit('botError', { id: this.cfg.id, error: m });
     });
+  }
+  // Gửi client settings bằng API của mineflayer (tự dùng đúng tên trường theo từng phiên bản MC:
+  // chatFlags/skinParts/enableServerListing/particleStatus...). Bản cũ ghi tay chatMode/displayedSkinParts/
+  // allowServerListings -> sai tên trường nên bị gửi toàn số 0. cfg.clientSettings (nếu có) vẫn được ghi nguyên văn.
+  _sendClientSettings(mc) {
+    const client = mc?._client;
+    if (!client || client.ended) return false;
+    try {
+      const cs = this.cfg.clientSettings;
+      if (cs && typeof cs === 'object') {
+        client.write('settings', cs);
+      } else if (typeof mc.setSettings === 'function') {
+        const vd = Number(this.cfg.viewDistance);
+        mc.setSettings({
+          chat: 'enabled',
+          colorsEnabled: true,
+          viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2,
+          mainHand: 'right',
+          enableTextFiltering: false,
+          enableServerListing: true,
+        });
+      } else {
+        return false;
+      }
+      return true;
+    } catch (e) {
+      this.log('err', 'Lỗi settings: ' + e.message);
+      return false;
+    }
   }
   _startHealthCheck() {
     this._clearTimer('health');
@@ -872,20 +890,8 @@ class BotSession extends EventEmitter {
           this.log('health', `Không packet ${Math.round(packetAge / 1000)}s — gửi probe...`);
           try {
             if (mc._client && !mc._client.ended) {
-              if (this.cfg.sendClientSettings !== false && mc._client && !mc._client.ended) {
-                mc._client.write('settings', {
-                  locale: 'en_US',
-                  viewDistance: 2,
-                  chatMode: 0,
-                  chatColors: true,
-                  displayedSkinParts: 255,
-                  mainHand: 1,
-                  enableTextFiltering: false,
-                  allowServerListings: true,
-                });
-              } else {
-                mc._client.write('tab_complete', { text: '/', assumeCommand: false });
-              }
+              // gửi lại client settings: gói hợp lệ, nhẹ, không bắt server trả về danh sách lớn
+              this._sendClientSettings(mc);
             }
           } catch (e) {
             this.log('health', 'Probe thất bại: ' + e.message);
@@ -1026,8 +1032,15 @@ class BotSession extends EventEmitter {
   }
   // Hành vi "nhiễu" chung của cả jump-AFK và walk-AFK
   _afkNoise(mc) {
-    if (Math.random() < 0.02 && mc._client) {
-      try { mc._client.write('tab_complete', { text: '/', assumeCommand: false }); } catch { }
+    // tab_complete "/" khiến server trả về TOÀN BỘ danh sách lệnh (hàng trăm mục + tooltip): tốn băng thông/CPU
+    // và là thủ phạm hay gặp của lỗi "array size is abnormally large". Mặc định TẮT; bật bằng cfg.afkTabNoise=true.
+    if (this.cfg.afkTabNoise === true && Math.random() < 0.02 && mc._client && !mc._client.ended) {
+      try {
+        const legacy = mc.registry?.isOlderThan?.('1.13');
+        mc._client.write('tab_complete', legacy
+          ? { text: '/', assumeCommand: false, lookedAtBlock: undefined }
+          : { transactionId: rand(1, 65535), text: '/' });
+      } catch { }
     }
     if (Math.random() < 0.03) {
       try { mc.setQuickBarSlot(rand(0, 8)); } catch { }
