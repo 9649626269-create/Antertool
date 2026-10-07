@@ -1,3 +1,20 @@
+# Bản sửa lỗi (fixed9) — autosell_spawn bị kick "Đã xảy ra lỗi nội bộ" (fix2 không bị)
+
+**So sánh fix2 ↔ fix8:** code vòng bán (`_runSellSpawnCycle` / `_sellOneSpawn`: lookAt → chuột phải → click ô → đóng GUI) **giống hệt nhau**. Gói `block_place` và protocol không phải thủ phạm: log cho thấy bot dùng protocol 775 và server Velocity cũng báo 775 (không có lớp dịch phiên bản).
+Thứ duy nhất fix8 đổi mà server nhìn thấy được là **nội dung gói `settings` (client settings)** gửi lúc login: fix2 thực tế gửi `skinParts=0, enableServerListing=false` (do ghi sai tên trường nên ra 0), còn fix8 gửi như client thật (`skinParts=127, enableServerListing=true`). Kick xảy ra ngay giây đầu tiên của vòng bán, lần nào cũng vậy.
+
+**Chưa kiểm chứng với server thật** (môi trường sửa không có mạng/mineflayer). Đây là nghi vấn mạnh nhất theo diff, không phải kết luận chắc chắn.
+
+**Đã làm:**
+- `settings` giờ dựng theo **đúng tên trường của phiên bản đang dùng** (đọc từ minecraft-data) và mặc định **gửi đúng các giá trị fix2 đã gửi** (`"settingsProfile": "legacy"`). Muốn như client thật: `"settingsProfile": "vanilla"`.
+- Ping "Server tự báo" (mở thêm 1 kết nối tới server lúc login, fix2 không có) → **tắt mặc định**, bật bằng `"pingServerInfo": true`.
+- Khi bị kick lúc đang bán, log thêm dòng **`Gói bot gửi ngay trước khi bị kick: …`** (8 gói gửi gần nhất + trường của block_place). Nếu fix9 vẫn bị kick, gửi mình dòng này là biết chính xác gói nào gây ra.
+- Test mới `test/settings-packet.test.js` (có trong `npm test`).
+
+**Nếu vẫn bị kick:** `load.js` chạy `npm install` mới hoàn toàn (`mineflayer ^4.0.0` không khoá phiên bản) nên có thể đang dùng mineflayer/minecraft-protocol **mới hơn** bản fix2 của bạn. Trong thư mục chạy fix2 gõ `npm ls mineflayer minecraft-protocol minecraft-data` rồi gửi kết quả; so với log hiện tại: mineflayer 4.39.0, minecraft-protocol 1.68.0.
+
+---
+
 # Bản sửa lỗi (fixed8) — bị kick "Đã xảy ra lỗi nội bộ" ngay lúc autosell_spawn chuột phải lồng
 
 **Log mới:** bản fixed7 đã hết "điếc" — bot về được lồng ("đã thấy lồng cạnh bot 1/1") và bật được autosell_spawn. Nhưng cả 2 lần bị kick `Đã xảy ra lỗi nội bộ…` đều rơi đúng giây vòng bán bắt đầu (bước chuột phải vào lồng), kick xong reconnect rồi lại lặp.

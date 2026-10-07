@@ -16,6 +16,7 @@ class PacketMonitor extends EventEmitter {
     this._origWrite = null;
     this._history = [];
     this._historySize = 10;
+    this._lastOut = [];   // vòng đệm các gói bot gửi đi gần nhất (để chẩn đoán kick)
     this._alerted = { spike: false, drop: false };
   }
   attach(mc) {
@@ -27,6 +28,7 @@ class PacketMonitor extends EventEmitter {
     this.ppsOut = 0;
     this.lastPacketAt = nowMs();
     this._history = [];
+    this._lastOut = [];
     this._alerted = { spike: false, drop: false };
     this._boundIn = () => {
       this._cntIn++;
@@ -38,6 +40,20 @@ class PacketMonitor extends EventEmitter {
     this._origWrite = client.write.bind(client);
     client.write = (...args) => {
       this._cntOut++;
+      try {
+        const [name, params] = args;
+        if (name !== 'keep_alive' && name !== 'ping_request') {
+          let d = '';
+          if (params && typeof params === 'object') {
+            const keys = ['hand', 'location', 'direction', 'cursorX', 'cursorY', 'cursorZ', 'insideBlock', 'worldBorderHit', 'sequence', 'x', 'y', 'z', 'yaw', 'pitch', 'windowId', 'slot', 'mouseButton', 'mode'];
+            const parts = [];
+            for (const k of keys) if (k in params) parts.push(k + '=' + JSON.stringify(params[k]));
+            d = parts.join(' ');
+          }
+          this._lastOut.push({ at: nowMs(), name: String(name), d });
+          if (this._lastOut.length > 12) this._lastOut.shift();
+        }
+      } catch { }
       return this._origWrite(...args);
     };
     this._interval = setInterval(() => {
@@ -68,6 +84,11 @@ class PacketMonitor extends EventEmitter {
     this.ppsIn = 0;
     this.ppsOut = 0;
     this.lastPacketAt = null;
+  }
+  // Các gói gửi đi gần nhất (mới nhất ở cuối), dạng chuỗi để in log
+  recentOut(n = 8) {
+    const now = nowMs();
+    return this._lastOut.slice(-n).map(o => `-${((now - o.at) / 1000).toFixed(1)}s ${o.name}${o.d ? ' {' + o.d + '}' : ''}`);
   }
   isStale(thresholdMs = 30000) {
     if (!this.lastPacketAt) return true;

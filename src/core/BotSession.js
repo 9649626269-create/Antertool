@@ -858,27 +858,46 @@ class BotSession extends EventEmitter {
   // Gửi client settings bằng API của mineflayer (tự dùng đúng tên trường theo từng phiên bản MC:
   // chatFlags/skinParts/enableServerListing/particleStatus...). Bản cũ ghi tay chatMode/displayedSkinParts/
   // allowServerListings -> sai tên trường nên bị gửi toàn số 0. cfg.clientSettings (nếu có) vẫn được ghi nguyên văn.
+  // Dựng gói `settings` theo ĐÚNG tên trường của phiên bản đang dùng (đọc từ minecraft-data), điền giá trị theo ý nghĩa.
+  // profile 'legacy' (mặc định) = byte mà bản fix2 (chạy ổn, không bị kick) thực sự gửi: skinParts=0, serverListing=false, chatFlags=0, particles=0.
+  // profile 'vanilla' = như client thật (skinParts=127, serverListing=true).
+  _buildSettingsPacket(mc) {
+    const t = mc?.registry?.protocol?.play?.toServer?.types?.packet_settings;
+    if (!Array.isArray(t) || t[0] !== 'container' || !Array.isArray(t[1])) return null;
+    const vd = Number(this.cfg.viewDistance);
+    const vanilla = this.cfg.settingsProfile === 'vanilla';
+    const val = {
+      locale: 'en_US',
+      viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2,
+      chatFlags: 0, chatMode: 0,
+      chatColors: true, colorsEnabled: true,
+      skinParts: vanilla ? 127 : 0, displayedSkinParts: vanilla ? 127 : 0,
+      mainHand: 1,
+      enableTextFiltering: false,
+      enableServerListing: vanilla, allowServerListings: vanilla,
+      particleStatus: 0,
+    };
+    const pkt = {};
+    for (const f of t[1]) {
+      if (!f || !f.name) continue;
+      pkt[f.name] = f.name in val ? val[f.name] : (/bool|flag/i.test(JSON.stringify(f.type)) ? false : 0);
+    }
+    return pkt;
+  }
   _sendClientSettings(mc) {
     const client = mc?._client;
     if (!client || client.ended) return false;
     try {
       const cs = this.cfg.clientSettings;
-      if (cs && typeof cs === 'object') {
-        client.write('settings', cs);
-      } else if (typeof mc.setSettings === 'function') {
+      if (cs && typeof cs === 'object') { client.write('settings', cs); return true; }
+      const pkt = this._buildSettingsPacket(mc);
+      if (pkt) { client.write('settings', pkt); return true; }
+      if (typeof mc.setSettings === 'function') {   // không đọc được định nghĩa gói -> để mineflayer tự gửi
         const vd = Number(this.cfg.viewDistance);
-        mc.setSettings({
-          chat: 'enabled',
-          colorsEnabled: true,
-          viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2,
-          mainHand: 'right',
-          enableTextFiltering: false,
-          enableServerListing: true,
-        });
-      } else {
-        return false;
+        mc.setSettings({ chat: 'enabled', colorsEnabled: true, viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2, mainHand: 'right', enableTextFiltering: false, enableServerListing: this.cfg.settingsProfile === 'vanilla' });
+        return true;
       }
-      return true;
+      return false;
     } catch (e) {
       this.log('err', 'Lỗi settings: ' + e.message);
       return false;
@@ -1401,6 +1420,7 @@ class BotSession extends EventEmitter {
     if (!this._sellSpawnOn || !this._sellSpawnBusy) return;
     this._sellKickStrikes = (this._sellKickStrikes || 0) + 1;
     this.log('warn', `Bị kick khi đang chạy vòng auto-sell spawn (lần ${this._sellKickStrikes}/2): "${String(kickMsg).substring(0, 80)}"`);
+    try { this.log('sys', 'Gói bot gửi ngay trước khi bị kick: ' + this.packetMgr.recentOut(8).join(' | ')); } catch { }
     if (this._sellKickStrikes >= 2) {
       this._sellKickStrikes = 0;
       this._stopSellSpawn();
@@ -1420,7 +1440,7 @@ class BotSession extends EventEmitter {
       } catch { }
       this.log('sys', `Giao thức: bot dùng MC ${mc.version || '?'} (protocol ${mc.protocolVersion ?? mc.registry?.version?.version ?? '?'}), config version=${this.cfg.version ? `"${this.cfg.version}"` : 'tự dò'} | mineflayer ${mfv}, minecraft-protocol ${mpv}${bp ? ` | block_place: ${bp}` : ''}`);
     } catch { }
-    if (this._pingLogged || this.proxy) return;
+    if (this.cfg.pingServerInfo !== true || this._pingLogged || this.proxy) return; // opt-in: fix2 không mở kết nối ping phụ
     this._pingLogged = true;
     try {
       const mp = require('minecraft-protocol');
