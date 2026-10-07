@@ -6,7 +6,7 @@ const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
 const RevenueTracker = require('../core/RevenueTracker');
-const { pickTheme, TIMING, CS, CAPACITY } = require('../core/constants');
+const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
 class BotManager {
   constructor(options = {}) {
     this.configPath = options.configPath || require('path').join(process.cwd(), 'config.json');
@@ -90,7 +90,7 @@ class BotManager {
     const merged = {
       host: cfg.host || this._config.host,
       port: cfg.port || this._config.port,
-      version: cfg.version || this._config.version,
+      version: resolveVersion(cfg.version, this._config.version),
       username: cfg.username,
       ownerUsername: cfg.ownerUsername || this._config.ownerUsername,
       registered: cfg.registered !== undefined ? cfg.registered : false,
@@ -139,8 +139,8 @@ class BotManager {
       autoSellSpawnIgnoreChat: cfg.autoSellSpawnIgnoreChat ?? true,
       autoSellSpawnReportMin: cfg.autoSellSpawnReportMin ?? 0,
       afkTabNoise: cfg.afkTabNoise ?? this._config.afkTabNoise ?? false,
-      settingsProfile: cfg.settingsProfile ?? this._config.settingsProfile ?? 'legacy',
-      pingServerInfo: cfg.pingServerInfo ?? this._config.pingServerInfo ?? false,
+      settingsProfile: cfg.settingsProfile ?? this._config.settingsProfile ?? 'vanilla',
+      pingServerInfo: cfg.pingServerInfo ?? this._config.pingServerInfo ?? null,
       proxyAutoRotate: cfg.proxyAutoRotate ?? this._config.proxyAutoRotate ?? false,
       proxyRotateMinMinutes: cfg.proxyRotateMinMinutes ?? this._config.proxyRotateMinMinutes ?? 1,
       proxyRotateMaxMinutes: cfg.proxyRotateMaxMinutes ?? this._config.proxyRotateMaxMinutes ?? 10,
@@ -161,7 +161,7 @@ class BotManager {
       id: data.id,
       host: data.host || this._config.host,
       port: data.port || this._config.port,
-      version: data.version || this._config.version,
+      version: resolveVersion(data.version, this._config.version),
       username: data.username,
       ownerUsername: data.ownerUsername || this._config.ownerUsername,
       botPassword: data.password || data.botPassword || this._config.botPassword,
@@ -208,8 +208,8 @@ class BotManager {
       autoSellSpawnIgnoreChat: data.autoSellSpawnIgnoreChat ?? true,
       autoSellSpawnReportMin: data.autoSellSpawnReportMin ?? 0,
       afkTabNoise: data.afkTabNoise ?? this._config.afkTabNoise ?? false,
-      settingsProfile: data.settingsProfile ?? this._config.settingsProfile ?? 'legacy',
-      pingServerInfo: data.pingServerInfo ?? this._config.pingServerInfo ?? false,
+      settingsProfile: data.settingsProfile ?? this._config.settingsProfile ?? 'vanilla',
+      pingServerInfo: data.pingServerInfo ?? this._config.pingServerInfo ?? null,
       proxyAutoRotate: data.proxyAutoRotate ?? this._config.proxyAutoRotate ?? false,
       proxyRotateMinMinutes: data.proxyRotateMinMinutes ?? this._config.proxyRotateMinMinutes ?? 1,
       proxyRotateMaxMinutes: data.proxyRotateMaxMinutes ?? this._config.proxyRotateMaxMinutes ?? 10,

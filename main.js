@@ -1,4 +1,5 @@
 'use strict';
+const { resolveVersion } = require('./src/core/constants');
 const http = require('http');
 const path = require('path');
 const chalk = require('chalk');
@@ -233,7 +234,7 @@ function cliAddBot(args) {
   const root = manager._config || {};
   const host = hostArg || tpl.host || root.host;
   const port = portArg || parseInt(tpl.port || root.port || 25565, 10);
-  const version = verArg || tpl.version || root.version;
+  const version = resolveVersion(verArg, tpl.version, root.version);
   const owner = ownerArg || tpl.ownerUsername || root.ownerUsername || '';
   if (!host) { console.log(colors.err('  ✗ Chưa biết IP server — thêm vào cuối lệnh, vd: addbot ' + username + ' mk ' + password + ' play.abc.vn')); return null; }
   const bot = manager.createBot({ id, host, port, version, username, password, ownerUsername: owner });

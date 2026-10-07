@@ -16,12 +16,19 @@ const registry = { protocol: { play: { toServer: { types: { packet_settings: ['c
 ]] } } } } };
 const mk = (cfg) => ({ cfg, _buildSettingsPacket: proto._buildSettingsPacket });
 
-let p = mk({}); p = p._buildSettingsPacket({ registry });
-assert.strictEqual(p.skinParts, 0, 'legacy: skinParts=0 (như fix2)');
-assert.strictEqual(p.enableServerListing, false, 'legacy: serverListing=false (như fix2)');
+let p = mk({})._buildSettingsPacket({ registry });
+assert.strictEqual(p.skinParts, 127, 'mặc định (vanilla): skinParts=127 như client thật');
+assert.strictEqual(p.enableServerListing, true);
 assert.strictEqual(p.viewDistance, 2); assert.strictEqual(p.chatColors, true); assert.strictEqual(p.mainHand, 1);
 assert.strictEqual(p.futureField, false, 'trường lạ kiểu bool -> false');
-let v = mk({ settingsProfile: 'vanilla' })._buildSettingsPacket({ registry });
-assert.strictEqual(v.skinParts, 127); assert.strictEqual(v.enableServerListing, true);
+let l = mk({ settingsProfile: 'legacy' })._buildSettingsPacket({ registry });
+assert.strictEqual(l.skinParts, 0, 'legacy: như fix2'); assert.strictEqual(l.enableServerListing, false);
 assert.strictEqual(mk({})._buildSettingsPacket({ registry: {} }), null, 'không có định nghĩa -> null (fallback setSettings)');
+// phiên bản mặc định: để trống KHÔNG được thành "tự dò" (server sau Velocity sẽ dò ra giao thức mới hơn server thật)
+const { resolveVersion, DEFAULT_MC_VERSION } = require('../src/core/constants');
+assert.strictEqual(DEFAULT_MC_VERSION, '1.21.11');
+assert.strictEqual(resolveVersion(undefined, '', null), '1.21.11');
+assert.strictEqual(resolveVersion('1.20.4', '1.21.1'), '1.20.4');
+assert.strictEqual(resolveVersion('', '1.21.1'), '1.21.1');
+assert.strictEqual(resolveVersion('auto'), undefined, '"auto" = cố ý tự dò');
 console.log('settings-packet.test OK');

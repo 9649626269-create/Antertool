@@ -859,13 +859,13 @@ class BotSession extends EventEmitter {
   // chatFlags/skinParts/enableServerListing/particleStatus...). Bản cũ ghi tay chatMode/displayedSkinParts/
   // allowServerListings -> sai tên trường nên bị gửi toàn số 0. cfg.clientSettings (nếu có) vẫn được ghi nguyên văn.
   // Dựng gói `settings` theo ĐÚNG tên trường của phiên bản đang dùng (đọc từ minecraft-data), điền giá trị theo ý nghĩa.
-  // profile 'legacy' (mặc định) = byte mà bản fix2 (chạy ổn, không bị kick) thực sự gửi: skinParts=0, serverListing=false, chatFlags=0, particles=0.
-  // profile 'vanilla' = như client thật (skinParts=127, serverListing=true).
+  // profile 'vanilla' (mặc định) = như client thật (skinParts=127, serverListing=true).
+  // profile 'legacy' = byte mà fix2 gửi (skinParts=0, serverListing=false). Đã kiểm chứng: KHÔNG liên quan tới lỗi kick autosell.
   _buildSettingsPacket(mc) {
     const t = mc?.registry?.protocol?.play?.toServer?.types?.packet_settings;
     if (!Array.isArray(t) || t[0] !== 'container' || !Array.isArray(t[1])) return null;
     const vd = Number(this.cfg.viewDistance);
-    const vanilla = this.cfg.settingsProfile === 'vanilla';
+    const vanilla = this.cfg.settingsProfile !== 'legacy';
     const val = {
       locale: 'en_US',
       viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2,
@@ -894,7 +894,7 @@ class BotSession extends EventEmitter {
       if (pkt) { client.write('settings', pkt); return true; }
       if (typeof mc.setSettings === 'function') {   // không đọc được định nghĩa gói -> để mineflayer tự gửi
         const vd = Number(this.cfg.viewDistance);
-        mc.setSettings({ chat: 'enabled', colorsEnabled: true, viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2, mainHand: 'right', enableTextFiltering: false, enableServerListing: this.cfg.settingsProfile === 'vanilla' });
+        mc.setSettings({ chat: 'enabled', colorsEnabled: true, viewDistance: Number.isFinite(vd) && vd > 0 ? vd : 2, mainHand: 'right', enableTextFiltering: false, enableServerListing: this.cfg.settingsProfile !== 'legacy' });
         return true;
       }
       return false;
@@ -1424,7 +1424,7 @@ class BotSession extends EventEmitter {
     if (this._sellKickStrikes >= 2) {
       this._sellKickStrikes = 0;
       this._stopSellSpawn();
-      this.log('err', 'autosell_spawn bị kick 2 lần liên tiếp ngay lúc chuột phải lồng → đã tự TẮT. Nghi gói chuột phải (block_place) không khớp phiên bản server: xem dòng "Giao thức" ở lúc kết nối, đặt đúng "version" trong config hoặc cập nhật mineflayer/minecraft-protocol/minecraft-data, rồi bật lại bằng: autosell_spawn on');
+      this.log('err', 'autosell_spawn bị kick 2 lần liên tiếp ngay lúc chuột phải lồng → đã tự TẮT. Nguyên nhân hay gặp nhất: bot đang nói giao thức KHÁC bản server thật (proxy Velocity dịch phiên bản làm hỏng gói chuột phải). Xem dòng \"Giao thức\" lúc kết nối; đặt \"version\" của bot đúng bản bạn dùng để chơi thật (vd \"1.21.11\") trong config.json rồi khởi động lại; bật lại bằng: autosell_spawn on');
     }
   }
   // Ghi rõ bot đang nói chuyện bằng giao thức nào + server tự báo phiên bản gì (lệch phiên bản là nguyên nhân hay gặp của lỗi parse/kick lạ)
@@ -1440,7 +1440,8 @@ class BotSession extends EventEmitter {
       } catch { }
       this.log('sys', `Giao thức: bot dùng MC ${mc.version || '?'} (protocol ${mc.protocolVersion ?? mc.registry?.version?.version ?? '?'}), config version=${this.cfg.version ? `"${this.cfg.version}"` : 'tự dò'} | mineflayer ${mfv}, minecraft-protocol ${mpv}${bp ? ` | block_place: ${bp}` : ''}`);
     } catch { }
-    if (this.cfg.pingServerInfo !== true || this._pingLogged || this.proxy) return; // opt-in: fix2 không mở kết nối ping phụ
+    if (this._pingLogged || this.proxy) return;
+    if (!(this.cfg.pingServerInfo === true || (!this.cfg.version && this.cfg.pingServerInfo !== false))) return; // mặc định chỉ ping khi version để tự dò
     this._pingLogged = true;
     try {
       const mp = require('minecraft-protocol');

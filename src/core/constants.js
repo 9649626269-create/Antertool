@@ -70,3 +70,16 @@ exports.TABLE_CHARS = {
   'left': '│', 'left-mid': '├', 'mid': '─', 'mid-mid': '┼',
   'right': '│', 'right-mid': '┤', 'middle': '│',
 };
+// Phiên bản Minecraft mặc định khi KHÔNG cấu hình "version". Lý do: để trống = bot tự dò bằng cách ping server, mà server nằm sau proxy
+// Velocity luôn báo protocol MỚI NHẤT của chính proxy (vd 26.1 = 775) dù server thật chạy 1.21.11 -> bot nói giao thức 775, proxy phải dịch
+// (ViaVersion) sang 1.21.11 và dịch hỏng gói chuột phải (block_place) => bị kick "Đã xảy ra lỗi nội bộ". Đặt "version": "auto" để tự dò như cũ.
+exports.DEFAULT_MC_VERSION = '1.21.11';
+exports.resolveVersion = (...candidates) => {
+  for (const c of candidates) {
+    if (c === undefined || c === null || c === '' || c === false) continue;
+    const v = String(c).trim();
+    if (!v) continue;
+    return /^(auto|detect)$/i.test(v) ? undefined : v;
+  }
+  return exports.DEFAULT_MC_VERSION;
+};

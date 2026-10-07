@@ -1,17 +1,19 @@
-# Bản sửa lỗi (fixed9) — autosell_spawn bị kick "Đã xảy ra lỗi nội bộ" (fix2 không bị)
+# Bản sửa lỗi (fixed10) — autosell_spawn bị kick "Đã xảy ra lỗi nội bộ" (fix2 không bị)
 
-**So sánh fix2 ↔ fix8:** code vòng bán (`_runSellSpawnCycle` / `_sellOneSpawn`: lookAt → chuột phải → click ô → đóng GUI) **giống hệt nhau**. Gói `block_place` và protocol không phải thủ phạm: log cho thấy bot dùng protocol 775 và server Velocity cũng báo 775 (không có lớp dịch phiên bản).
-Thứ duy nhất fix8 đổi mà server nhìn thấy được là **nội dung gói `settings` (client settings)** gửi lúc login: fix2 thực tế gửi `skinParts=0, enableServerListing=false` (do ghi sai tên trường nên ra 0), còn fix8 gửi như client thật (`skinParts=127, enableServerListing=true`). Kick xảy ra ngay giây đầu tiên của vòng bán, lần nào cũng vậy.
+**Nguyên nhân (đã đối chiếu log + ảnh):** bot đang chạy **giao thức 26.1 (775)** còn server thật là **1.21.11** (client Meteor 1.21.11 trong ảnh vào được bình thường).
+- `config.json` của fix2 ghi sẵn `"version": "1.21.11"` cho bot. Bản bạn chạy qua `load.js` có `config.json` riêng, bot không có `version` → để **tự dò**.
+- Tự dò = ping server. Server nằm sau proxy **Velocity 26.1**, proxy luôn báo protocol mới nhất của chính nó (775) dù server phía sau chạy 1.21.11 → bot chọn 775, proxy phải dịch 775→1.21.11 (ViaVersion) và dịch hỏng đúng gói **chuột phải (`block_place`)** → Velocity kick "An internal error occurred in your connection".
+- Bằng chứng trong log fix9: 8 gói cuối trước khi bị kick là `… position_look → block_place → arm_animation` rồi kick ngay; mọi thứ trước đó bình thường. Code vòng bán của fix2 và fix8 giống hệt nhau — chỉ khác phiên bản giao thức.
+- **Đính chính fix9:** mình đã đoán nguyên nhân là gói `settings` — **sai** (log fix9 vẫn bị kick). Đã trả mặc định về như client thật (`"settingsProfile": "vanilla"`); `"legacy"` vẫn còn nếu cần.
 
-**Chưa kiểm chứng với server thật** (môi trường sửa không có mạng/mineflayer). Đây là nghi vấn mạnh nhất theo diff, không phải kết luận chắc chắn.
+**Đã sửa:**
+- Để trống `version` giờ mặc định **1.21.11** (trước: tự dò). Muốn tự dò như cũ: `"version": "auto"`. Áp dụng cho bot đã có sẵn trong config (không cần sửa tay) và cho `addbot`.
+- Thông báo khi autosell bị kick 2 lần giờ chỉ thẳng vào việc đặt đúng `version`.
+- Ping "Server tự báo" chạy lại khi `version` để tự dò (tắt: `"pingServerInfo": false`).
+- Giữ dòng chẩn đoán `Gói bot gửi ngay trước khi bị kick: …`.
+- Test mới: `test/settings-packet.test.js` (gồm kiểm tra `resolveVersion`).
 
-**Đã làm:**
-- `settings` giờ dựng theo **đúng tên trường của phiên bản đang dùng** (đọc từ minecraft-data) và mặc định **gửi đúng các giá trị fix2 đã gửi** (`"settingsProfile": "legacy"`). Muốn như client thật: `"settingsProfile": "vanilla"`.
-- Ping "Server tự báo" (mở thêm 1 kết nối tới server lúc login, fix2 không có) → **tắt mặc định**, bật bằng `"pingServerInfo": true`.
-- Khi bị kick lúc đang bán, log thêm dòng **`Gói bot gửi ngay trước khi bị kick: …`** (8 gói gửi gần nhất + trường của block_place). Nếu fix9 vẫn bị kick, gửi mình dòng này là biết chính xác gói nào gây ra.
-- Test mới `test/settings-packet.test.js` (có trong `npm test`).
-
-**Nếu vẫn bị kick:** `load.js` chạy `npm install` mới hoàn toàn (`mineflayer ^4.0.0` không khoá phiên bản) nên có thể đang dùng mineflayer/minecraft-protocol **mới hơn** bản fix2 của bạn. Trong thư mục chạy fix2 gõ `npm ls mineflayer minecraft-protocol minecraft-data` rồi gửi kết quả; so với log hiện tại: mineflayer 4.39.0, minecraft-protocol 1.68.0.
+**Kiểm tra sau khi chạy:** dòng `Giao thức:` phải ra `MC 1.21.11 (protocol 774)`, `config version="1.21.11"`; vòng bán không còn bị kick. Nếu vẫn kick, gửi lại dòng `Gói bot gửi ngay trước khi bị kick`.
 
 ---
 
