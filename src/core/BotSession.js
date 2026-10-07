@@ -1400,6 +1400,8 @@ class BotSession extends EventEmitter {
     }
     this._sellSpawnOn = true;
     this._persistSellSpawnState();
+    // Bật là chỉnh góc nhìn về lồng NGAY (chưa bán). Vòng bán đầu tiên chạy sau đó vài giây và còn xoay lại + kiểm tra tia ngắm trước khi chuột phải từng lồng.
+    this._alignViewToSellSpawn(this.mc).catch(e => this.log('warn', 'Auto-sell Spawn: chỉnh góc nhìn lỗi: ' + e.message));
     this._scheduleSellSpawn(resume ? 8000 : 3000);
     this.log('sys', `Auto-sell Spawn: BẬT — ${this.sellSpawnList.length} lồng, click ô ${this.autoSellSpawnSlot}, lặp mỗi ${this._fmtDuration(this._sellSpawnIntervalMs())}`);
     return true;
@@ -1470,6 +1472,32 @@ class BotSession extends EventEmitter {
     this._runSellSpawnCycle().catch(e => this.log('err', 'Auto-sell Spawn lỗi: ' + e.message));
     return true;
   }
+  // Xoay đầu nhìn thẳng vào tâm block p rồi KIỂM TRA tia ngắm đang trúng đúng block đó (blockAtCursor); lệch thì xoay lại, tối đa `tries` lần.
+  // true = tia ngắm trúng block. false = đã xoay nhưng bị block khác che / ngoài tầm (người gọi vẫn quyết định có làm tiếp hay không).
+  async _faceBlock(mc, p, { reach = SELL_SPAWN_REACH, tries = 2, stop = null } = {}) {
+    const center = makeVec3(p.x + 0.5, p.y + 0.5, p.z + 0.5);
+    for (let i = 0; i < tries; i++) {
+      if ((stop && stop()) || !this.isOnline || this.mc !== mc) return false;
+      try { await mc.lookAt(center, true); } catch { }
+      await sleep(jit(250, 80)); // chờ gói xoay đầu tới server trước khi click/đào
+      if (typeof mc.blockAtCursor !== 'function') return true; // phiên bản mineflayer không có -> không kiểm tra được, coi như đã nhìn
+      let hit = null;
+      try { hit = mc.blockAtCursor(reach + 1); } catch { }
+      if (hit?.position && hit.position.x === p.x && hit.position.y === p.y && hit.position.z === p.z) return true;
+    }
+    return false;
+  }
+  // Lúc BẬT autosell_spawn: xoay đầu về lồng đầu tiên trong tầm (AFK/teleport có thể đã xoay bot đi hướng khác) rồi mới tới vòng bán.
+  async _alignViewToSellSpawn(mc) {
+    if (!this.isOnline || !mc?.entity?.position) return false;
+    if (this._isBusy || this._tp.frozen(nowMs())) return false; // đang bận / đang chờ teleport thì không xoay đầu
+    const eye = mc.entity.position.offset(0, 1.62, 0);
+    const p = this.sellSpawnList.find(q => eye.distanceTo(makeVec3(q.x + 0.5, q.y + 0.5, q.z + 0.5)) <= SELL_SPAWN_REACH);
+    if (!p) { this.log('warn', 'Auto-sell Spawn: chưa có lồng nào trong tầm để chỉnh góc nhìn'); return false; }
+    const ok = await this._faceBlock(mc, p);
+    this.log(ok ? 'sys' : 'warn', `Auto-sell Spawn: ${ok ? 'đã chỉnh góc nhìn về lồng' : 'đã xoay về lồng nhưng tia ngắm chưa trúng (có block che?)'} (${p.x},${p.y},${p.z})`);
+    return ok;
+  }
   _withTimeout(p, ms) {
     const pr = Promise.resolve(p);
     pr.catch(() => { }); // tránh unhandled rejection nếu promise lỗi sau khi đã hết giờ chờ
@@ -1525,9 +1553,10 @@ class BotSession extends EventEmitter {
     const dist = mc.entity.position.offset(0, 1.62, 0).distanceTo(center);
     if (dist > SELL_SPAWN_REACH) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: quá xa (${dist.toFixed(1)} block) — bot không tự di chuyển, bỏ qua`); return false; }
     if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch { } await sleep(300); }
-    try { await mc.lookAt(center, true); } catch { }
-    await sleep(jit(250, 80));
+    // nhìn thẳng vào lồng + kiểm tra tia ngắm trúng lồng rồi MỚI chuột phải
+    const aimed = await this._faceBlock(mc, p, { stop });
     if (stop()) return false;
+    if (!aimed) this.log('warn', `Auto-sell Spawn [${tag}] ${at}: tia ngắm chưa trúng lồng (có block che?) — vẫn thử chuột phải`);
     // đăng ký chờ GUI TRƯỚC khi click để không lỡ sự kiện windowOpen
     const winP = this._waitWindowOpen(mc, 6000);
     try { await this._withTimeout(mc.activateBlock(block), 2500); }
@@ -1786,6 +1815,9 @@ class BotSession extends EventEmitter {
     if (ecId !== undefined) {
       const blk = mc.findBlock({ matching: ecId, maxDistance: 4.5 });
       if (blk) {
+        // nhìn thẳng vào ender chest (kiểm tra tia ngắm trúng rương) rồi MỚI mở rương
+        const aimed = await this._faceBlock(mc, blk.position, { reach: 5 });
+        this.log('sys', `Bảo vệ Lồng Spawn: nhìn vào ender chest (${blk.position.x},${blk.position.y},${blk.position.z}) → mở rương${aimed ? '' : ' (tia ngắm chưa trúng rương — có block che?)'}`);
         try { const w = await mc.openContainer(blk); await sleep(450); return w; }
         catch (e) { this.log('warn', 'Mở ender chest (rương thật) lỗi: ' + e.message); }
       }
@@ -1841,6 +1873,7 @@ class BotSession extends EventEmitter {
     if (!before.length) return { found: 0, left: 0, failed: false };
     const win = await this._openEnderChest();
     if (!win) return { found: before.length, left: before.length, failed: true };
+    this.log('sys', `Bảo vệ Lồng Spawn: đã mở ender chest — bỏ ${before.length} stack lồng vào`);
     try {
       const start = win.inventoryStart ?? Math.max(0, win.slots.length - 36);
       for (let i = start; i < win.slots.length; i++) {
@@ -1891,6 +1924,9 @@ class BotSession extends EventEmitter {
     try {
       for (const p of targets) {
         let outOfReach = false;
+        // nhìn thẳng vào lồng (kiểm tra tia ngắm trúng lồng) rồi MỚI đào
+        const aimed = await this._faceBlock(mc, p, { reach: 6, stop: () => !this._spawnerProtectOn });
+        if (this.isOnline && this._spawnerProtectOn) this.log(aimed ? 'sys' : 'warn', `Bảo vệ Lồng Spawn: nhìn vào lồng (${p.x},${p.y},${p.z}) → đào${aimed ? '' : ' (tia ngắm chưa trúng lồng — có block che?)'}`);
         for (let i = 0; i < 12; i++) { // stack còn dư thì đập tiếp
           if (!this.isOnline) throw new Error('bot offline');
           if (!this._spawnerProtectOn) throw new Error('đã tắt bảo vệ giữa chừng');

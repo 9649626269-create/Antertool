@@ -169,7 +169,7 @@ Sau khi macro chạy và tiêu tiền, tiền tụt xuống dưới ngưỡng th
 
 1. **Khi bật**: tự lưu toạ độ mọi lồng trong **5 block** quanh bot (không cần `addspawner`; toạ độ cũ đã biến mất tự bị dọn).
 2. **Cứ 5 tick (250ms)** quét người chơi trong **20 block** quanh bot. Owner, `spawnerWhitelist` và các bot khác trong dàn được tin, không bị coi là người lạ.
-3. **Thấy người lạ**: lấy cúp trong túi đồ → không có thì mở **ender chest** lấy cúp → **giữ shift** đập hết lồng (plugin gộp lồng cho đào cả stack trong 1 lần; còn dư thì đập tiếp) → nhặt item rơi (nếu server không tự cho vào túi) → **cất mọi item có tên chứa "lồng" hoặc "spawn"** vào ender chest.
+3. **Thấy người lạ**: lấy cúp trong túi đồ → không có thì **nhìn vào ender chest → mở rương** lấy cúp → **giữ shift**, **nhìn vào lồng → đào** (làm lần lượt từng lồng; plugin gộp lồng cho đào cả stack trong 1 lần, còn dư thì đào tiếp) → nhặt item rơi (nếu server không tự cho vào túi) → **nhìn vào ender chest → mở rương → bỏ mọi item có tên chứa "lồng" hoặc "spawn" vào**. Mỗi lần "nhìn" bot xoay đầu rồi kiểm tra tia ngắm có trúng đúng lồng/rương không (bị block khác che thì log cảnh báo, vẫn làm tiếp).
 4. **Không có cúp ở cả túi đồ lẫn ender chest**: gửi cảnh báo **webhook liên tục** (mỗi 5s, còn người lạ là còn báo). Bot ở lại online để tiếp tục báo, nên `spawnerAutoDisconnect` không cắt trong trường hợp này.
 
 ```
@@ -240,6 +240,8 @@ Webhook có 2 loại sự kiện mới: `featuresReady` và `homeReturn` (tự t
 ## Auto-sell Spawn (tự bán ở lồng theo chu kỳ)
 
 Bot định kỳ đi qua từng lồng trong danh sách: **chuột phải vào lồng** (mở GUI, *không* đập block) → **click ô số 51** → **đóng GUI** → sang lồng kế tiếp. Hết vòng thì chờ tới chu kỳ sau.
+
+**Khi bật** `autosell_spawn`, bot xoay đầu về lồng trong tầm ngay (chỉnh lại góc nhìn) rồi mới tới vòng bán đầu tiên. Ở mỗi lồng, bot cũng **nhìn thẳng vào lồng + kiểm tra tia ngắm trúng lồng** trước khi chuột phải.
 
 ```
 cmd s1 autosell_spawn scan              # lưu mọi lồng trong 5 block quanh bot vào danh sách

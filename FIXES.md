@@ -1,3 +1,17 @@
+# Bản sửa (fixed12) — autosell_spawn chỉnh góc nhìn trước khi bán; spawnerprotect nhìn lồng → đào → nhìn ender chest → mở → bỏ lồng vào
+
+**Yêu cầu:** (1) khi bật `autosell_spawn` phải chỉnh lại góc nhìn về lồng rồi mới bán; (2) `spawnerprotect` làm đúng thứ tự: nhìn vào lồng → đào → nhìn vào ender chest → mở rương → bỏ lồng vào.
+
+**Đã sửa (`BotSession.js`):**
+- Hàm mới `_faceBlock()`: xoay đầu nhìn thẳng vào tâm block, chờ ~0.25s cho gói xoay tới server, rồi kiểm tra tia ngắm (`blockAtCursor`) có trúng đúng block đó không; lệch thì xoay lại (tối đa 2 lần). Không trúng (bị block khác che) thì log cảnh báo và vẫn làm tiếp như cũ — không chặn tính năng.
+- `autosell_spawn`: lúc **bật** (cả lúc tự bật lại sau khi vào server) bot xoay về lồng đầu tiên trong tầm ngay (`_alignViewToSellSpawn`, bỏ qua nếu đang bận/đang chờ teleport). Mỗi lồng trong vòng bán đều `nhìn lồng → chuột phải → click ô`, có kiểm tra tia ngắm.
+- `spawnerprotect`: từng lồng `nhìn vào lồng → đào`; `_openEnderChest` giờ `nhìn vào ender chest → mở rương` (rương thật trong 4.5 block; không có thì vẫn dùng `enderChestCommand`) rồi mới shift-click lồng vào. Dùng chung cho cả bước lấy cúp từ ender chest. Log từng bước: `nhìn vào lồng (x,y,z) → đào`, `nhìn vào ender chest (x,y,z) → mở rương`, `đã mở ender chest — bỏ N stack lồng vào`.
+- Test mới `test/view-order.test.js` (có trong `npm test`): kiểm tra thứ tự các bước bằng bot giả lập (mineflayer/vec3 giả, không cần server).
+
+**Chưa test trên server thật.** Cần xem trong log lúc chạy thật: dòng `đã chỉnh góc nhìn về lồng`, rồi `nhìn vào lồng … → đào`, `nhìn vào ender chest … → mở rương`. Nếu hay thấy `tia ngắm chưa trúng` thì có block đứng chắn giữa bot và lồng/rương.
+
+---
+
 # Bản sửa lỗi (fixed11) — auto menu không tự click vào server, phải gõ tay `cmd <bot> menu`
 
 **Triệu chứng:** sau khi đăng nhập, bot gõ `/menu`, GUI `[MENU]` mở ra, log báo "Đã vào server thành công qua menu" + "Menu xong" nhưng **không có dòng `Click slot 24`** → bot vẫn ở sảnh. Gõ tay `cmd accchinh menu` thì có `Click slot 24` và vào được.
