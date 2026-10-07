@@ -1,3 +1,22 @@
+# Bản sửa lỗi (fixed11) — auto menu không tự click vào server, phải gõ tay `cmd <bot> menu`
+
+**Triệu chứng:** sau khi đăng nhập, bot gõ `/menu`, GUI `[MENU]` mở ra, log báo "Đã vào server thành công qua menu" + "Menu xong" nhưng **không có dòng `Click slot 24`** → bot vẫn ở sảnh. Gõ tay `cmd accchinh menu` thì có `Click slot 24` và vào được.
+
+**Nguyên nhân (đọc từ code + log, khớp từng dòng):** hai đoạn code xung đột nhau.
+- `windowOpen` (BotSession): thấy GUI tên có "MENU" → đặt `_menuSuccess = true` **rồi mới** gọi `WindowRouter.route`.
+- `WindowRouter._handleUnknown`: chỉ click ô vào server khi `_menuSuccess` còn **false** (hoặc vừa gõ tay lệnh `menu`, có `_manualMenuUntil`); ngược lại **đóng GUI**. Vì `_menuSuccess` đã bị đặt true từ trước nên luôn rơi vào nhánh đóng GUI.
+- Gõ tay thì có `_manualMenuUntil` nên mới click được. Lỗi này có từ fix2, không phải do fix8.
+
+**Đã sửa:**
+- `windowOpen` không đặt `_menuSuccess` trước khi route nữa. `_handleUnknown` click ô 24 rồi mới đặt `_menuSuccess` + gọi `_onMenuDone`. Nếu chưa click được (ô trống) thì vòng `menuRetry` vẫn chạy, mở lại `/menu`.
+- `WindowRouter.route()` giờ trả `true/false` (route đăng ký sẵn đã xử lý hay GUI lạ) để trường hợp GUI do route khác xử lý vẫn tính là xong bước menu.
+- Log đổi thành "Đã mở GUI menu … — click ô vào server" (trước đó báo "vào server thành công" sai sự thật).
+- Test mới `test/menu-click.test.js` (có trong `npm test`).
+
+**Kiểm tra sau khi chạy:** sau khi đăng nhập phải thấy `Gửi menu lần 1` → `Click slot 24 trong [MENU]` → `Menu xong (click ô 24)`, rồi bot tự vào server mà không cần gõ tay.
+
+---
+
 # Bản sửa lỗi (fixed10) — autosell_spawn bị kick "Đã xảy ra lỗi nội bộ" (fix2 không bị)
 
 **Nguyên nhân (đã đối chiếu log + ảnh):** bot đang chạy **giao thức 26.1 (775)** còn server thật là **1.21.11** (client Meteor 1.21.11 trong ảnh vào được bình thường).

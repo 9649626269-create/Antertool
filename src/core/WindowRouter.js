@@ -23,7 +23,7 @@ const WindowRouter = {
           route.handler(bot, win);
           handled = true;
           bot.log('sys', `WindowRouter: matched [${route.name}] for [${title.substring(0, 40)}]`);
-          return;
+          return true;
         }
       } catch (e) {
         bot.log('err', `WindowRouter lỗi route ${route.name}: ${e.message}`);
@@ -33,6 +33,7 @@ const WindowRouter = {
       bot._clearTimer('windowTimeout');
       this._handleUnknown(bot, win, title);
     }
+    return handled; // true = một route đã đăng ký xử lý; false = GUI lạ (đi vào _handleUnknown)
   },
   _handleUnknown(bot, win, title) {
     if (!title || !title.trim()) {

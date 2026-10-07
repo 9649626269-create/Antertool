@@ -805,11 +805,12 @@ class BotSession extends EventEmitter {
           if (cfg.autoMenu && cfg.menuCommand && !this._menuSuccess) {
             if (title.includes('MENU') || title.includes('LOBBY') || title.includes('HUB') ||
                 title.includes('CHỌN') || title.includes('KHU') || title.includes('WORLD')) {
-              this._menuSuccess = true;
-              this._clearTimer('menuRetry');
-              this.log('ok', `Đã vào server thành công qua menu: [${title.substring(0, 40)}]`);
-              WindowRouter.route(this, win);
-              this._onMenuDone(`GUI [${title.substring(0, 30)}]`);
+              // KHÔNG đặt _menuSuccess ở đây: WindowRouter._handleUnknown chỉ click ô vào server khi _menuSuccess còn false
+              // (bước menu). Đặt trước khi route thì GUI bị ĐÓNG mà không click => bot kẹt ở sảnh, phải gõ tay "menu".
+              // _menuSuccess + _onMenuDone sẽ do _handleUnknown đặt sau khi click; menuRetry vẫn chạy để mở lại menu nếu chưa click được.
+              this.log('ok', `Đã mở GUI menu: [${title.substring(0, 40)}] — click ô vào server`);
+              const routed = WindowRouter.route(this, win);
+              if (routed && !this._menuSuccess) this._onMenuDone(`GUI [${title.substring(0, 30)}]`); // route đăng ký sẵn đã xử lý
               return;
             }
           }
