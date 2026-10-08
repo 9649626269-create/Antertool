@@ -253,6 +253,7 @@ class BotSession extends EventEmitter {
   // Gửi thông báo Discord webhook (dùng chung, cấu hình ở BotManager) —
   // im lặng bỏ qua nếu chưa cấu hình webhook hoặc loại sự kiện này bị tắt.
   _notify(eventKey, title, description, color = 0x64748b, headline = null) {
+    try { this._manager?.telegramAlert?.(this, eventKey, title, description, headline); } catch { /* Telegram lỗi không được làm hỏng bot */ }
     const n = this._manager?.notifier;
     if (!n?.isEventOn(eventKey)) return;
     n.send(eventKey, {
@@ -302,6 +303,10 @@ class BotSession extends EventEmitter {
       }
     }
     this.state.connState = newState;
+    try { // đếm tổng thời gian hoạt động (cộng dồn qua các lần vào/ra) — dùng cho bảng Telegram
+      if (newState === CS.ONLINE) this._rev.markOnline(this.cfg.id);
+      else if (prev === CS.ONLINE) this._rev.markOffline(this.cfg.id);
+    } catch { /* đếm giờ lỗi thì thôi, không ảnh hưởng bot */ }
     this.emit('stateChange', { prev, now: newState, id: this.cfg.id });
     this._emitIO('botState', { id: this.cfg.id, state: newState });
   }
@@ -1143,6 +1148,7 @@ class BotSession extends EventEmitter {
     this._revPending.cycles += 1;
     this.log('ok', `Doanh thu vòng này: ${fmt(cap.sum)} (${cap.hits} tin / ${cap.done}/${cap.total} lồng)`);
     if (quiet) return cap;
+    try { this._manager?.onSellCycle?.(this); } catch { /* Telegram lỗi không được làm hỏng vòng bán */ }
     const gapMs = this.autoSellSpawnReportMin * 60000;
     if (gapMs && nowMs() - this._revLastReportAt < gapMs) return cap; // chưa tới lúc báo — số liệu vẫn được cộng dồn cho lần báo sau
     this._sendRevenueReport(cap);
@@ -1722,7 +1728,7 @@ class BotSession extends EventEmitter {
     const now = nowMs();
     if (now - this._sellFailAlertedAt < this.sellFailAlertMinMs) { this.log('sys', 'Auto-sell Spawn: vừa báo webhook thất bại gần đây — bỏ qua tin trùng'); return; }
     const n = this._manager?.notifier;
-    if (!n?.isEventOn('sellFailed')) { this.log('warn', 'Auto-sell Spawn: chưa cấu hình webhook (webhook set <url>) hoặc sự kiện sellFailed đang tắt — không gửi được tin thất bại'); return; }
+    if (!n?.isEventOn('sellFailed') && !this._manager?.telegram?.isEventOn('sellFailed')) { this.log('warn', 'Auto-sell Spawn: chưa cấu hình webhook (webhook set <url>) / Telegram (telegram set <token>) hoặc sự kiện sellFailed đang tắt — không gửi được tin thất bại'); return; }
     this._sellFailAlertedAt = now;
     const tag = Notifier.formatMention(this.sellFailMention);
     const cage = this._describeCageDistance();

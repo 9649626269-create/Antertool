@@ -77,6 +77,10 @@ class RevenueTracker {
       const j = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       if (j && typeof j === 'object' && j.bots) this.data = j;
     } catch { /* chưa có file / file hỏng -> bắt đầu mới */ }
+    // Lần chạy trước tắt đột ngột (đang online mà chưa kịp ghi offline) -> chốt phiên ở nhịp tim cuối cùng
+    for (const b of Object.values(this.data.bots || {})) {
+      if (b && b.upSince != null) { b.upMs = (b.upMs || 0) + Math.max(0, (b.upBeat || b.upSince) - b.upSince); b.upSince = null; b.upBeat = null; }
+    }
   }
   _save() {
     if (!this.file) return;
@@ -97,7 +101,7 @@ class RevenueTracker {
   }
   _bot(id) {
     const k = String(id);
-    if (!this.data.bots[k]) this.data.bots[k] = { since: null, last: null, total: 0, cycles: 0, entries: [], days: {} };
+    if (!this.data.bots[k]) this.data.bots[k] = { since: null, last: null, total: 0, cycles: 0, entries: [], days: {}, upMs: 0, upSince: null, upBeat: null };
     return this.data.bots[k];
   }
   // --- thời gian theo múi giờ ---
@@ -111,10 +115,10 @@ class RevenueTracker {
     return `${g('year')}-${g('month')}-${g('day')}`;
   }
   // "02:15" theo múi giờ config
-  clock(ts) {
-    const p = this._fmt(ts, { hour: '2-digit', minute: '2-digit' });
+  clock(ts, withSec = false) {
+    const p = this._fmt(ts, withSec ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
     const g = t => p.find(x => x.type === t).value;
-    return `${String(Number(g('hour')) % 24).padStart(2, '0')}:${g('minute')}`;
+    return `${String(Number(g('hour')) % 24).padStart(2, '0')}:${g('minute')}${withSec ? ':' + g('second') : ''}`;
   }
   hourKey(ts) {
     const p = this._fmt(ts, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' });
@@ -148,8 +152,42 @@ class RevenueTracker {
     while (keys.length > 60) delete b.days[keys.shift()];
   }
   reset(botId) {
-    delete this.data.bots[String(botId)];
+    const k = String(botId);
+    const old = this.data.bots[k];
+    delete this.data.bots[k];
+    // Thời gian hoạt động không phải doanh thu -> xoá doanh thu nhưng giữ bộ đếm giờ chạy
+    if (old && ((old.upMs || 0) > 0 || old.upSince != null)) {
+      const b = this._bot(k);
+      b.upMs = old.upMs || 0; b.upSince = old.upSince ?? null; b.upBeat = old.upBeat ?? null;
+    }
     this._scheduleSave();
+  }
+
+  // ===== Thời gian hoạt động (cộng dồn qua các lần vào/ra server) =====
+  markOnline(id, now = Date.now()) {
+    const b = this._bot(id);
+    if (b.upSince == null) b.upSince = now;
+    b.upBeat = now;
+    this._scheduleSave();
+  }
+  markOffline(id, now = Date.now()) {
+    const b = this.data.bots[String(id)];
+    if (!b || b.upSince == null) return;
+    b.upMs = (b.upMs || 0) + Math.max(0, now - b.upSince);
+    b.upSince = null; b.upBeat = null;
+    this._scheduleSave();
+  }
+  // Nhịp tim: đánh dấu "còn online tới giờ" để lỡ tắt đột ngột vẫn tính đúng gần đúng
+  touch(id, now = Date.now()) {
+    const b = this.data.bots[String(id)];
+    if (b && b.upSince != null) { b.upBeat = now; this._scheduleSave(); }
+  }
+  // { totalMs: tổng cộng dồn, sessionMs: phiên online hiện tại, online }
+  uptime(id, now = Date.now()) {
+    const b = this.data.bots[String(id)];
+    if (!b) return { totalMs: 0, sessionMs: 0, online: false };
+    const sessionMs = b.upSince != null ? Math.max(0, now - b.upSince) : 0;
+    return { totalMs: (b.upMs || 0) + sessionMs, sessionMs, online: b.upSince != null };
   }
 
   /**
@@ -182,8 +220,11 @@ class RevenueTracker {
       const k = this.dayKey(now - i * 24 * H);
       daily.push({ label: k.slice(5), amount: b.days[k] || 0 });
     }
+    const le = b.entries.length ? b.entries[b.entries.length - 1] : null;
     return {
       total: b.total, cycles: b.cycles, since: b.since, last: b.last,
+      lastAmount: le ? le[1] : 0, lastAt: le ? le[0] : null, // vòng bán gần nhất
+
       last1h: sum(w1), last24h: sum(w24),
       observedMs, avgPerHour, perDayEst: avgPerHour == null ? null : avgPerHour * 24,
       today: b.days[this.dayKey(now)] || 0,

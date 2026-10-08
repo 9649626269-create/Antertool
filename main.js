@@ -5,6 +5,7 @@ const path = require('path');
 const chalk = require('chalk');
 const BotManager = require('./src/services/BotManager');
 const Notifier = require('./src/core/Notifier');
+const TelegramNotifier = require('./src/core/TelegramNotifier');
 const HelpCatalog = require('./src/core/HelpCatalog');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 let config;
@@ -401,6 +402,82 @@ async function shutdown(code = 0) {
                 const s = manager.getSchedule();
                 console.log(colors.muted(s.enabled ? `  Đang bật: out ${s.outTime} — vô lại ${s.inTime}` : '  Đang tắt'));
                 console.log(colors.muted('  Usage: schedule on <HH:MM out> <HH:MM in> | schedule off'));
+              }
+              break;
+            }
+            case 'telegram':
+            case 'tg': {
+              const tg = manager.telegram;
+              const sub = String(args[0] || '').toLowerCase();
+              const tgUsage = () => {
+                console.log(colors.muted('  Usage: telegram set <token> [chatId] | chatid | test | panel | off'));
+                console.log(colors.muted('         telegram every <1s|10s|10m|off>  (nhịp cập nhật bảng) | mode edit|new | events [a,b,c] | commands on|off'));
+              };
+              if (sub === 'set' && args[1]) {
+                if (!TelegramNotifier.looksLikeToken(args[1])) { console.log(colors.warn('  Token không đúng dạng — lấy từ @BotFather (vd 123456789:AAH...)')); break; }
+                manager.setTelegram(args[1], args[2] !== undefined ? args[2] : undefined);
+                if (tg.enabled) {
+                  tg.test().then(r => console.log(r.ok ? colors.ok('  ✓ ' + r.message) : colors.err('  ✗ ' + r.message)));
+                } else {
+                  console.log(colors.ok('  ✓ Đã lưu token'));
+                  console.log(colors.muted('  Bước tiếp: mở Telegram, nhắn /start cho bot của bạn, rồi gõ: telegram chatid'));
+                }
+              } else if (sub === 'chatid') {
+                if (!tg.hasToken) { console.log(colors.warn('  Chưa có token — dùng: telegram set <token>')); break; }
+                tg.discoverChats().then(r => {
+                  if (!r.ok) return console.log(colors.err('  ✗ ' + r.message));
+                  if (!r.chats.length) return console.log(colors.warn('  Chưa thấy tin nhắn nào gửi cho bot — mở Telegram, nhắn /start cho bot rồi gõ lại: telegram chatid'));
+                  if (r.chats.length === 1 || args[1]) {
+                    const pick = args[1] ? r.chats.find(c => c.id === String(args[1])) : r.chats[0];
+                    if (!pick) return console.log(colors.warn('  Không thấy chat_id đó. Có: ' + r.chats.map(c => `${c.id} (${c.title})`).join(', ')));
+                    manager.setTelegram(undefined, pick.id);
+                    console.log(colors.ok(`  ✓ Đã lưu chat_id ${pick.id} (${pick.title})`));
+                    tg.test().then(t => console.log(t.ok ? colors.ok('  ✓ ' + t.message) : colors.err('  ✗ ' + t.message)));
+                  } else {
+                    console.log(colors.muted('  Thấy nhiều chat — chọn bằng: telegram chatid <id>'));
+                    for (const c of r.chats) console.log(colors.muted(`    ${c.id}  ${c.title}`));
+                  }
+                });
+              } else if (sub === 'off') {
+                manager.setTelegram(null, null);
+                console.log(colors.ok('  ✓ Đã tắt Telegram (xoá token + chat_id khỏi config)'));
+              } else if (sub === 'test') {
+                if (!tg.hasToken) { console.log(colors.warn('  Chưa cấu hình — dùng: telegram set <token>')); break; }
+                tg.test().then(r => console.log(r.ok ? colors.ok('  ✓ ' + r.message) : colors.err('  ✗ ' + r.message)));
+              } else if (sub === 'panel' || sub === 'send') {
+                if (!tg.enabled) { console.log(colors.warn('  Chưa cấu hình Telegram — dùng: telegram set <token>')); break; }
+                const n = manager.refreshTelegramPanels({ fresh: true });
+                console.log(n ? colors.ok(`  ✓ Đã gửi ${n} bảng Auto sell spawner`) : colors.warn('  Chưa có bot nào bật autosell_spawn / có doanh thu để lập bảng'));
+              } else if (sub === 'every') {
+                const v = String(args[1] || '').toLowerCase();
+                const sec = (v === 'off' || v === '0') ? 0 : manager.constructor.parseEverySec(args.slice(1).join(''));
+                if (sec === null || sec === undefined) { console.log(colors.warn('  Cú pháp: telegram every <1s|10s|10m|off>  (số trần = giây)')); break; }
+                manager.setTelegramOption('telegramRefreshSec', sec);
+                console.log(colors.ok(sec ? `  ✓ Bảng cập nhật mỗi ${sec} giây${manager._config?.telegramMode === 'new' ? '  (chú ý: mode new không cập nhật theo nhịp — gõ: telegram mode edit)' : ''}` : '  ✓ Tắt cập nhật theo nhịp (vẫn cập nhật sau mỗi vòng bán / khi đổi trạng thái)'));
+                if (sec && sec < 3 && manager.bots.length > 1) console.log(colors.muted(`  Lưu ý: Telegram chỉ cho ~1 lần sửa/giây/chat → ${manager.bots.length} bot sẽ được sửa xoay vòng (mỗi bảng ~${manager.bots.length * sec}s/lần)`));
+              } else if (sub === 'mode') {
+                const m = String(args[1] || '').toLowerCase();
+                if (m !== 'edit' && m !== 'new') { console.log(colors.warn('  Cú pháp: telegram mode edit|new  (edit = 1 bảng/bot sửa tại chỗ, new = mỗi lần 1 tin mới có thông báo)')); break; }
+                manager.setTelegramOption('telegramMode', m);
+                console.log(colors.ok('  ✓ Chế độ bảng: ' + m));
+              } else if (sub === 'events') {
+                if (!args[1]) {
+                  console.log(colors.muted('  Đang bật: ' + [...tg.events].join(', ')));
+                  console.log(colors.muted('  Tất cả loại: ' + Object.keys(TelegramNotifier.EVENT_LABELS).join(', ')));
+                } else {
+                  const list = args[1].split(',').map(x => x.trim()).filter(Boolean);
+                  manager.setTelegramOption('telegramEvents', list);
+                  console.log(colors.ok('  ✓ Đã đặt loại sự kiện: ' + list.join(', ')));
+                }
+              } else if (sub === 'commands') {
+                const on = String(args[1] || '').toLowerCase();
+                if (on !== 'on' && on !== 'off') { console.log(colors.warn('  Cú pháp: telegram commands on|off  (nhận lệnh /status /panel từ Telegram)')); break; }
+                manager.setTelegramOption('telegramCommands', on === 'on');
+                console.log(colors.ok('  ✓ Nhận lệnh Telegram: ' + (on === 'on' ? 'BẬT' : 'TẮT')));
+              } else {
+                tgUsage();
+                console.log(colors.muted('  Trạng thái: ' + (tg.enabled ? 'BẬT' : (tg.hasToken ? 'có token, thiếu chat_id (gõ: telegram chatid)' : 'TẮT'))
+                  + (tg.enabled ? ` · chế độ ${manager._config?.telegramMode === 'new' ? 'new' : 'edit'} · cập nhật mỗi ${manager._config?.telegramRefreshSec ?? 1}s` : '')));
               }
               break;
             }

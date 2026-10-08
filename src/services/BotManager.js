@@ -6,6 +6,8 @@ const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
 const RevenueTracker = require('../core/RevenueTracker');
+const TelegramNotifier = require('../core/TelegramNotifier');
+const TelegramPanel = require('../core/TelegramPanel');
 const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
 class BotManager {
   constructor(options = {}) {
@@ -22,11 +24,20 @@ class BotManager {
     this.notifier = new Notifier({});
     this.revenueNotifier = new Notifier({}); // webhook RIÊNG cho báo cáo doanh thu (không đặt thì dùng webhook chung)
     this.revenue = new RevenueTracker(require('path').join(require('path').dirname(this.configPath), 'revenue.json'), () => this._scheduleTz());
+    this.telegram = new TelegramNotifier({}); // bảng Auto sell spawner + cảnh báo qua Telegram (không đặt token thì không làm gì)
+    this._tgMsgs = {};                        // botId -> message_id của bảng (để sửa tại chỗ, khỏi spam)
+    this._tgLastAt = new Map();               // botId -> lần gửi bảng gần nhất (chống dội)
+    this._tgChain = new Map();                // botId -> chuỗi gửi bảng đang chờ (tránh tạo 2 bảng trùng)
+    this._tgBusy = new Set();                 // bot đang có lần gửi/sửa bảng chưa xong (nhịp 1s bỏ qua bot này)
+    this._tgSig = new Map();                  // botId -> "chữ ký" trạng thái bảng gửi gần nhất (bot offline chỉ sửa khi chữ ký đổi)
+    this._tgRR = 0;                           // vòng xoay: mỗi nhịp sửa 1 bảng
     this.dashboard = null;
     this._config = null;
     this._poolPruneInterval = setInterval(() => this.sharedPool.pruneCache(), 10 * 60 * 1000);
     this._inRest = false;
     this._scheduleInterval = setInterval(() => this._scheduleTick(), 20000);
+    this._beatInterval = setInterval(() => { for (const b of this.bots) { if (b.isOnline) this.revenue.touch(b.cfg.id); } }, 5 * 60000); // nhịp tim đếm giờ chạy
+    if (this._beatInterval.unref) this._beatInterval.unref();
   }
   async init() {
     this._config = this.persistence.load();
@@ -35,6 +46,7 @@ class BotManager {
     this.notifier.setMention(this._config.webhookMention, this._config.webhookMentionEvents);
     this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
     this._armRevenueSummary();
+    this._initTelegram();
     this.autoExe = this._config.autoExe === true || this.autoExe;
     const { env, profile } = this.envDetector.getAdaptiveProfile();
     this.env = env;
@@ -434,6 +446,152 @@ class BotManager {
     return false; // không phải link Discord -> coi là lệnh bình thường
   }
 
+  // ===== Telegram: bảng Auto sell spawner + cảnh báo + lệnh /status /panel =====
+  // Cấu hình (config.json hoặc biến môi trường — tiện cho Render/Docker):
+  //   telegramToken | TELEGRAM_BOT_TOKEN, telegramChatId | TELEGRAM_CHAT_ID
+  //   telegramEvents (mặc định disconnect,reconnectFailed,reconnectRecovered,sellFailed,spawnerThreat)
+  //   telegramMode 'edit' (mặc định: 1 bảng/bot sửa tại chỗ) | 'new' (mỗi vòng 1 tin mới)
+  //   telegramRefreshSec (mặc định 1 = bảng cập nhật mỗi giây; 0 = chỉ khi có vòng bán/sự kiện; chỉ chạy ở mode 'edit'),
+  //   telegramMinGapSec (30, chống dội cho cập nhật sau vòng bán), telegramCommands (true)
+  _initTelegram() {
+    const c = this._config || {};
+    this.telegram.configure(c.telegramToken || process.env.TELEGRAM_BOT_TOKEN || null, c.telegramChatId ?? process.env.TELEGRAM_CHAT_ID ?? null, c.telegramEvents);
+    this._tgMsgs = (c.telegramMessages && typeof c.telegramMessages === 'object') ? { ...c.telegramMessages } : {};
+    this._armTelegram();
+  }
+  _armTelegram() {
+    if (this._tgTimer) { clearInterval(this._tgTimer); this._tgTimer = null; }
+    const c = this._config || {};
+    if (!this.telegram.enabled) { this.telegram.stopPolling(); return; }
+    if (c.telegramCommands !== false) this.telegram.startPolling((ev) => this._onTelegramEvent(ev));
+    else this.telegram.stopPolling();
+    const sec = c.telegramRefreshSec === undefined ? 1 : Math.max(0, Number(c.telegramRefreshSec) || 0);
+    if (sec > 0 && c.telegramMode !== 'new') { // mode 'new' mà sửa liên tục thì thành spam tin mới -> chỉ chạy ở mode 'edit'
+      this._tgTimer = setInterval(() => { try { this._tgTick(); } catch { } }, Math.max(1, sec) * 1000);
+      if (this._tgTimer.unref) this._tgTimer.unref();
+    }
+  }
+  // Nhịp cập nhật bảng. Telegram chỉ cho ~1 lệnh/giây/chat -> mỗi nhịp sửa ĐÚNG 1 bảng, xoay vòng giữa các bot
+  // (1 bot = mỗi giây, N bot = mỗi N giây/bảng). Bot offline không sửa liên tục — chỉ sửa khi trạng thái/thu nhập đổi.
+  _tgTick() {
+    const tg = this.telegram;
+    if (!tg.enabled || this._config?.telegramMode === 'new') return;
+    if (tg.paused || tg.pending > 2) return; // đang bị 429 hoặc hàng đợi chưa kịp xử lý -> bỏ nhịp này
+    const cands = [];
+    for (const b of this.bots) {
+      if (!this._panelRelevant(b)) continue;
+      const id = String(b.cfg.id);
+      if (this._tgBusy.has(id)) continue;
+      if (!this._tgMsgs[id] || b.isOnline || TelegramPanel.panelSig(this._botPanelInfo(b)) !== this._tgSig.get(id)) cands.push(b);
+    }
+    if (cands.length) this.sendTelegramPanel(cands[this._tgRR++ % cands.length]);
+  }
+  static parseEverySec(text) { // "1s", "30s", "10m", "1h30m", "90" (số trần = giây) -> số giây; null nếu không hiểu
+    const t = String(text || '').trim().toLowerCase();
+    if (!t) return null;
+    if (/^\d+$/.test(t)) return Number(t);
+    const m = /^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?$/.exec(t);
+    if (!m || (!m[1] && !m[2] && !m[3])) return null;
+    return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+  }
+  // Lưu token/chat id (CLI `telegram set`) rồi bật lại polling/hẹn giờ
+  setTelegram(token, chatId) {
+    if (token !== undefined) { this._config.telegramToken = token || null; this.persistence.set('telegramToken', token || null); }
+    if (chatId !== undefined) { this._config.telegramChatId = chatId ?? null; this.persistence.set('telegramChatId', chatId ?? null); }
+    this._initTelegram();
+  }
+  setTelegramOption(key, value) {
+    this._config[key] = value;
+    this.persistence.set(key, value);
+    if (key === 'telegramEvents') this.telegram.configure(this.telegram.token, this.telegram.chatId, value);
+    this._armTelegram();
+  }
+  _panelRelevant(bot) { return !!(bot._sellSpawnOn || this.revenue.stats(bot.cfg.id)); }
+  _botPanelInfo(bot, now = Date.now()) {
+    const id = bot.cfg.id;
+    const up = this.revenue.uptime(id, now);
+    return {
+      botId: id, account: bot.cfg.username || '', connState: bot.state.connState, disabled: !!bot._disabled,
+      sellOn: !!bot._sellSpawnOn, intervalMs: bot._sellSpawnIntervalMs(), now,
+      stats: this.revenue.stats(id, now), totalUptimeMs: up.totalMs, sessionMs: up.sessionMs,
+      sellFailAgoMs: bot._sellFailAlertedAt ? now - bot._sellFailAlertedAt : null,
+      clock: this.revenue.clock(now, true),
+    };
+  }
+  // Gửi/sửa bảng của 1 bot. opts.editId = sửa đúng tin đó (nút Làm mới); opts.fresh = luôn gửi tin mới.
+  sendTelegramPanel(bot, opts = {}) {
+    if (!this.telegram.enabled) return Promise.resolve(false);
+    const id = String(bot.cfg.id);
+    // Xếp hàng theo từng bot: 2 yêu cầu sát nhau không tạo ra 2 bảng trùng (cái sau thấy message_id của cái trước)
+    const run = async () => {
+      this._tgBusy.add(id);
+      try {
+        const info = this._botPanelInfo(bot);
+        const { text, keyboard } = TelegramPanel.buildPanel(info);
+        const editMode = this._config?.telegramMode !== 'new';
+        const prev = opts.editId || (editMode && !opts.fresh ? this._tgMsgs[id] : null);
+        this._tgLastAt.set(id, Date.now());
+        this._tgSig.set(id, TelegramPanel.panelSig(info));
+        const mid = await (prev ? this.telegram.edit(prev, text, { keyboard }) : this.telegram.send(text, { keyboard }));
+        if (mid && editMode && !opts.editId && this._tgMsgs[id] !== mid) {
+          this._tgMsgs[id] = mid;
+          this.persistence.set('telegramMessages', { ...this._tgMsgs });
+        }
+        return !!mid;
+      } finally { this._tgBusy.delete(id); }
+    };
+    const chained = (this._tgChain.get(id) || Promise.resolve()).then(run, run).catch(() => false);
+    this._tgChain.set(id, chained);
+    return chained;
+  }
+  refreshTelegramPanels(opts = {}) {
+    let n = 0;
+    for (const b of this.bots) {
+      if (!this._panelRelevant(b)) continue;
+      this.sendTelegramPanel(b, opts); n++;
+    }
+    return n;
+  }
+  // BotSession gọi sau mỗi vòng bán xong: cập nhật bảng (chống dội: tối thiểu telegramMinGapSec giây/bot)
+  onSellCycle(bot) {
+    if (!this.telegram.enabled) return;
+    if ((this._tgTimer && this._config?.telegramMode !== 'new')) return; // đang cập nhật theo nhịp giây -> bảng đã tự mới, khỏi sửa thêm
+    const gap = Math.max(0, Number(this._config?.telegramMinGapSec ?? 30)) * 1000;
+    if (Date.now() - (this._tgLastAt.get(String(bot.cfg.id)) || 0) < gap) return;
+    this.sendTelegramPanel(bot);
+  }
+  // BotSession._notify gọi cho MỌI sự kiện (kick, hết reconnect, bán lỗi...) -> Telegram nếu sự kiện đó đang bật
+  telegramAlert(bot, eventKey, title, description, headline) {
+    if (!this.telegram.isEventOn(eventKey)) return;
+    const h = (t) => TelegramNotifier.discordToHtml(t);
+    const text = [headline ? h(headline) : null, `<b>${h(title)}</b>`, description ? h(description) : null].filter(Boolean).join('\n');
+    this.telegram.send(text); // tin mới -> có thông báo đẩy trên điện thoại
+    if (['disconnect', 'reconnectFailed', 'reconnectRecovered', 'sellFailed'].includes(eventKey) && this._panelRelevant(bot)) {
+      setTimeout(() => { try { this.sendTelegramPanel(bot); } catch { } }, 1500); // trạng thái đổi -> sửa bảng cho khớp
+    }
+  }
+  async _onTelegramEvent(ev) {
+    if (ev.type === 'button' && ev.cmd === 'r') {
+      const bot = ev.arg === '*' ? null : this.bots.find(b => String(b.cfg.id) === ev.arg);
+      if (bot) await this.sendTelegramPanel(bot, { editId: ev.messageId });
+      else this.refreshTelegramPanels();
+      ev.answer('Đã làm mới');
+      return;
+    }
+    if (ev.type !== 'command') return;
+    const now = Date.now();
+    if (ev.cmd === 'start' || ev.cmd === 'help') { ev.reply(TelegramPanel.HELP_TEXT); return; }
+    if (ev.cmd === 'status') {
+      ev.reply(TelegramPanel.buildStatusList(this.bots.map(b => this._botPanelInfo(b, now)), this.revenue.clock(now)));
+      return;
+    }
+    if (ev.cmd === 'panel') {
+      const list = ev.arg ? this.bots.filter(b => String(b.cfg.id) === ev.arg) : this.bots.filter(b => this._panelRelevant(b));
+      if (!list.length) { ev.reply(ev.arg ? `Không có bot "${TelegramNotifier.escapeHtml(ev.arg)}".` : 'Chưa có bot nào bật autosell_spawn.'); return; }
+      for (const b of list) this.sendTelegramPanel(b, { fresh: true }); // gửi bảng mới (và nhớ làm bảng chính)
+    }
+  }
+
   // ===== Báo cáo doanh thu TỔNG HỢP (gộp tất cả bot) =====
   // Webhook riêng (webhook revenue set <url>) nếu có, không thì webhook chung (sự kiện "revenue").
   _revenueSink() {
@@ -636,6 +794,9 @@ class BotManager {
     if (this._poolPruneInterval) clearInterval(this._poolPruneInterval);
     if (this._scheduleInterval) clearInterval(this._scheduleInterval);
     if (this._revSummaryTimer) clearInterval(this._revSummaryTimer);
+    if (this._tgTimer) clearInterval(this._tgTimer);
+    if (this._beatInterval) clearInterval(this._beatInterval);
+    try { this.telegram.stopPolling(); } catch { }
     this.sharedPool.reset();
     this.bots = [];
   }

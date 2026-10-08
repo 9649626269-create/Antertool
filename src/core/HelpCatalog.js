@@ -103,12 +103,14 @@ const SECTIONS = [
     ],
   },
   {
-    key: 'notify', title: 'Thông báo & Lịch', desc: 'webhook Discord, lịch tự out/vào',
-    aliases: ['webhook', 'schedule', 'discord', 'lich'],
+    key: 'notify', title: 'Thông báo & Lịch', desc: 'webhook Discord, Telegram, lịch tự out/vào',
+    aliases: ['webhook', 'schedule', 'discord', 'lich', 'telegram', 'tg'],
     con: [
       { name: 'webhook', usage: 'webhook set <url>', desc: 'lưu webhook Discord (báo disconnect, reconnect, goal, bảo vệ lồng)' },
       { name: 'webhook', usage: 'webhook test | off', desc: 'gửi thử / tắt webhook' },
       { name: 'webhook', usage: 'webhook events [a,b,c]', desc: 'xem/đặt loại sự kiện được báo' },
+      { name: 'telegram', usage: 'telegram set <token> [chatId] | chatid | test | off', desc: 'bảng Auto sell spawner + cảnh báo qua Telegram (chatid: tự tìm chat_id sau khi nhắn /start cho bot)' },
+      { name: 'telegram', usage: 'telegram panel | every <1s|10s|10m|off> | mode edit|new | events [a,b,c] | commands on|off', desc: 'gửi bảng ngay / nhịp cập nhật (mặc định 1s) / sửa tại chỗ hay tin mới / loại sự kiện / lệnh /status /panel' },
       { name: 'schedule', usage: 'schedule on <HH:MM out> <HH:MM in>', desc: 'lịch tự out/vào cả dàn bot, vd: schedule on 23:00 06:00' },
       { name: 'schedule', usage: 'schedule off', desc: 'tắt lịch (không có đối số = xem)' },
     ],

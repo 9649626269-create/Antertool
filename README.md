@@ -17,6 +17,7 @@ A premium Minecraft bot management dashboard with CLI support. Proxy auto-detect
 - **Spawner Protect** — Alert (and optionally auto-secure) when an unwhitelisted player nears a registered spawner
 - **Order GUI Reader** — Reads the "/order" GUI (paginated order book) into a table: price, quantity, buyer, time
 - **Discord Webhook** — Notifications for disconnects, reconnect status, Money Goal hits, and Spawner Protect alerts
+- **Telegram** — live Auto-sell Spawn income panel (edited in place), alerts with push notification, `/status` & `/panel` commands
 - **Proxy Auto-Rotate** — Randomized 1-10 min proxy rotation per bot, plus bulk import from a .txt file
 - **Scheduled Out/In** — Daily fleet-wide rest window (e.g., off at 23:00, back on at 06:00)
 - **Auto-Sell** — Fires a user-defined macro once inventory crosses a fullness threshold
@@ -377,6 +378,48 @@ webhook events moneyGoal,spawnerThreat   # chỉ bật 2 loại này (mặc đ�
 ```
 
 5 loại sự kiện: `disconnect` (bị kick), `reconnectFailed` (hết lượt reconnect, cần chú ý), `reconnectRecovered` (đã tự kết nối lại ổn định), `moneyGoal` (đủ tiền theo ngưỡng đã đặt), `spawnerThreat` (người lạ tới gần lồng đang bảo vệ). Webhook dùng chung cho tất cả bot (1 kênh Discord theo dõi cả dàn), cấu hình lưu thẳng vào `config.json`.
+
+## Telegram — bảng Auto sell spawner + cảnh báo
+
+Bot gửi **bảng thu nhập autosell_spawn** lên Telegram, mỗi bot 1 bảng, tự **sửa tại chỗ** (không spam). Mẫu:
+
+```
+💸 Auto sell spawner
+🤖 Tên Bot: bot-1
+👤 Tên Acc: acc_name
+📡 Tình Trạng : ổn định 🟢
+💰 Tổng Thu Nhập: 1.25B
+──────────────────
+📈 31.2M/day
+⏱ 1h/1.3M
+🆕 Thu nhập vừa qua: 2.01M (2m 05s trước)
+──────────────────
+🕒 Tổng Thời Gian Hoạt Động: 3d 04h 12m 35s
+📅 Hôm nay 12.3M · Hôm qua 30M
+📊 12h: ▁▂▃▅▇▆▅▃▂▁▂▃
+```
+
+**Cài đặt (1 lần):**
+1. Telegram → chat với **@BotFather** → `/newbot` → lấy **token**.
+2. Mở bot vừa tạo, nhắn `/start`.
+3. Trong tool: `telegram set <token>` rồi `telegram chatid` (tự tìm + lưu chat_id, gửi tin thử).
+   Chạy trên Render/Docker không có CLI: đặt biến môi trường `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (hoặc `telegramToken`/`telegramChatId` trong `config.json`).
+
+**Tình trạng:** 🟢 ổn định · 🟡 bán lỗi trong 30 phút qua / quá 2 chu kỳ chưa có vòng bán mới / đang vào server · 🟠 đang kết nối lại · 🔴 mất kết nối · ⚪ chưa bật autosell_spawn · ⚫ đã tắt.
+
+**Cập nhật bảng:** mặc định **mỗi 1 giây** (đồng hồ + thời gian hoạt động chạy từng giây), đổi nhịp bằng `telegram every <1s|10s|10m|off>`; ngoài ra cập nhật ngay khi đổi trạng thái (kick/vào lại/bán lỗi) hoặc bấm nút **🔄 Làm mới**. Telegram chỉ cho ~1 lần sửa/giây/chat nên mỗi nhịp tool sửa **đúng 1 bảng**, xoay vòng giữa các bot (1 bot = mỗi giây; 3 bot = mỗi bảng ~3 giây). Bot offline không bị sửa liên tục — chỉ sửa 1 lần khi hiện 🔴. Nếu Telegram báo 429 (quá nhanh, hay gặp ở **group**) tool tự nghỉ đúng số giây được yêu cầu rồi chạy tiếp; dùng chat riêng với bot hoặc tăng nhịp (`telegram every 3s`) cho êm. Nhịp chỉ chạy ở `mode edit`. Sửa tin thì điện thoại không rung; **cảnh báo** (kick, hết reconnect, đã vào lại, bán lỗi sau N lần `/home`, cảnh báo lồng) là tin mới → có thông báo đẩy. Chọn loại cảnh báo: `telegram events a,b,c`.
+
+**Lệnh trong Telegram** (chỉ phản hồi đúng chat_id đã lưu): `/status` (cả dàn bot + tổng thu nhập/ngày), `/panel [id bot]` (gửi lại bảng), `/help`. Tắt nhận lệnh: `telegram commands off`.
+
+| CLI | Việc |
+|---|---|
+| `telegram set <token> [chatId]` · `telegram chatid` · `telegram test` · `telegram off` | cài đặt / thử / tắt |
+| `telegram panel` | gửi ngay bảng mới cho mọi bot |
+| `telegram every <1s\|10s\|10m\|off>` | nhịp cập nhật bảng (mặc định 1s) |
+| `telegram mode edit\|new` | `edit` = sửa tại chỗ (mặc định), `new` = mỗi lần 1 tin mới |
+| `telegram events [a,b,c]` | loại cảnh báo gửi qua Telegram |
+
+Config tuỳ chọn: `telegramRefreshSec` (1), `telegramMinGapSec` (30), `telegramMode`, `telegramCommands`. Token nằm trong `config.json` (đã nằm trong `.gitignore`, không bị đẩy lên GitHub). *Tổng thời gian hoạt động* = tổng thời gian bot ở trạng thái ONLINE, cộng dồn qua các lần vào/ra (lưu trong `revenue.json`, không bị xoá khi `autosell_spawn revenue reset`).
 
 ## CLI Commands
 

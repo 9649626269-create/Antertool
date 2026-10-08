@@ -1,3 +1,38 @@
+# Bản chỉnh (fixed15) — bảng Telegram cập nhật mỗi 1 giây
+
+**Yêu cầu:** bảng cập nhật mỗi 1s.
+
+**Đã sửa:**
+- Nhịp cập nhật mặc định **1 giây** (`telegramRefreshSec`, đổi bằng `telegram every <1s|10s|10m|off>`; thay cho `telegramRefreshMin` của fixed14). Bảng có **giây**: "Tổng Thời Gian Hoạt Động 3d 04h 12m 35s", "(2m 05s trước)", dòng "🔄 cập nhật HH:MM:SS".
+- **Giới hạn của Telegram:** ~1 lần sửa/giây/chat (group còn chặt hơn, ~20 lần/phút). Nên mỗi nhịp tool sửa **đúng 1 bảng**, xoay vòng giữa các bot: 1 bot = mỗi giây, N bot = mỗi bảng ~N giây. Bot offline chỉ sửa 1 lần khi trạng thái đổi (hiện 🔴), không sửa liên tục. Bot đang có lần sửa chưa xong thì nhịp đó bỏ qua nó.
+- **Gặp 429** (gửi quá nhanh): tự nghỉ đúng `retry_after`, bỏ qua các lần sửa trong lúc nghỉ; cảnh báo (tin mới) thì chờ hết giờ nghỉ rồi vẫn gửi, không mất.
+- **Sửa lỗi nguy hiểm khi sửa liên tục:** trước đây sửa bảng lỗi vì bất cứ lý do gì (mạng chập chờn, 429) đều gửi **bảng mới** → sẽ đẻ bảng trùng hàng loạt. Giờ chỉ gửi bảng mới khi tin cũ thật sự bị xoá/không sửa được; lỗi tạm thời thì giữ bảng cũ.
+- Nhịp giây chỉ chạy ở `telegram mode edit` (mode `new` mà sửa liên tục sẽ thành spam tin mới).
+- Test: `test/telegram.test.js` thêm ca xoay vòng, bỏ qua bot bận, 429, lỗi mạng không đẻ bảng trùng, bot offline chỉ sửa 1 lần, mode new không chạy nhịp.
+
+**Chưa test với Telegram thật.** Nếu bảng hay đứng/không đều giây thì xem log lỗi Telegram: dùng chat riêng với bot (không dùng group) hoặc `telegram every 2s`/`3s`.
+
+---
+
+# Bản thêm (fixed14) — bảng thông báo Auto sell spawner qua Telegram
+
+**Yêu cầu:** thêm vào Telegram bảng: Auto sell spawner / Tên Bot / Tên Acc / Tình Trạng (ổn định 🟢) / Tổng Thu Nhập (K, M, B) / xx/day / 1h / Thu nhập vừa qua / Tổng Thời Gian Hoạt Động — kèm ý tưởng thêm.
+
+**Đã thêm:**
+- `src/core/TelegramNotifier.js` (mới): gửi/sửa tin qua Bot API, nhận lệnh bằng long polling (không cần mở cổng), chỉ phục vụ đúng `chatId`; tự tìm chat_id (`discoverChats`).
+- `src/core/TelegramPanel.js` (mới): dựng bảng đúng mẫu + tính **Tình Trạng** 🟢🟡🟠🔴⚪⚫ + `/status`.
+- `RevenueTracker`: đếm **tổng thời gian hoạt động** (cộng dồn các phiên ONLINE, chốt đúng cả khi tool tắt đột ngột; `reset` doanh thu không xoá giờ chạy) và trả thêm `lastAmount/lastAt` (thu nhập vòng vừa qua).
+- `BotSession`: ghi giờ ONLINE/OFFLINE trong `_setState`; `_notify` chuyển mọi sự kiện sang Telegram; sau mỗi vòng bán gọi `onSellCycle`; cảnh báo `sellFailed` giờ gửi được cả khi chỉ dùng Telegram (không cần Discord).
+- `BotManager`: bảng mỗi bot **sửa tại chỗ** (nhớ `message_id` trong config để lần chạy sau sửa đúng bảng cũ), tự cập nhật mỗi 10 phút, nút 🔄 Làm mới, lệnh `/status` `/panel` `/help`, cảnh báo kick/hết reconnect/vào lại/bán lỗi/bảo vệ lồng có thông báo đẩy.
+- CLI `telegram set|chatid|test|panel|every|mode|events|commands|off` (+ `help notify`), hỗ trợ biến môi trường `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` cho Render/Docker.
+- Test mới `test/telegram.test.js` (server Telegram giả trên localhost: định dạng bảng, trạng thái, đếm giờ, gửi/sửa/gửi lại khi tin bị xoá, chỉ nhận lệnh từ đúng chat, tích hợp BotManager) — có trong `npm test`. Toàn bộ test cũ vẫn qua.
+
+**Chưa test với Telegram thật** (môi trường làm việc không có mạng ra ngoài) — các lời gọi API được kiểm bằng server giả theo đúng định dạng Bot API (`sendMessage`, `editMessageText`, `getUpdates`, `answerCallbackQuery`). Lần đầu chạy: `telegram set <token>` → nhắn `/start` cho bot → `telegram chatid` → `telegram panel`.
+
+**Lưu ý:** "xx/day" là **ước tính** = trung bình/giờ × 24 (chỉ tính thời gian bot thực sự chạy, bỏ vòng đầu là hàng dồn); mới đo dưới 1 giờ thì bảng ghi `(ước tính)`.
+
+---
+
 # Bản sửa (fixed13) — góc nhìn không đổi + bỏ qua block nửa khối + bán lỗi thì /home treolong thử lại (tối đa 10 lần) rồi báo webhook
 
 **Yêu cầu:** (1) góc nhìn bị lỗi, không chỉnh về lồng được; (2) block nửa khối như chồi thạch anh tím (người vẫn chui vô được) không được coi là vật cản; (3) không bán được lồng → gõ `/home treolong` rồi bán lại, lặp tối đa 10 lần, vẫn không được thì báo webhook tag `@1413104059333873764`.
