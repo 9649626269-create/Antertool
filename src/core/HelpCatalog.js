@@ -46,6 +46,7 @@ const SECTIONS = [
       { name: 'autosell_spawn', usage: 'autosell_spawn every <30s|5m|2h|1h30m>', desc: 'chu kỳ lặp (tối thiểu 5 giây)' },
       { name: 'autosell_spawn', usage: 'autosell_spawn slot <n> [0|1]', desc: 'ô cần click trong GUI (mặc định 51); 0 = chuột trái, 1 = chuột phải' },
       { name: 'autosell_spawn', usage: 'autosell_spawn add|remove <x> <y> <z>', desc: 'thêm/bỏ một lồng theo toạ độ' },
+      { name: 'autosell_spawn', usage: '(tự động) bán lỗi → /home treolong → bán lại', desc: 'tối đa 10 lần (config sellFailMaxHome), vẫn lỗi thì báo webhook sự kiện sellFailed có tag' },
       { name: 'autosell_spawn', usage: 'autosell_spawn clear', desc: 'xoá hết danh sách lồng' },
       { name: 'autosell_spawn', usage: 'autosell_spawn revenue [report|reset|on|off|every <30m>]', desc: 'xem/gửi/xoá/bật tắt báo cáo doanh thu, giới hạn tần suất báo cáo' },
       { name: 'autosell_spawn', usage: 'autosell_spawn msg <chữ|off>', desc: 'chỉ tính tin bán có chứa chữ này (nhiều chữ ngăn bằng |)' },

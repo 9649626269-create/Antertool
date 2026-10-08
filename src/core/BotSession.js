@@ -14,9 +14,12 @@ const SharedPool = require('./SharedPool');
 const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const MacroEngine = require('./MacroEngine');
+const Notifier = require('./Notifier');
+const { anglesTo, aimCheck } = require('./AimUtil');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
 const SELL_SPAWN_REACH = 6; // block — tầm chuột phải vào lồng của auto-sell spawn (từ mắt bot); cũng là ngưỡng "đang đứng đúng chỗ treo lồng"
+const SELL_FAIL_MENTION_ID = '1413104059333873764'; // người được tag khi autosell_spawn thất bại sau khi đã gõ /home nhiều lần (đổi: sellFailMention trong config của bot)
 const TP_PRESEND_MS = 600; // thả hết phím + chờ vận tốc về 0 rồi mới gõ lệnh teleport
 // tin action bar / title chỉ hiện ra log khi đang chờ teleport hoặc khớp mẫu này (tránh spam bảng điểm/HUD)
 const TP_HUD_RE = /teleport|dịch chuyển|dich chuyen|home|hủy|huy bo|cancel|di chuyển|đứng yên|dung yen|cooldown|hồi chiêu|chờ|please wait|don't move|do not move|moved/i;
@@ -139,6 +142,17 @@ class BotSession extends EventEmitter {
     this.autoSellSpawnRange = cfg.autoSellSpawnRange || 5; // bán kính tự quét lồng quanh bot khi bật
     this._sellSpawnBusy = false;
     this._sellSpawnAbort = false;
+    // Bán lỗi (chưa click đủ lồng) -> gõ spawnHomeCommand (/home treolong) rồi bán lại; lặp tối đa N lần, vẫn lỗi thì báo webhook + tag.
+    this._sellRecovering = false;
+    this.sellFailMaxHome = Number.isInteger(cfg.sellFailMaxHome) && cfg.sellFailMaxHome >= 0 ? cfg.sellFailMaxHome : 10;
+    this.sellFailMention = String(cfg.sellFailMention ?? SELL_FAIL_MENTION_ID).trim().replace(/^@/, ''); // ID Discord (hoặc role:<id>); rỗng/off = không tag
+    this.sellFailAlertMinMs = cfg.sellFailAlertMinMs ?? 600000; // báo webhook thất bại tối đa 1 lần / chừng này (tránh spam mỗi chu kỳ)
+    this._sellFailAlertedAt = 0;
+    this.sellHomeChunkWaitMs = cfg.sellHomeChunkWaitMs ?? 6000; // sau /home chờ tối đa chừng này cho chunk chỗ lồng tải xong rồi mới bán lại
+    this._lastSellHomeAt = 0;
+    this._sellWhy = '';
+    this._viewLockUntil = 0;       // đang nhắm lồng/rương: AFK không được xoay đầu/đi/nhảy cho tới mốc này
+    this._lastAim = null;
     // Doanh thu: server báo số tiền bán được (vd 1.25k / 2.4m / 1.1b) vào chat của chính bot.
     // Trong lúc chạy vòng bán (+ vài giây sau) bot đọc các tin đó, cộng lại, ghi vào RevenueTracker
     // rồi gửi báo cáo (doanh thu/giờ, /ngày) qua webhook.
@@ -300,7 +314,7 @@ class BotSession extends EventEmitter {
   // B1: bot đã bị tắt / đang dừng -> mọi luồng start/reconnect phải bỏ qua
   get _shouldNotRun() { return this._disabled || this.isStopping; }
   // A1: đang có routine khác chiếm quyền điều khiển (macro / bảo vệ lồng / auto-sell spawn)
-  get _isBusy() { return !!(this.macroEngine?.running || this._spawnerBusy || this._sellSpawnBusy); }
+  get _isBusy() { return !!(this.macroEngine?.running || this._spawnerBusy || this._sellSpawnBusy || this._sellRecovering); }
   get isOnline()        { return this.state.connState === CS.ONLINE; }
   get isConnected()     { return [CS.ONLINE, CS.SPAWNING, CS.AUTHENTICATING].includes(this.state.connState); }
   get isStopping()      { return this.state.connState === CS.STOPPING; }
@@ -1461,41 +1475,77 @@ class BotSession extends EventEmitter {
     // (_posLost: đang lệch khỏi chỗ treo lồng, đang chờ /home — không bán lúc này kẻo spam "quá xa/chunk chưa tải")
     if (this._isBusy || this._posLost) { this._scheduleSellSpawn(5000); return; }
     const t0 = nowMs();
-    try { await this._runSellSpawnCycle(); }
+    try { await this._runSellWithRecovery(); }
     catch (e) { this.log('err', 'Auto-sell Spawn lỗi: ' + e.message); }
     this._scheduleSellSpawn(this._sellSpawnIntervalMs() - (nowMs() - t0));
   }
   runSellSpawnNow() {
     if (!this.isOnline) { this.log('warn', 'Auto-sell Spawn: bot offline'); return false; }
-    if (this._sellSpawnBusy) { this.log('warn', 'Auto-sell Spawn: đang chạy một vòng rồi'); return false; }
+    if (this._sellSpawnBusy || this._sellRecovering) { this.log('warn', 'Auto-sell Spawn: đang chạy một vòng rồi'); return false; }
     if (this._spawnerBusy || this.macroEngine.running) { this.log('warn', 'Auto-sell Spawn: bot đang bận (bảo vệ lồng/macro) — thử lại sau'); return false; }
-    this._runSellSpawnCycle().catch(e => this.log('err', 'Auto-sell Spawn lỗi: ' + e.message));
+    this._runSellWithRecovery().catch(e => this.log('err', 'Auto-sell Spawn lỗi: ' + e.message));
     return true;
   }
-  // Xoay đầu nhìn thẳng vào tâm block p rồi KIỂM TRA tia ngắm đang trúng đúng block đó (blockAtCursor); lệch thì xoay lại, tối đa `tries` lần.
-  // true = tia ngắm trúng block. false = đã xoay nhưng bị block khác che / ngoài tầm (người gọi vẫn quyết định có làm tiếp hay không).
-  async _faceBlock(mc, p, { reach = SELL_SPAWN_REACH, tries = 2, stop = null } = {}) {
-    const center = makeVec3(p.x + 0.5, p.y + 0.5, p.z + 0.5);
+  // Mắt bot (toạ độ thế giới)
+  _eyePos(mc) {
+    const p = mc.entity.position;
+    const h = typeof mc.entity.eyeHeight === 'number' ? mc.entity.eyeHeight : 1.62;
+    return { x: p.x, y: p.y + h, z: p.z };
+  }
+  // Tia ngắm HIỆN TẠI (yaw/pitch của bot) có tới được block p không? Chỉ khối đặc nguyên khối mới che tia —
+  // block nửa khối/nhỏ (chồi thạch anh tím, nến, thảm, rào, bậc thang...) tia đi xuyên qua (xem AimUtil.js).
+  _aimCheckBlock(mc, p, reach = SELL_SPAWN_REACH) {
+    const e = mc?.entity;
+    if (!e?.position || !Number.isFinite(e.yaw) || !Number.isFinite(e.pitch)) return { hit: false };
+    return aimCheck({ eye: this._eyePos(mc), yaw: e.yaw, pitch: e.pitch, target: p, maxDist: reach + 1, getBlock: q => mc.blockAt(this._vec(q)) });
+  }
+  _aimWhy() {
+    const b = this._lastAim?.blocker;
+    return b ? ` — bị ${b.name} (${b.x},${b.y},${b.z}) che` : '';
+  }
+  // Giữ nguyên góc nhìn: AFK không được xoay đầu/đi/nhảy trong `ms` tới. (Lỗi cũ: AFK walk/jump gọi look() ngẫu nhiên mỗi ~0.5–5s,
+  // đè lên góc nhìn vừa chỉnh về lồng ngay trước lúc chuột phải/đào nên "góc nhìn không đổi".)
+  _holdView(ms) { this._viewLockUntil = Math.max(this._viewLockUntil || 0, nowMs() + ms); }
+  _afkPaused(now = nowMs()) {
+    return this._tp.frozen(now) || this._sellSpawnBusy || this._sellRecovering || this._spawnerBusy || now < (this._viewLockUntil || 0);
+  }
+  // Thả các phím AFK đang giữ (đi/nhảy) để bot đứng im khi cần nhắm
+  _releaseAfkKeys() {
+    for (const k of ['afkJumpOff', 'wafkKey', 'wafkJump']) this._clearTimer(k);
+    try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) this.mc?.setControlState(k, false); } catch { }
+  }
+  // Xoay đầu nhìn thẳng vào tâm block p rồi KIỂM TRA tia ngắm tới được block đó (bỏ qua block nửa khối); lệch/bị đè thì xoay lại, tối đa `tries` lần.
+  // true = tia ngắm tới block. false = đã xoay nhưng bị khối đặc che / ngoài tầm (người gọi vẫn quyết định có làm tiếp hay không).
+  async _faceBlock(mc, p, { reach = SELL_SPAWN_REACH, tries = 3, stop = null, holdMs = 4000 } = {}) {
+    this._holdView(holdMs + 2000);
+    this._releaseAfkKeys();
+    this._lastAim = null;
     for (let i = 0; i < tries; i++) {
-      if ((stop && stop()) || !this.isOnline || this.mc !== mc) return false;
-      try { await mc.lookAt(center, true); } catch { }
+      if ((stop && stop()) || !this.isOnline || this.mc !== mc || !mc.entity?.position) return false;
+      const a = anglesTo(this._eyePos(mc), { x: p.x + 0.5, y: p.y + 0.5, z: p.z + 0.5 });
+      try { await this._withTimeout(mc.look(a.yaw, a.pitch, true), 1500); } catch { } // có timeout: look() chỉ xong khi gói xoay đã gửi
       await sleep(jit(250, 80)); // chờ gói xoay đầu tới server trước khi click/đào
-      if (typeof mc.blockAtCursor !== 'function') return true; // phiên bản mineflayer không có -> không kiểm tra được, coi như đã nhìn
-      let hit = null;
-      try { hit = mc.blockAtCursor(reach + 1); } catch { }
-      if (hit?.position && hit.position.x === p.x && hit.position.y === p.y && hit.position.z === p.z) return true;
+      const r = this._aimCheckBlock(mc, p, reach);
+      this._lastAim = r;
+      if (r.hit) { this._holdView(holdMs); return true; }
     }
     return false;
   }
   // Lúc BẬT autosell_spawn: xoay đầu về lồng đầu tiên trong tầm (AFK/teleport có thể đã xoay bot đi hướng khác) rồi mới tới vòng bán.
   async _alignViewToSellSpawn(mc) {
     if (!this.isOnline || !mc?.entity?.position) return false;
-    if (this._isBusy || this._tp.frozen(nowMs())) return false; // đang bận / đang chờ teleport thì không xoay đầu
-    const eye = mc.entity.position.offset(0, 1.62, 0);
-    const p = this.sellSpawnList.find(q => eye.distanceTo(makeVec3(q.x + 0.5, q.y + 0.5, q.z + 0.5)) <= SELL_SPAWN_REACH);
+    // vừa teleport xong: đợi hết thời gian đứng yên (tối đa 10s) rồi mới xoay — trước đây bỏ qua âm thầm nên bật xong góc nhìn không đổi
+    for (let w = 0; w < 20 && this._tp.frozen(nowMs()); w++) {
+      await sleep(500);
+      if (!this.isOnline || this.mc !== mc) return false;
+    }
+    if (this._tp.frozen(nowMs())) { this.log('warn', 'Auto-sell Spawn: bot vẫn đang chờ teleport — chưa chỉnh được góc nhìn (vòng bán sẽ tự nhìn lồng trước khi chuột phải)'); return false; }
+    if (this._isBusy) { this.log('sys', 'Auto-sell Spawn: bot đang bận việc khác — vòng bán sẽ tự nhìn lồng trước khi chuột phải'); return false; }
+    const eye = this._eyePos(mc);
+    const p = this.sellSpawnList.find(q => Math.hypot(eye.x - (q.x + 0.5), eye.y - (q.y + 0.5), eye.z - (q.z + 0.5)) <= SELL_SPAWN_REACH);
     if (!p) { this.log('warn', 'Auto-sell Spawn: chưa có lồng nào trong tầm để chỉnh góc nhìn'); return false; }
     const ok = await this._faceBlock(mc, p);
-    this.log(ok ? 'sys' : 'warn', `Auto-sell Spawn: ${ok ? 'đã chỉnh góc nhìn về lồng' : 'đã xoay về lồng nhưng tia ngắm chưa trúng (có block che?)'} (${p.x},${p.y},${p.z})`);
+    this.log(ok ? 'sys' : 'warn', `Auto-sell Spawn: ${ok ? 'đã chỉnh góc nhìn về lồng' : `đã xoay về lồng nhưng tia ngắm chưa tới${this._aimWhy()}`} (${p.x},${p.y},${p.z})`);
     return ok;
   }
   _withTimeout(p, ms) {
@@ -1514,26 +1564,32 @@ class BotSession extends EventEmitter {
   }
   async _runSellSpawnCycle() {
     const mc = this.mc;
-    if (!this.isOnline || !mc?.entity?.position || this._sellSpawnBusy) return { done: 0, total: 0 };
+    const none = { done: 0, total: 0, ok: false, aborted: false, skipped: true, reasons: [] };
+    if (!this.isOnline || !mc?.entity?.position || this._sellSpawnBusy) return none;
     const list = this.sellSpawnList.slice();
-    if (!list.length) { this.log('warn', 'Auto-sell Spawn: danh sách lồng trống'); return { done: 0, total: 0 }; }
+    if (!list.length) { this.log('warn', 'Auto-sell Spawn: danh sách lồng trống'); return none; }
     this._sellSpawnBusy = true;
     this._sellSpawnAbort = false;
+    this._releaseAfkKeys(); // AFK walk đang giữ phím đi thì thả ra: đứng im rồi mới nhắm lồng
     if (this.autoSellSpawnRevenue) this._beginSellCapture(list.length);
     const stop = () => this._sellSpawnAbort || !this.isOnline || this.mc !== mc;
     let wasSneak = false;
     try { wasSneak = !!mc.getControlState?.('sneak'); if (wasSneak) mc.setControlState('sneak', false); } catch { } // đang shift thì chuột phải không mở được GUI
-    let done = 0;
+    let done = 0, aborted = false;
+    const reasons = [];
     this.log('sys', `Auto-sell Spawn: bắt đầu vòng bán (${list.length} lồng)`);
     try {
       for (let i = 0; i < list.length; i++) {
         if (stop()) { this.log('warn', 'Auto-sell Spawn: bị ngắt giữa chừng (bảo vệ lồng/macro/tắt/mất kết nối)'); break; }
         let ok = false;
+        this._sellWhy = '';
         try { ok = await this._sellOneSpawn(mc, list[i], `${i + 1}/${list.length}`, stop); }
-        catch (e) { this.log('err', `Auto-sell Spawn [${i + 1}/${list.length}] lỗi: ${e.message}`); }
+        catch (e) { this._sellWhy = `lỗi: ${e.message}`; this.log('err', `Auto-sell Spawn [${i + 1}/${list.length}] lỗi: ${e.message}`); }
         if (ok) done++;
+        else if (!stop()) reasons.push(`(${list[i].x},${list[i].y},${list[i].z}) ${this._sellWhy || 'không rõ lý do'}`);
         if (i < list.length - 1 && !stop()) await sleep(jit(900, 300));
       }
+      aborted = stop();
     } finally {
       try { if (this.mc === mc && mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
       try { if (wasSneak && this.mc === mc) mc.setControlState('sneak', true); } catch { }
@@ -1541,22 +1597,29 @@ class BotSession extends EventEmitter {
     }
     this.log(done === list.length ? 'ok' : 'warn', `Auto-sell Spawn: xong ${done}/${list.length} lồng${this._sellSpawnOn ? ` — vòng kế tiếp sau ~${this._fmtDuration(this._sellSpawnIntervalMs())}` : ''}`);
     if (this._sellCap) { this._sellCap.done = done; this._setTimer('sellRevFinalize', () => this._finalizeSellRevenue(false), 4000); } // chờ 4s cho tin "bán được" của lồng cuối kịp về
-    return { done, total: list.length };
+    return { done, total: list.length, ok: !aborted && done === list.length, aborted, skipped: false, reasons };
+  }
+  _sellFail(tag, at, msg) {
+    this._sellWhy = msg;
+    this.log('warn', `Auto-sell Spawn [${tag}] ${at}: ${msg}`);
+    return false;
   }
   // 1 lồng: chuột phải mở GUI -> click slot -> đóng GUI. Trả về true nếu đã click được.
   async _sellOneSpawn(mc, p, tag, stop) {
     const block = mc.blockAt(this._vec(p));
     const at = `(${p.x},${p.y},${p.z})`;
-    if (!block) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: chunk chưa tải — bỏ qua`); return false; }
-    if (block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: không có block ở đây — bỏ qua`); return false; }
-    const center = makeVec3(p.x + 0.5, p.y + 0.5, p.z + 0.5);
-    const dist = mc.entity.position.offset(0, 1.62, 0).distanceTo(center);
-    if (dist > SELL_SPAWN_REACH) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: quá xa (${dist.toFixed(1)} block) — bot không tự di chuyển, bỏ qua`); return false; }
+    if (!block) return this._sellFail(tag, at, 'chunk chưa tải — bỏ qua');
+    if (block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') return this._sellFail(tag, at, 'không có block ở đây — bỏ qua');
+    const eye = this._eyePos(mc);
+    const dist = Math.hypot(eye.x - (p.x + 0.5), eye.y - (p.y + 0.5), eye.z - (p.z + 0.5));
+    if (dist > SELL_SPAWN_REACH) return this._sellFail(tag, at, `quá xa (${dist.toFixed(1)} block) — bot không tự di chuyển, bỏ qua`);
     if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch { } await sleep(300); }
-    // nhìn thẳng vào lồng + kiểm tra tia ngắm trúng lồng rồi MỚI chuột phải
-    const aimed = await this._faceBlock(mc, p, { stop });
+    // nhìn thẳng vào lồng + kiểm tra tia ngắm tới lồng (bỏ qua block nửa khối) rồi MỚI chuột phải
+    let aimed = await this._faceBlock(mc, p, { stop });
     if (stop()) return false;
-    if (!aimed) this.log('warn', `Auto-sell Spawn [${tag}] ${at}: tia ngắm chưa trúng lồng (có block che?) — vẫn thử chuột phải`);
+    if (aimed && !this._aimCheckBlock(mc, p).hit) aimed = await this._faceBlock(mc, p, { stop }); // góc nhìn bị đổi sát lúc click -> nhắm lại
+    if (stop()) return false;
+    if (!aimed) this.log('warn', `Auto-sell Spawn [${tag}] ${at}: tia ngắm chưa trúng lồng${this._aimWhy()} — vẫn thử chuột phải`);
     // đăng ký chờ GUI TRƯỚC khi click để không lỡ sự kiện windowOpen
     const winP = this._waitWindowOpen(mc, 6000);
     try { await this._withTimeout(mc.activateBlock(block), 2500); }
@@ -1564,19 +1627,16 @@ class BotSession extends EventEmitter {
     const win = await winP;
     if (!win) {
       if (stop()) return false; // vòng thuộc kết nối cũ (đã mất kết nối/bị ngắt) — không báo lỗi giả
-      this.log('warn', `Auto-sell Spawn [${tag}] ${at}: GUI không mở sau 6s`); return false;
+      return this._sellFail(tag, at, 'GUI không mở sau 6s');
     }
     try {
       await sleep(jit(650, 150)); // đợi server gửi đủ ô đồ
       const slot = this.autoSellSpawnSlot;
       const start = win.inventoryStart ?? Math.max(0, win.slots.length - 36);
-      if (slot >= start) {
-        this.log('warn', `Auto-sell Spawn [${tag}] ${at}: GUI chỉ có ${start} ô — slot ${slot} nằm ngoài GUI (là túi đồ của bot), KHÔNG click. Kiểm tra lại số slot`);
-        return false;
-      }
+      if (slot >= start) return this._sellFail(tag, at, `GUI chỉ có ${start} ô — slot ${slot} nằm ngoài GUI (là túi đồ của bot), KHÔNG click. Kiểm tra lại số slot`);
       let it = win.slots[slot];
       for (let k = 0; !it && k < 3; k++) { await sleep(500); it = win.slots[slot]; }
-      if (!it) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: ô ${slot} trống — không click`); return false; }
+      if (!it) return this._sellFail(tag, at, `ô ${slot} trống — không click`);
       if (stop()) return false;
       const name = resolveText(it.customName || it.displayName || it.name || '').substring(0, 40);
       const title = resolveText(win.title || '').substring(0, 30);
@@ -1590,6 +1650,89 @@ class BotSession extends EventEmitter {
       try { const cur = this.mc === mc ? mc.currentWindow : null; if (cur) mc.closeWindow(cur); } catch { }
       await sleep(jit(350, 100));
     }
+  }
+  // ===== Bán lỗi -> /home treolong -> bán lại (tối đa sellFailMaxHome lần) -> vẫn lỗi thì báo webhook + tag =====
+  _sellHomeCmd() {
+    const c = String(this.spawnHomeCommand || '/home treolong').trim() || '/home treolong';
+    return c.startsWith('/') ? c : `/${c}`;
+  }
+  async _runSellWithRecovery() {
+    const mc = this.mc;
+    this._sellRecovering = true; // giữ cờ bận suốt chuỗi: không cho canh-vị-trí tự gõ /home chen vào, AFK đứng yên
+    try {
+      let res = await this._runSellSpawnCycle();
+      if (res.ok || res.aborted || res.skipped) return res;
+      const max = this.sellFailMaxHome;
+      if (!(max > 0)) return res;
+      const cmd = this._sellHomeCmd();
+      const stopRec = () => !this.isOnline || this.mc !== mc || this._spawnerBusy || this._sellSpawnAbort;
+      for (let n = 1; n <= max; n++) {
+        if (stopRec()) { this.log('warn', 'Auto-sell Spawn: ngắt chuỗi thử lại (bảo vệ lồng/tắt/mất kết nối)'); return { ...res, aborted: true }; }
+        this.log('warn', `Auto-sell Spawn: bán chưa xong (${res.done}/${res.total}${res.reasons.length ? `: ${res.reasons[0]}` : ''}) → gõ ${cmd} rồi bán lại (lần ${n}/${max})`);
+        await this._sellGoHome(mc, n, stopRec);
+        if (stopRec()) { this.log('warn', 'Auto-sell Spawn: ngắt chuỗi thử lại (bảo vệ lồng/tắt/mất kết nối)'); return { ...res, aborted: true }; }
+        res = await this._runSellSpawnCycle();
+        if (res.ok) { this.log('ok', `Auto-sell Spawn: bán được ${res.done}/${res.total} lồng sau khi gõ ${cmd} ${n} lần`); return res; }
+        if (res.aborted || res.skipped) return res;
+      }
+      this._onSellRecoveryFailed(res, max, cmd);
+      return res;
+    } finally {
+      this._sellRecovering = false;
+    }
+  }
+  // Gõ /home treolong, đứng yên chờ teleport xong (đã ở sẵn chỗ treo thì server vẫn đếm ngược rồi "dịch chuyển" tại chỗ — không sao), chờ chunk lồng tải.
+  async _sellGoHome(mc, n, stop) {
+    const cmd = this._sellHomeCmd();
+    const minGap = TP_PRESEND_MS + this._tp.deadlineMs + this._tp.settleMs + 1000; // không gõ dồn khi lần trước chưa xong (server còn đếm ngược/cooldown)
+    while (nowMs() < (this._lastSellHomeAt || 0) + minGap) { if (stop()) return false; await sleep(500); }
+    try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
+    this._tpHoldStill(nowMs());
+    await sleep(TP_PRESEND_MS);
+    if (stop()) return false;
+    try { mc.chat(cmd); } catch (e) { this.log('err', `Lỗi gửi ${cmd}: ${e.message}`); return false; }
+    this._lastSellHomeAt = nowMs();
+    this._tp.begin({ cmd, pos: mc.entity?.position, now: nowMs() });
+    this.log('sys', `Auto-sell Spawn: đã gõ ${cmd} (lần ${n}) — đứng yên chờ teleport ${(this.spawnHomeWarmupMs / 1000).toFixed(0)}s...`);
+    const t0 = nowMs();
+    const limit = this._tp.deadlineMs + this._tp.settleMs + 2000;
+    while (nowMs() - t0 < limit) {
+      await sleep(500);
+      if (stop()) return false;
+      const ev = this._tp.tick(mc.entity?.position, nowMs()); // posKeeper cũng tick: ai lấy được sự kiện trước thì log, sự kiện chỉ trả 1 lần
+      if (ev) this._onTeleportEvent(ev);
+      if (!this._tp.active && !this._tp.frozen(nowMs())) break;
+    }
+    const first = this.sellSpawnList[0];
+    const chunkUntil = nowMs() + this.sellHomeChunkWaitMs;
+    while (first && nowMs() < chunkUntil) { // chờ chunk chỗ lồng tải xong sau teleport
+      let b = null;
+      try { b = mc.blockAt(this._vec(first)); } catch { }
+      if (b && this._isSpawnerBlock(b)) break;
+      await sleep(250);
+      if (stop()) return false;
+    }
+    await sleep(jit(500, 150));
+    return true;
+  }
+  _onSellRecoveryFailed(res, max, cmd) {
+    const id = this.cfg.id;
+    const pos = this._fmtXYZ(this.mc?.entity?.position);
+    this.log('err', `Auto-sell Spawn: đã gõ ${cmd} ${max} lần mà vẫn không bán được (${res.done}/${res.total} lồng) → báo webhook`);
+    const now = nowMs();
+    if (now - this._sellFailAlertedAt < this.sellFailAlertMinMs) { this.log('sys', 'Auto-sell Spawn: vừa báo webhook thất bại gần đây — bỏ qua tin trùng'); return; }
+    const n = this._manager?.notifier;
+    if (!n?.isEventOn('sellFailed')) { this.log('warn', 'Auto-sell Spawn: chưa cấu hình webhook (webhook set <url>) hoặc sự kiện sellFailed đang tắt — không gửi được tin thất bại'); return; }
+    this._sellFailAlertedAt = now;
+    const tag = Notifier.formatMention(this.sellFailMention);
+    const cage = this._describeCageDistance();
+    const lines = [
+      `Đã gõ ${cmd} ${max} lần, sau mỗi lần đều bán lại nhưng vẫn không xong (${res.done}/${res.total} lồng).`,
+      res.reasons.length ? `Lý do lần cuối:\n${res.reasons.slice(0, 5).map(r => `• ${r}`).join('\n')}` : null,
+      `📍 Vị trí: ${pos}${cage ? ` — ${cage}` : ''}`,
+      `⚙️ Click ô ${this.autoSellSpawnSlot}, ${this.sellSpawnList.length} lồng. Chu kỳ kế tiếp vẫn tự chạy lại.`,
+    ].filter(Boolean);
+    this._notify('sellFailed', `🚨 ${id}: autosell_spawn thất bại sau ${max} lần gõ ${cmd}`, lines.join('\n'), 0xef4444, `🚨 KHÔNG BÁN ĐƯỢC LỒNG${tag ? ' ' + tag : ''}`);
   }
   // Dùng chung cho lệnh CLI + web. Trả về { ok, on, message }
   configureSellSpawn(o = {}) {
@@ -1773,7 +1916,7 @@ class BotSession extends EventEmitter {
     const strangers = this._nearbyStrangers();
     if (!strangers.length) return;
     // Bảo vệ lồng có ưu tiên cao hơn: ngắt vòng auto-sell spawn, tick 250ms sau sẽ xử lý
-    if (this._sellSpawnBusy) { this._sellSpawnAbort = true; return; }
+    if (this._sellSpawnBusy || this._sellRecovering) { this._sellSpawnAbort = true; return; }
     this._spawnerBusy = true;
     this._onSpawnerThreat(strangers)
       .catch(e => this.log('err', 'Bảo vệ Lồng Spawn lỗi: ' + e.message))
@@ -1817,7 +1960,7 @@ class BotSession extends EventEmitter {
       if (blk) {
         // nhìn thẳng vào ender chest (kiểm tra tia ngắm trúng rương) rồi MỚI mở rương
         const aimed = await this._faceBlock(mc, blk.position, { reach: 5 });
-        this.log('sys', `Bảo vệ Lồng Spawn: nhìn vào ender chest (${blk.position.x},${blk.position.y},${blk.position.z}) → mở rương${aimed ? '' : ' (tia ngắm chưa trúng rương — có block che?)'}`);
+        this.log('sys', `Bảo vệ Lồng Spawn: nhìn vào ender chest (${blk.position.x},${blk.position.y},${blk.position.z}) → mở rương${aimed ? '' : ` (tia ngắm chưa trúng rương${this._aimWhy()})`}`);
         try { const w = await mc.openContainer(blk); await sleep(450); return w; }
         catch (e) { this.log('warn', 'Mở ender chest (rương thật) lỗi: ' + e.message); }
       }
@@ -1926,7 +2069,7 @@ class BotSession extends EventEmitter {
         let outOfReach = false;
         // nhìn thẳng vào lồng (kiểm tra tia ngắm trúng lồng) rồi MỚI đào
         const aimed = await this._faceBlock(mc, p, { reach: 6, stop: () => !this._spawnerProtectOn });
-        if (this.isOnline && this._spawnerProtectOn) this.log(aimed ? 'sys' : 'warn', `Bảo vệ Lồng Spawn: nhìn vào lồng (${p.x},${p.y},${p.z}) → đào${aimed ? '' : ' (tia ngắm chưa trúng lồng — có block che?)'}`);
+        if (this.isOnline && this._spawnerProtectOn) this.log(aimed ? 'sys' : 'warn', `Bảo vệ Lồng Spawn: nhìn vào lồng (${p.x},${p.y},${p.z}) → đào${aimed ? '' : ` (tia ngắm chưa trúng lồng${this._aimWhy()})`}`);
         for (let i = 0; i < 12; i++) { // stack còn dư thì đập tiếp
           if (!this.isOnline) throw new Error('bot offline');
           if (!this._spawnerProtectOn) throw new Error('đã tắt bảo vệ giữa chừng');
@@ -2527,7 +2670,7 @@ class BotSession extends EventEmitter {
     const mc = this.mc;
     const tick = () => {
       if (!this.isOnline || this.state.afk !== 'jump') return;
-      if (this._tp.frozen(nowMs())) { this._setTimer('afk', tick, 500); return; } // đang chờ teleport: không nhảy/xoay
+      if (this._afkPaused(nowMs())) { this._setTimer('afk', tick, 500); return; } // đang chờ teleport / đang bán / đang nhắm lồng: không nhảy/xoay
       try {
         mc.setControlState('jump', true);
         this._setTimer('afkJumpOff', () => {
@@ -2569,7 +2712,7 @@ class BotSession extends EventEmitter {
     let stuckTicks = 0;
     const tick = () => {
       if (!this.isOnline || this.state.afk !== 'walk') return;
-      if (this._tp.frozen(nowMs())) { lastPos = null; stuckTicks = 0; this._setTimer('wafk', tick, 500); return; } // đang chờ teleport: không đi/xoay
+      if (this._afkPaused(nowMs())) { lastPos = null; stuckTicks = 0; this._setTimer('wafk', tick, 500); return; } // đang chờ teleport / đang bán / đang nhắm lồng: không đi/xoay
       try {
         if (Math.random() < 0.06) dir = -dir;
         yaw += rand(2, 10) * 0.09 * dir;

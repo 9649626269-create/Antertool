@@ -22,9 +22,10 @@ const EVENT_LABELS = {
   revenue: 'Báo cáo doanh thu Auto-sell Spawn',
   featuresReady: 'Đã bật spawnerprotect + autosell_spawn (sau đăng nhập/menu, đúng vị trí)',
   homeReturn: 'Lệch vị trí treo lồng → tự gõ /home treolong (và khi đã về)',
+  sellFailed: 'autosell_spawn bán lỗi, gõ /home treolong tối đa N lần vẫn không bán được (có tag người nhận)',
 };
 // Các loại sự kiện thêm sau này — BotManager tự thêm 1 lần vào danh sách đã lưu của người dùng (xem migrateWebhookEvents)
-const NEW_EVENTS = ['featuresReady', 'homeReturn'];
+const NEW_EVENTS = ['featuresReady', 'homeReturn', 'sellFailed'];
 const DEFAULT_EVENTS = Object.keys(EVENT_LABELS);
 // Các sự kiện "báo động" có dòng tiêu đề + tag người nhận (kiểu: ❌ BOT BỊ KICK @ai-đó)
 const DEFAULT_MENTION_EVENTS = ['disconnect', 'reconnectFailed', 'spawnerThreat'];

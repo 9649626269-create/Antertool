@@ -1,3 +1,32 @@
+# Bản sửa (fixed13) — góc nhìn không đổi + bỏ qua block nửa khối + bán lỗi thì /home treolong thử lại (tối đa 10 lần) rồi báo webhook
+
+**Yêu cầu:** (1) góc nhìn bị lỗi, không chỉnh về lồng được; (2) block nửa khối như chồi thạch anh tím (người vẫn chui vô được) không được coi là vật cản; (3) không bán được lồng → gõ `/home treolong` rồi bán lại, lặp tối đa 10 lần, vẫn không được thì báo webhook tag `@1413104059333873764`.
+
+**Nguyên nhân góc nhìn không đổi (đọc từ code, chưa chạy thử với server thật):**
+- AFK (`afkWalk`/`afkJump`) vẫn gọi `look()` ngẫu nhiên mỗi ~0.5–5s và chỉ dừng khi đang chờ teleport — **không dừng khi đang bán/đang nhắm lồng** → góc nhìn vừa chỉnh về lồng bị đè ngay trước lúc chuột phải/đào. AFK walk còn giữ phím đi nên bot xê dịch.
+- Lúc BẬT `autosell_spawn` ngay sau khi về home (đang trong thời gian đứng yên sau teleport), bước chỉnh góc nhìn bị **bỏ qua âm thầm**.
+- `lookAt()` không có timeout: nếu gói xoay không gửi được thì đứng chờ vô hạn.
+
+**Đã sửa (`BotSession.js`, module mới `AimUtil.js`):**
+- `_faceBlock`: tự tính yaw/pitch nhìn vào tâm block rồi `look()` (có timeout 1.5s), chờ gói tới server, kiểm tra lại; lệch thì nhắm lại (tối đa 3 lần). Trong lúc nhắm + giữ ~4s sau đó **AFK đứng yên hẳn** (không xoay/đi/nhảy), phím đi đang giữ được thả.
+- AFK cũng đứng yên suốt vòng bán, chuỗi `/home` thử lại và khi spawnerprotect đang xử lý.
+- Chỉnh góc nhìn lúc bật `autosell_spawn`: nếu đang trong thời gian đứng yên sau teleport thì **đợi** (tối đa 10s) rồi mới xoay, không bỏ qua nữa. Ngay trước khi chuột phải còn kiểm tra lại một lần, lệch thì nhắm lại.
+- Kiểm tra tia ngắm do bot tự tính (`AimUtil.aimCheck`): **chỉ khối đặc nguyên khối 1x1x1 mới che tia**. Chồi/cụm thạch anh tím, nến, thảm, nút bấm, ray, đuốc, cỏ, hoa, rào, kính tấm, bậc thang, phiến... đều được bỏ qua (dựa vào hình dạng thật `block.shapes`). Cảnh báo giờ nói rõ block nào che: `tia ngắm chưa trúng lồng — bị stone (x,y,z) che`.
+
+**Bán lỗi → `/home treolong` → bán lại:**
+- "Lỗi" = vòng bán chưa click đủ lồng (chunk chưa tải, quá xa, GUI không mở, ô trống...). Bị ngắt (tắt autosell, bảo vệ lồng ưu tiên, mất kết nối) thì **không** tính là lỗi.
+- Lỗi → gõ `spawnHomeCommand` (mặc định `/home treolong`), đứng yên chờ teleport + chờ chunk lồng tải, bán lại. Lặp tối đa **10 lần** (`sellFailMaxHome`, đặt 0 để tắt). Đã ở sẵn chỗ treo thì teleport "tại chỗ" không sao, vẫn bán lại. Các lần gõ cách nhau ≥ ~12s. Trong chuỗi này canh-vị-trí không tự gõ `/home` chen vào.
+- Vẫn lỗi sau 10 lần → webhook sự kiện mới **`sellFailed`**, dòng tiêu đề có tag `<@1413104059333873764>` (đổi bằng `sellFailMention` trong config của bot; `"off"` = không tag), kèm số lồng bán được, lý do lần cuối, vị trí bot. Giãn cách tối thiểu 10 phút giữa 2 tin thất bại (`sellFailAlertMinMs`). Chu kỳ bán kế tiếp vẫn tự chạy bình thường.
+- Cần bật webhook (`webhook set <url>`); sự kiện `sellFailed` tự được thêm vào danh sách sự kiện đã lưu.
+
+**Config (mỗi bot, tuỳ chọn):** `sellFailMaxHome` (10), `sellFailMention` ("1413104059333873764"), `sellFailAlertMinMs` (600000), `sellHomeChunkWaitMs` (6000).
+
+**Test:** `test/aim-util.test.js` (block nào che tia), `test/sell-recovery.test.js` (gõ /home đúng số lần, báo + tag, không báo khi bán được/bị ngắt), `test/view-order.test.js` cập nhật (có cả ca chồi thạch anh tím).
+
+**Chưa test trên server thật.** Khi chạy xem log: `đã chỉnh góc nhìn về lồng`; nếu bán lỗi sẽ thấy `bán chưa xong (…) → gõ /home treolong rồi bán lại (lần n/10)`. Nếu vẫn hay thấy `tia ngắm chưa trúng lồng — bị <block> che` với block là khối đặc thì thật sự có khối đặc đứng giữa bot và lồng.
+
+---
+
 # Bản sửa (fixed12) — autosell_spawn chỉnh góc nhìn trước khi bán; spawnerprotect nhìn lồng → đào → nhìn ender chest → mở → bỏ lồng vào
 
 **Yêu cầu:** (1) khi bật `autosell_spawn` phải chỉnh lại góc nhìn về lồng rồi mới bán; (2) `spawnerprotect` làm đúng thứ tự: nhìn vào lồng → đào → nhìn vào ender chest → mở rương → bỏ lồng vào.
