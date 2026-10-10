@@ -488,8 +488,14 @@ class WebDashboard {
         if (cb) cb({ ok: true });
       });
       sock.on('restartAll', (data, cb) => {
-        this.manager.restartAll(typeof data?.filterFn === 'function' ? data.filterFn : null);
-        if (cb) cb({ ok: true });
+        // Có ids -> chỉ restart các bot đó (mảng rỗng = không bot nào, KHÔNG phải tất cả). Không có ids -> giữ hành vi cũ.
+        let filterFn = typeof data?.filterFn === 'function' ? data.filterFn : null;
+        if (Array.isArray(data?.ids)) {
+          const ids = new Set(data.ids.map(i => String(i).toLowerCase()));
+          filterFn = b => ids.has(String(b.cfg.id).toLowerCase());
+        }
+        const count = this.manager.restartAll(filterFn);
+        if (cb) cb({ ok: true, count });
       });
       // ===== Macro Engine =====
       sock.on('getMacros', ({ id }, cb) => {

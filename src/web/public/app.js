@@ -299,7 +299,9 @@ function bulkStop() {
 }
 function bulkRestart() {
   if (!confirm('Restart ' + ST._selectedBots.size + ' bot?')) return;
-  SOCK.emit('restartAll', { filterFn: null }, r => { toast('Đã gửi restart ' + ST._selectedBots.size + ' bot', 'warn'); });
+  // Không thể gửi function qua socket (JSON) -> gửi danh sách id để server chỉ restart đúng các bot đã chọn.
+  const ids = [...ST._selectedBots];
+  SOCK.emit('restartAll', { ids }, r => { toast('Đã gửi restart ' + ids.length + ' bot', 'warn'); });
   ST._selectedBots.clear(); renderSB();
 }
 function bulkDelete() {

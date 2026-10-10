@@ -332,13 +332,28 @@ class ProxyManager {
           sock.write(req);
         } catch (e) { settle(e); }
       });
-      let buf = '';
-      sock.on('data', d => {
-        buf += d.toString('latin1');
-        if (!buf.includes('\r\n\r\n')) return;
-        if (/^HTTP\/1\.[01] 200/i.test(buf)) settle(null, sock);
-        else { sock.destroy(); settle(new Error('HTTP proxy: ' + buf.split('\r\n')[0])); }
-      });
+      let buf = Buffer.alloc(0);
+      const onData = d => {
+        buf = Buffer.concat([buf, d]);
+        const end = buf.indexOf('\r\n\r\n');
+        if (end === -1) return;
+        // Đọc xong phần header phản hồi CONNECT thì GỠ listener ngay: socket sau đó được giao cho mineflayer,
+        // nếu để lại thì mọi byte của phiên chơi vẫn bị nối vào chuỗi và quét lại (rò rỉ RAM/CPU theo lưu lượng).
+        sock.removeListener('data', onData);
+        const head = buf.toString('latin1', 0, end);
+        if (/^HTTP\/1\.[01] 200/i.test(head)) {
+          // Giống http.ClientRequest khi xử lý CONNECT/upgrade: trả socket về trạng thái "chưa có ai đọc"
+          // (không mất dữ liệu trước khi mineflayer gắn listener) và trả lại byte thừa sau header, nếu có.
+          sock.readableFlowing = null;
+          if (buf.length > end + 4) sock.unshift(buf.subarray(end + 4));
+          buf = null;
+          settle(null, sock);
+        } else {
+          sock.destroy();
+          settle(new Error('HTTP proxy: ' + head.split('\r\n')[0]));
+        }
+      };
+      sock.on('data', onData);
       sock.once('error', settle);
       sock.once('close', () => settle(new Error('HTTP proxy đóng sớm')));
     });
@@ -648,6 +663,9 @@ class ProxyManager {
           tag: p.tag || null,
         });
         entry.id = p.id || ('pxy_' + (this._idCounter++));
+        // Id nạp từ config không đi qua _idCounter -> sau add() sẽ cấp lại đúng id đã có (trùng pxy_1...). Đẩy bộ đếm qua số lớn nhất đã dùng.
+        const m = /^pxy_(\d+)$/.exec(entry.id);
+        if (m) this._idCounter = Math.max(this._idCounter, Number(m[1]) + 1);
         entry.status = p.status || 'unknown';
         entry.ping = p.ping ?? -1;
         entry.quality = p.quality || 'unknown';

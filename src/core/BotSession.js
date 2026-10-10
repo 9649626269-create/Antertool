@@ -63,7 +63,9 @@ class BotSession extends EventEmitter {
     };
     this._timers = new Map();
     this._disabled = false;
-    this._connectCompleted = false;
+    // true = bot không đang giữ slot kết nối nào. Chỉ start() mới đặt false (cùng lúc tăng _activeConnects),
+    // nếu không thì shutdown() của bot chưa từng chạy sẽ trừ nhầm slot của bot khác.
+    this._connectCompleted = true;
     this._menuRetryCount = 0;
     this._menuSuccess = false;
     this._firstSpawn = true;
@@ -423,6 +425,9 @@ class BotSession extends EventEmitter {
     this._isCleanedUp = true;
   }
   _destroyMc() {
+    // Huỷ kết nối = trả slot đồng thời (nếu còn giữ). Phải làm TRƯỚC dòng return: mc có thể còn null (đang chờ proxy)
+    // hoặc listener 'end' đã bị gỡ bên dưới, khi đó không còn ai trả slot -> _activeConnects kẹt, cả dàn bot không vào được nữa.
+    this._onConnectComplete();
     if (!this.mc) return;
     const mc = this.mc;
     this.mc = null;
@@ -2831,7 +2836,6 @@ class BotSession extends EventEmitter {
     this._fastKicks = 0;
     this._menuRetryCount = 0;
     this._menuSuccess = false;
-    this._connectCompleted = false;
     this._disabled = false;
     this._isEating = false;
     this._lastReconnectTime = 0;

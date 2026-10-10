@@ -282,7 +282,9 @@ class BotManager {
     const targets = filterFn ? this.bots.filter(filterFn) : this.bots;
     let stagger = 0;
     for (const bot of targets) {
-      if (!bot.isConnected && !bot.isReconnecting && !bot._disabled) {
+      // Bot đã Stop (shutdown đặt _disabled=true) phải được bật lại; chỉ bỏ qua bot đang nghỉ theo lịch
+      // (_scheduledOut) vì _scheduleTick sẽ out lại trong ≤20s, vô lại chỉ để bị đá ra.
+      if (!bot.isConnected && !bot.isReconnecting && !bot._scheduledOut) {
         bot._disabled = false;
         bot.state.reconnects = 0;
         if (stagger > 0) {

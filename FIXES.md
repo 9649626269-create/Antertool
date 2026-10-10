@@ -1,3 +1,23 @@
+# Bản sửa (fixed16) — 5 lỗi từ báo cáo bug (proxy, bộ đếm kết nối, Restart/Start All, id proxy)
+
+**BUG-001 — Proxy HTTP/HTTPS rò rỉ RAM/CPU** (`ProxyManager._connectHttp`): listener `data` đọc phản hồi CONNECT không bao giờ được gỡ, nên mọi byte của phiên chơi bị nối vào một chuỗi ngày càng dài và quét lại. Giờ gỡ listener ngay khi đọc xong header; socket được trả về trạng thái "chưa ai đọc" (như `http.ClientRequest` làm với CONNECT) nên không mất byte trước khi mineflayer gắn listener; byte thừa sau `\r\n\r\n` (nếu có) được `unshift` lại. Đo với proxy giả, 40 MB đi qua tunnel: **86 ms, heap +0 MB** (bản cũ 13 s, +39 MB).
+
+**BUG-002 — Bộ đếm kết nối đồng thời bị kẹt** (`BotSession`): `_destroyMc()` giờ trả slot (`_onConnectComplete()`) trước khi `return`, nên restart/`start()` lần 2 khi đang CONNECTING không làm rò slot; `_connectCompleted` khởi tạo `true` và chỉ `start()` đặt `false` (cùng lúc tăng bộ đếm), nên `shutdown()` của bot chưa từng chạy không trừ nhầm slot của bot khác; bỏ dòng `_connectCompleted = false` trong `hardReset()`.
+
+**BUG-003 — Restart bot đã chọn lại restart cả dàn** (`app.js` + `WebDashboard.js`): `bulkRestart` gửi `{ids:[...]}` (function không đi qua JSON được). Server lọc theo `ids` (không phân biệt hoa thường); `ids` rỗng = không restart bot nào; không có `ids` thì giữ hành vi cũ (restart tất cả). Sửa kèm: thông báo "Đã gửi restart N bot" trước đây luôn ghi 0 vì đọc số bot sau khi đã bỏ chọn.
+
+**BUG-004 — "Start All" không bật lại bot đã Stop** (`BotManager.startAll`): bỏ điều kiện `!bot._disabled` (làm dòng `_disabled = false` bên dưới thành code chết). **Quyết định cần bạn xem lại:** bot đang nghỉ theo lịch (`_scheduledOut`) bị bỏ qua, vì `_scheduleTick` (20s/lần) sẽ out lại ngay; muốn Start All ép cả bot đó vô thì xoá `&& !bot._scheduledOut` ở dòng đó.
+
+**BUG-005 — Id proxy trùng sau khi khởi động lại** (`ProxyManager.loadFromConfig`): sau khi nạp, `_idCounter` được đẩy lên (số lớn nhất của các id `pxy_N`) + 1. Id trùng đã nằm sẵn trong `config.json` của bạn thì không tự sửa: cần xoá rồi thêm lại proxy đó.
+
+**Test mới (có trong `npm test`):** `test/proxy-http.test.js` (BUG-001, 005, dùng proxy giả trên localhost), `test/connect-slots.test.js` (BUG-002, 004, dùng BotManager/BotSession thật + mineflayer giả), `test/dashboard-restart.test.js` (BUG-003, cả hàm `bulkRestart` lẫn handler socket). Đã chạy cả 3 trên **bản fixed15 gốc**: đều fail đúng các kịch bản trong báo cáo; trên bản này đều qua, 11 test cũ vẫn qua.
+
+**Chưa kiểm với server/proxy thật** (môi trường làm việc không có mạng ra ngoài, không cài được thư viện npm nên test dùng đồ giả như các test sẵn có).
+
+**Ghi nhận, chưa sửa (ngoài báo cáo):** nếu bot dùng proxy đang chờ proxy trả lời (`await proxyManager.connect`) mà bị restart, lần `start()` cũ vẫn chạy tiếp và có thể tạo thêm một kết nối mineflayer nữa cho cùng tài khoản (kết nối thừa không bị đóng). Cách sửa gọn: đánh số thế hệ cho mỗi lần `start()` và bỏ qua lần đã cũ sau khi `await`.
+
+---
+
 # Bản chỉnh (fixed15) — bảng Telegram cập nhật mỗi 1 giây
 
 **Yêu cầu:** bảng cập nhật mỗi 1s.
