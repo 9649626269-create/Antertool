@@ -1,3 +1,39 @@
+# Bản cập nhật (fixed18) — Auto-sell tích hợp: không cần macro, logic ở file riêng `src/core/autosell.js`
+
+**Lỗi bạn gặp:** `autosell 50 cobblestone` / `autosell 50 autosell` báo `macro "..." không tồn tại` và `listmacro` báo `Chưa có macro nào trong config.json`. Không phải bug code: `autosell` cũ chỉ là cò súng "túi đầy → chạy 1 macro do bạn tự viết", mà `config.json` của bạn chưa có macro nào. (Lệnh `listmacro` / `autosell` gõ thẳng ở dấu `⬡` cũng không phải lệnh chung — phải có `cmd <id> ...`.)
+
+**Sửa theo yêu cầu (không dùng `config.json`, không cần macro — logic nằm ở file riêng, bán theo cách tool HEXTEKO):**
+- Mới `src/core/autosell.js`: túi đầy tới % → gõ `/sell` → shift-click các stack có tên **đúng** trong danh sách item sang GUI → click ô xác nhận 1, chờ 0.5s, click ô xác nhận 2 → lặp nếu còn đồ (tối đa 20 lượt) → đóng GUI.
+- Lệnh: `cmd <id> autosell <%đầy> <item,item...>` (vd `autosell 50 cobblestone`), `autosell on|off`, `autosell` (xem). Kiểu macro cũ vẫn còn: `autosell <%> macro <tên>`. Web: ô "Item bán" ở card Auto-sell.
+- Cài đặt từng bot lưu ở **`autosell.json`** cạnh `config.json` (như `revenue.json`; update không đụng; đã thêm vào `.gitignore`). Có thể sửa tay `command` (mặc định `/sell`) và `clicks` (mặc định `[-1, -9]` = ô cuối GUI rồi ô đầu hàng cuối; số âm đếm ngược từ cuối).
+- Báo cáo doanh thu, webhook, cổng vị trí (chỉ bán sau khi bot đứng đúng chỗ treo) dùng lại nguyên cơ chế cũ.
+
+**Khác với tool tham khảo (cố ý):** khớp tên item **chính xác** thay vì khớp hậu tố (ghi `sword` sẽ không bán `diamond_sword`); bán theo ngưỡng % túi đồ đầy như `autosell` cũ chứ không giữ GUI mở liên tục; không có chế độ hẹn giờ; tên item gõ sai (vd `cobbstone`) bị từ chối khi bot đang online.
+
+**An toàn / va chạm:** không chạy khi `spawnerprotect`, `autosell_spawn` hoặc macro đang điều khiển GUI (chờ, thử lại sau 10s); bảo vệ lồng chen vào giữa chừng thì dừng và KHÔNG đóng GUI của nó; `autosell_spawn` bỏ vòng nếu đang bán `/sell`. Bán lỗi thử lại sau 30s, tối đa 5 lần liên tiếp. Túi không có item nào trong danh sách thì không gõ `/sell`.
+
+**Test:** `test/autosell.test.js` (có trong `npm test`): hàm thuần, `autosell.json`, bán với GUI giả (chỉ đúng item, đúng thứ tự click, nhiều lượt khi shop nhỏ, shop đầy, GUI không mở, bị bảo vệ lồng ngắt), trigger/hysteresis/retry, các lệnh CLI, và `BotManager` nạp `autosell.json`. Các test cũ vẫn qua. `protocol-guard.test.js` đôi khi fail ngẫu nhiên (~1/6 lần) — bản fixed17 gốc cũng vậy, không liên quan thay đổi này.
+
+**Chưa test trên server KingMC thật:** lệnh `/sell`, vị trí 2 ô xác nhận và việc shift-click có chuyển được đồ vào GUI đều lấy theo tool tham khảo; nếu server bạn khác, sửa `command` / `clicks` trong `autosell.json`.
+
+---
+
+# Bản cập nhật (fixed17) — Spawner Protect theo mod Alatic + CƯỜNG ĐỘ PROTECT chỉnh được
+
+**Yêu cầu:** cập nhật spawnerprotect theo file `spawner-protect-main` (mod Meteor của Alatic) và có thể điều chỉnh cường độ protect.
+
+**Mới (module `src/core/SpawnerGuard.js`, test `test/spawner-guard.test.js`):**
+- **4 mức cường độ** + chỉnh tay từng thông số (17 thông số): lệnh `spawnerprotect level|set|status`, web (4 nút + mục chỉnh chi tiết), lưu `spawnerProtectLevel`/`spawnerProtectTune` trong `config.json`. Mặc định mức 2 (gần hành vi cũ: 20 block/5 tick, tự đập). Config cũ vẫn chạy (`spawnerProtectRange`, `spawnerAutoMine` được giữ làm chỉnh tay). Đổi mức khi đang chạy áp dụng ngay (đổi cả nhịp quét).
+- **Phát hiện mới (port từ mod):** người chơi đang đập block gần lồng, đào bề mặt (DigPattern, loại cát/sỏi/lá/chất lỏng), TNT, TNT minecart, vụ nổ (cộng bán kính nổ), Wither và sọ wither.
+- **Thu hồi như mod:** đào theo đợt (chờ item vào túi → nhả shift → nghỉ `pauseTicks` → shift lại), cất giữa chừng khi túi gần đầy, giới hạn thời gian `timeoutSec` (hết giờ vẫn cố cất số đã đào được), tốc độ cất `depositPerTick`.
+- **Xác minh trước khi thoát:** sau khi cất, MỞ LẠI ender chest 1 lần để kiểm snapshot server (rương ≥ dự kiến, túi không còn lồng). `spawnerAutoDisconnect` chỉ ngắt khi đã xác minh + không còn lồng/item trong túi/dưới đất + không hết giờ; nếu không thì bot ở lại và báo ⚠️. (Bản cũ ngắt ngay khi đập được ≥1 lồng, không kiểm tra gì.)
+
+**Không port (nêu rõ):** điều hướng riêng tới lồng/rương (bot vẫn đứng yên, cần đứng sát lồng), tự đặt ender chest từ túi, báo động âm thanh, viền lồng — không áp dụng cho bot không màn hình. Không phân biệt được TNT minecart đã châm hay chưa.
+
+**Đã test:** 14 test cũ + `spawner-guard.test` (bảng mức, chỉnh tay/lưu/nạp config cũ, từng loại phát hiện theo mức, chỉ báo ở mức 1, cất không xác minh được thì KHÔNG thoát, handler socket, hàm vẽ giao diện). **Chưa test trên server KingMC thật**: lần đầu thử mức 2 với 1 lồng + cúp Silk Touch; tên entity/trường packet có thể lệch theo bản mineflayer.
+
+---
+
 # Bản sửa (fixed16) — 5 lỗi từ báo cáo bug (proxy, bộ đếm kết nối, Restart/Start All, id proxy)
 
 **BUG-001 — Proxy HTTP/HTTPS rò rỉ RAM/CPU** (`ProxyManager._connectHttp`): listener `data` đọc phản hồi CONNECT không bao giờ được gỡ, nên mọi byte của phiên chơi bị nối vào một chuỗi ngày càng dài và quét lại. Giờ gỡ listener ngay khi đọc xong header; socket được trả về trạng thái "chưa ai đọc" (như `http.ClientRequest` làm với CONNECT) nên không mất byte trước khi mineflayer gắn listener; byte thừa sau `\r\n\r\n` (nếu có) được `unshift` lại. Đo với proxy giả, 40 MB đi qua tunnel: **86 ms, heap +0 MB** (bản cũ 13 s, +39 MB).

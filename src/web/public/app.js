@@ -799,7 +799,8 @@ function renderAutomation(b) {
     </div>
     <div class="automation-card"><div class="cfg-section-title">Auto-sell khi đầy túi đồ</div>
       <div class="cfg-row"><span class="cfg-label">% đầy để bán</span><input class="cfg-input" id="as-pct" type="number" min="1" max="100" value="90"></div>
-      <div class="cfg-row"><span class="cfg-label">Macro bán</span><input class="cfg-input" id="as-macro" placeholder="tên macro"></div>
+      <div class="cfg-row"><span class="cfg-label">Item bán (qua /sell)</span><input class="cfg-input" id="as-items" placeholder="vd: cobblestone,stone"></div>
+      <div class="cfg-row"><span class="cfg-label">hoặc Macro bán</span><input class="cfg-input" id="as-macro" placeholder="tên macro (nếu không dùng item)"></div>
       <div class="cfg-row"><button class="btn btn-primary btn-sm" onclick="saveAutoSell()">Lưu</button><button class="btn btn-sm" onclick="clearAutoSell()">Tắt</button></div>
     </div>
     <div class="automation-card"><div class="cfg-section-title">Auto-sell Spawn</div>
@@ -824,11 +825,15 @@ function renderAutomation(b) {
     </div>
     <div class="automation-card"><div class="cfg-section-title">Bảo vệ Lồng Spawn</div>
       <div class="cfg-row"><span class="cfg-label">Bật (tự lưu lồng ≤5 block)</span><label class="toggle"><input type="checkbox" id="sp-on" ${b.spawnerProtect?'checked':''} onchange="toggleSpawnerProtect(this.checked)"><span class="toggle-slider"></span></label></div>
-      <div class="cfg-row"><span class="cfg-label">Quét người lạ (block)</span><input class="cfg-input" id="sp-range" type="number" value="20" style="max-width:80px"></div>
+      <div class="cfg-row"><span class="cfg-label">Cường độ protect</span><div id="sp-levels" style="display:flex;gap:6px;flex-wrap:wrap"><span style="color:var(--text-3)">Đang tải...</span></div></div>
+      <div id="sp-level-desc" class="automation-row" style="color:var(--text-3);font-size:11px"></div>
+      <details id="sp-adv" style="margin:4px 0 8px"><summary style="cursor:pointer;font-size:12px">⚙ Chỉnh chi tiết từng thông số <span id="sp-tune-count" style="color:var(--text-3)"></span></summary>
+        <div id="sp-adv-body" style="margin-top:6px"></div>
+        <div class="cfg-row"><button class="btn btn-sm" onclick="saveSpawnerTune()">Áp dụng chỉnh tay</button><button class="btn btn-sm" onclick="resetSpawnerTune()">↺ Về theo mức</button></div>
+      </details>
       <div class="cfg-row"><span class="cfg-label">Whitelist</span><input class="cfg-input" id="sp-whitelist" placeholder="ten1, ten2 (owner + bot trong dàn tự được tin)"></div>
       <div class="cfg-row"><span class="cfg-label">Lệnh ender chest</span><input class="cfg-input" id="sp-ec" placeholder="/ec (bỏ trống = chỉ dùng rương thật gần bot)" style="max-width:220px"></div>
       <div class="cfg-row form-row-check">
-        <label class="check-label"><input type="checkbox" id="sp-automine" checked> Tự lấy cúp + đập lồng + cất ender chest</label>
         <label class="check-label"><input type="checkbox" id="sp-silk" checked> Chỉ dùng cúp Silk Touch</label>
         <label class="check-label"><input type="checkbox" id="sp-autodc"> Auto-disconnect sau khi đào xong</label>
       </div>
@@ -896,10 +901,10 @@ function clearMoneyGoal() {
 }
 function saveAutoSell() {
   if(!ST.activeId)return;
-  const threshold=$('as-pct')?.value, macro=$('as-macro')?.value?.trim();
-  if(!macro){ toast('Cần nhập tên macro bán','error'); return; }
-  SOCK.emit('setAutoSell',{id:ST.activeId,threshold,macro},r=>{
-    toast(r?.ok?'Đã lưu Auto-sell':'Lỗi lưu Auto-sell', r?.ok?'success':'error');
+  const threshold=$('as-pct')?.value, macro=$('as-macro')?.value?.trim(), items=$('as-items')?.value?.trim();
+  if(!items && !macro){ toast('Cần nhập item bán (vd cobblestone) hoặc tên macro','error'); return; }
+  SOCK.emit('setAutoSell',{id:ST.activeId,threshold,...(items?{items}:{macro})},r=>{
+    toast(r?.ok?'Đã lưu Auto-sell':(r?.message||'Lỗi lưu Auto-sell'), r?.ok?'success':'error');
   });
 }
 function clearAutoSell() {
@@ -1006,6 +1011,59 @@ function loadSellSpawn(id) {
     </div>`).join('');
   });
 }
+
+// ===== Cường độ protect =====
+let SP_GUARD=null;
+function renderSpawnerLevels(r){
+  if(!r?.guard)return; SP_GUARD=r.guard;
+  const box=$('sp-levels'); if(!box)return;
+  box.innerHTML=Object.entries(r.guard.levels).map(([n,l])=>`<button class="btn btn-sm ${Number(n)===r.level?'btn-primary':''}" title="${esc(l.desc)}" onclick="setSpawnerLevelUI(${n})">${l.icon} ${n} · ${esc(l.name)}</button>`).join('');
+  const L=r.guard.levels[r.level];
+  const dn=$('sp-level-desc'); if(dn) dn.textContent=L?`${L.icon} Mức ${r.level} "${L.name}": ${L.desc}`:'';
+  const cnt=Object.keys(r.tune||{}).length;
+  const tc=$('sp-tune-count'); if(tc) tc.textContent=cnt?`(${cnt} chỉnh tay)`:'';
+  const body=$('sp-adv-body'); if(!body)return;
+  if(body.contains(document.activeElement)&&document.activeElement.tagName==='INPUT')return; // đang gõ -> không vẽ đè
+  body.innerHTML=Object.entries(r.guard.spec).map(([k,sp])=>{
+    const v=r.settings[k], pinned=k in (r.tune||{});
+    const inp=sp.type==='bool'
+      ?`<label class="toggle"><input type="checkbox" data-sp="${k}" ${v?'checked':''}><span class="toggle-slider"></span></label>`
+      :`<input class="cfg-input" data-sp="${k}" type="number" min="${sp.min}" max="${sp.max}" value="${v}" style="max-width:90px"> <span style="color:var(--text-3);font-size:10px">${esc(sp.unit||'')}</span>`;
+    return `<div class="cfg-row"><span class="cfg-label">${esc(sp.label)}${pinned?' <b title="đã chỉnh tay, khác mức">*</b>':''}</span>${inp}</div>`;
+  }).join('');
+}
+function setSpawnerLevelUI(n){
+  if(!ST.activeId)return;
+  SOCK.emit('setSpawnerProtect',{id:ST.activeId,level:n},r=>{
+    toast(r?.ok?`Cường độ protect: mức ${n}`:'Lỗi',r?.ok?'success':'error');
+    loadSpawnerList(ST.activeId);
+  });
+}
+function saveSpawnerTune(){
+  if(!ST.activeId||!SP_GUARD)return;
+  const tune={};
+  document.querySelectorAll('#sp-adv-body [data-sp]').forEach(el=>{
+    const k=el.dataset.sp, sp=SP_GUARD.spec[k]; if(!sp)return;
+    tune[k]=sp.type==='bool'?el.checked:Number(el.value);
+  });
+  // chỉ gửi khoá khác giá trị của mức đang chọn (server tự bỏ khoá trùng mức)
+  SOCK.emit('setSpawnerProtect',{id:ST.activeId,tune},r=>{
+    toast(r?.ok?'Đã áp dụng chỉnh tay':'Lỗi',r?.ok?'success':'error');
+    const b=$('sp-adv-body'); if(b) b.innerHTML='';
+    loadSpawnerList(ST.activeId);
+  });
+}
+function resetSpawnerTune(){
+  if(!ST.activeId)return;
+  SOCK.emit('getSpawnerProtect',{id:ST.activeId},g=>{
+    if(!g?.ok)return;
+    SOCK.emit('setSpawnerProtect',{id:ST.activeId,level:g.level},r=>{
+      toast('Đã về đúng thông số của mức','success');
+      const b=$('sp-adv-body'); if(b) b.innerHTML='';
+      loadSpawnerList(ST.activeId);
+    });
+  });
+}
 function toggleSpawnerProtect(on) {
   if(!ST.activeId)return;
   SOCK.emit('setSpawnerProtect',{id:ST.activeId,on},r=>{
@@ -1019,13 +1077,11 @@ function toggleSpawnerProtect(on) {
 }
 function saveSpawnerProtectSettings() {
   if(!ST.activeId)return;
-  const range=Number($('sp-range')?.value)||20;
-  const autoMine=$('sp-automine')?.checked||false;
   const requireSilk=$('sp-silk')?.checked!==false;
   const enderCmd=($('sp-ec')?.value||'').trim();
   const autoDisconnect=$('sp-autodc')?.checked||false;
   const whitelist=($('sp-whitelist')?.value||'').split(',').map(s=>s.trim()).filter(Boolean);
-  SOCK.emit('setSpawnerProtect',{id:ST.activeId,range,autoMine,autoDisconnect,whitelist,requireSilk,enderCmd},r=>{
+  SOCK.emit('setSpawnerProtect',{id:ST.activeId,autoDisconnect,whitelist,requireSilk,enderCmd},r=>{
     toast(r?.ok?'Đã lưu cài đặt bảo vệ lồng':'Lỗi', r?.ok?'success':'error');
   });
 }
@@ -1047,10 +1103,9 @@ function loadSpawnerList(id) {
     if(r?.ok){
       const set=(k,fn)=>{ const e=$(k); if(e && document.activeElement!==e) fn(e); };
       set('sp-on',e=>e.checked=!!r.on);
-      set('sp-range',e=>e.value=r.range||20);
       set('sp-whitelist',e=>e.value=(r.whitelist||[]).join(', '));
       set('sp-ec',e=>e.value=r.enderCmd??'/ec');
-      set('sp-automine',e=>e.checked=r.autoMine!==false);
+      renderSpawnerLevels(r);
       set('sp-silk',e=>e.checked=r.requireSilk!==false);
       set('sp-autodc',e=>e.checked=!!r.autoDisconnect);
     }

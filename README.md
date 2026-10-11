@@ -20,7 +20,7 @@ A premium Minecraft bot management dashboard with CLI support. Proxy auto-detect
 - **Telegram** — live Auto-sell Spawn income panel (edited in place), alerts with push notification, `/status` & `/panel` commands
 - **Proxy Auto-Rotate** — Randomized 1-10 min proxy rotation per bot, plus bulk import from a .txt file
 - **Scheduled Out/In** — Daily fleet-wide rest window (e.g., off at 23:00, back on at 06:00)
-- **Auto-Sell** — Fires a user-defined macro once inventory crosses a fullness threshold
+- **Auto-Sell** — Once inventory crosses a fullness threshold, opens `/sell` and sells the items you listed (built into `src/core/autosell.js`, no macro needed); a user-defined macro is still supported
 - **Premium (Microsoft) Login** — Optional real Microsoft/Xbox account auth alongside the default offline mode
 - **Colored Termux Chat** — Player vs. server chat, color-coded, printed live to the CLI
 - **Per-Bot Logs** — Isolated log streams for each bot, never mixed
@@ -166,12 +166,46 @@ Sau khi macro chạy và tiêu tiền, tiền tụt xuống dưới ngưỡng th
 
 ## Spawner Protect (Bảo vệ Lồng Spawn)
 
-Đứng sát lồng (≤5 block) rồi bật — bot tự làm phần còn lại:
+Đứng sát lồng (≤5 block) rồi bật — bot tự làm phần còn lại. Cơ chế phát hiện/thu hồi port từ mod Meteor **Spawner Protect (Alatic, MIT)**.
 
-1. **Khi bật**: tự lưu toạ độ mọi lồng trong **5 block** quanh bot (không cần `addspawner`; toạ độ cũ đã biến mất tự bị dọn).
-2. **Cứ 5 tick (250ms)** quét người chơi trong **20 block** quanh bot. Owner, `spawnerWhitelist` và các bot khác trong dàn được tin, không bị coi là người lạ.
-3. **Thấy người lạ**: lấy cúp trong túi đồ → không có thì **nhìn vào ender chest → mở rương** lấy cúp → **giữ shift**, **nhìn vào lồng → đào** (làm lần lượt từng lồng; plugin gộp lồng cho đào cả stack trong 1 lần, còn dư thì đào tiếp) → nhặt item rơi (nếu server không tự cho vào túi) → **nhìn vào ender chest → mở rương → bỏ mọi item có tên chứa "lồng" hoặc "spawn" vào**. Mỗi lần "nhìn" bot xoay đầu rồi kiểm tra tia ngắm có trúng đúng lồng/rương không (bị block khác che thì log cảnh báo, vẫn làm tiếp).
-4. **Không có cúp ở cả túi đồ lẫn ender chest**: gửi cảnh báo **webhook liên tục** (mỗi 5s, còn người lạ là còn báo). Bot ở lại online để tiếp tục báo, nên `spawnerAutoDisconnect` không cắt trong trường hợp này.
+1. **Khi bật**: tự lưu toạ độ mọi lồng trong **5 block** quanh bot (không cần `addspawner`).
+2. **Canh gác** (chỉ khi bot đang đứng cạnh lồng): người lạ trong `range` block, người chơi **đang đập block** gần lồng, **đào bề mặt** (N block đặc liên tiếp xuống dưới trong 1 cột / 5s), **TNT / TNT minecart / vụ nổ**, **Wither / sọ wither**. Owner, `spawnerWhitelist` và các bot khác trong dàn được tin.
+3. **Có nguy hiểm**: lấy cúp (túi → ender chest) → **giữ shift**, nhìn lồng → đào **theo đợt** (chờ item vào túi → nhả shift → nghỉ `pauseTicks` → shift lại; stack còn dư thì đập tiếp) → túi gần đầy thì cất giữa chừng rồi đào tiếp → nhặt item rơi → **bỏ vào ender chest, rồi MỞ LẠI rương để xác minh** (rương có ≥ dự kiến, túi không còn lồng).
+4. **Chỉ ngắt kết nối khi đã xác minh** (`spawnerAutoDisconnect`): đã cất + xác minh, không còn lồng/không còn item trong túi hay dưới đất, không hết giờ. Chưa xác minh được thì bot **ở lại** và báo ⚠️ lên webhook/Telegram.
+5. **Không có cúp** ở cả túi lẫn ender chest: báo webhook liên tục (5s/lần).
+
+### Cường độ protect (4 mức + chỉnh tay)
+
+```
+cmd s1 spawnerprotect level            # xem mức hiện tại + mô tả 4 mức
+cmd s1 spawnerprotect level 3          # chọn mức (xoá các chỉnh tay); thêm "keep" để giữ chỉnh tay
+cmd s1 spawnerprotect set range 40     # chỉnh tay 1 thông số
+cmd s1 spawnerprotect set range auto   # bỏ chỉnh tay, về giá trị của mức
+cmd s1 spawnerprotect status           # toàn bộ thông số đang áp dụng (*chỉnh tay* đánh dấu)
+```
+Trên web: **Tự Động → Bảo vệ Lồng Spawn → Cường độ protect** (4 nút + mục "Chỉnh chi tiết").
+
+| Thông số | 1 🟢 Nhẹ | 2 🟡 Cân bằng (mặc định) | 3 🟠 Mạnh | 4 🔴 Tối đa |
+|---|---|---|---|---|
+| `range` quét người lạ quanh bot (block) | 12 | 20 | 32 | 48 |
+| `scanTicks` nhịp quét (20 tick = 1s) | 10 | 5 | 2 | 1 |
+| `threatRadius` vùng nguy hiểm quanh lồng (block) | 16 | 32 | 48 | 64 |
+| `fullHeight` chỉ tính khoảng cách ngang | tắt | tắt | tắt | bật |
+| `players` người chơi đang đập block gần lồng | bật | bật | bật | bật |
+| `explosive` TNT / minecart / vụ nổ | tắt | bật | bật | bật |
+| `tntCarts` cả TNT minecart đậu yên | tắt | tắt | bật | bật |
+| `wither` Wither / sọ wither | tắt | bật | bật | bật |
+| `surfaceDig` đào bề mặt | tắt | bật | bật | bật |
+| `digThreshold` block đào liên tiếp để báo | 2 | 2 | 2 | 1 |
+| `autoMine` tự đập + cất (tắt = chỉ cảnh báo) | **tắt** | bật | bật | bật |
+| `armDelayMs` chờ sau khi tới cạnh lồng (ms) | 3000 | 3000 | 1500 | 0 |
+| `pauseTicks` nghỉ giữa các đợt đào | 12 | 8 | 6 | 4 |
+| `depositPerTick` thao tác cất đồ mỗi tick | 2 | 4 | 6 | 9 |
+| `reserveSlots` ô trống tối thiểu | 2 | 2 | 2 | 3 |
+| `timeoutSec` giới hạn xử lý khẩn cấp (s) | 120 | 90 | 90 | 60 |
+| `alertCooldownMs` giãn cách cảnh báo (ms) | 30000 | 15000 | 8000 | 4000 |
+
+Mức cao = quét xa/nhanh/nhạy hơn nhưng dễ báo nhầm hơn (nhất là mức 4: đào bề mặt chỉ 1 block, kể cả block do người khác/mob phá). Lưu trong `config.json` ở `spawnerProtectLevel` (1-4) và `spawnerProtectTune` (các thông số chỉnh tay, đè lên mức). Config cũ chỉ có `spawnerProtectRange`/`spawnerAutoMine` vẫn chạy: mức 2 + 2 giá trị đó được giữ làm chỉnh tay.
 
 ```
 cmd s1 spawnerprotect on       # bật (tự lưu lồng trong 5 block)
@@ -181,23 +215,20 @@ cmd s1 addspawner [x y z]      # thêm tay (bỏ trống = vị trí đang đứ
 cmd s1 removespawner 100 64 200
 ```
 
-Trên web: tab **Tự Động → Bảo vệ Lồng Spawn** (công tắc bật, ô quét, whitelist, lệnh ender chest, các tuỳ chọn bên dưới).
-
 | Field (`config.json`, cấp bot hoặc toàn cục) | Ý nghĩa |
 |---|---|
-| `spawnerProtectRange` | bán kính quét người lạ quanh bot (mặc định **20**) |
+| `spawnerProtectLevel` / `spawnerProtectTune` | cường độ (xem trên) |
 | `spawnerSaveRange` | bán kính tự lưu lồng khi bật (mặc định **5**) |
 | `spawnerWhitelist` | tên người chơi được tin thêm (ngoài owner + bot trong dàn) |
-| `spawnerAutoMine` | mặc định **true**: tự lấy cúp/đập lồng/cất ender chest. `false` = chỉ cảnh báo |
-| `spawnerRequireSilk` | mặc định **true**: chỉ dùng cúp **Silk Touch** (đập lồng bằng cúp thường thì lồng biến mất, không rơi ra). Server của bạn cho cúp thường rơi lồng thì đặt `false` |
-| `enderChestCommand` | lệnh mở ender chest, mặc định `/ec`. Có rương ender thật trong tầm 4.5 block thì mở rương thật trước. Để `""` nếu chỉ muốn dùng rương thật |
-| `spawnerAutoDisconnect` | ngắt kết nối sau khi đập xong lồng |
-| `protectedSpawners` | toạ độ đã lưu (tự quản lý, lưu vào `config.json`) |
+| `spawnerRequireSilk` | mặc định **true**: chỉ dùng cúp **Silk Touch**. Server cho cúp thường rơi lồng thì đặt `false` |
+| `enderChestCommand` | lệnh mở ender chest, mặc định `/ec`. Có rương ender thật trong tầm 4.5 block thì mở rương thật trước. `""` = chỉ dùng rương thật |
+| `spawnerAutoDisconnect` | ngắt kết nối sau khi đập xong **và đã xác minh cất đồ** |
+| `protectedSpawners` | toạ độ đã lưu (tự quản lý) |
 | `spawnerProtectOn` | `true` để tự bật lại sau khi bot kết nối lại |
 
-Cảnh báo webhook dùng chung sự kiện `spawnerThreat`: người lạ tới gần (15s/lần), **không có cúp** (5s/lần), và kết quả xử lý (✅/⚠️).
+Cảnh báo dùng chung sự kiện `spawnerThreat` (webhook + Telegram): mối nguy tới gần (theo `alertCooldownMs`), **không có cúp** (5s/lần), và kết quả xử lý (✅ đã xác minh / ⚠️ chưa).
 
-Giới hạn cần biết: bot **không tự đi tới** lồng ngoài tầm với (chỉ đập lồng trong tầm với từ chỗ đang đứng, sát lồng là đủ) và chỉ đi thẳng vài block để nhặt item rơi. Phát hiện người lạ dựa trên danh sách người chơi client đã "thấy" được, nên người ở quá xa/chưa load thì chưa phát hiện được. Chưa test trên server thật — lần đầu nên thử với 1 lồng và cúp Silk Touch trong túi.
+Giới hạn cần biết: bot **không tự đi tới** lồng ngoài tầm với (khác mod gốc có điều hướng riêng; sát lồng là đủ) và chỉ đi thẳng vài block để nhặt item rơi. Phát hiện dựa trên thông tin client nhận được: người/entity/chunk ở quá xa hoặc chưa load thì chưa thấy. "Đào bề mặt" là heuristic không biết ai phá (có thể là mob/vụ nổ). Không phân biệt được TNT minecart đã châm hay chưa (`tntCarts` bật = tính cả cart đậu yên; tắt = bỏ qua mọi cart). Mod gốc có thêm báo động âm thanh và vẽ viền lồng — không có ở bản bot (không có màn hình/loa). Chưa test trên server thật — lần đầu nên thử với 1 lồng và cúp Silk Touch trong túi.
 
 ## Trình tự khởi động & tự về `/home treolong`
 
@@ -333,15 +364,27 @@ Chỉ những bot **bị chính lịch này out** mới được tự vô lại 
 
 ## Auto-sell khi đầy túi đồ
 
-Cùng cơ chế với Money Goal: tới ngưỡng % đầy thì tự chạy 1 macro do bạn định nghĩa — vì cách bán (`/sell`, `/sellall`, GUI...) tuỳ mỗi server, không đoán bừa:
+**Không cần macro, không cần sửa `config.json`.** Logic nằm trong file riêng `src/core/autosell.js` (cách bán tham khảo tool HEXTEKO). Tới ngưỡng % đầy thì bot gõ `/sell`, chuyển các item bạn liệt kê vào GUI, click 2 ô xác nhận rồi đóng GUI:
 
 ```
-cmd s1 autosell 90 ten_macro_ban    # 90% đầy (33/36 ô) là tự chạy macro
-cmd s1 autosell off
-cmd s1 autosell                      # xem trạng thái
+cmd s1 autosell 50 cobblestone          # túi đầy 50% (18/36 ô) -> bán cobblestone
+cmd s1 autosell 50 cobblestone,stone    # nhiều item: ngăn bằng dấu phẩy hoặc khoảng trắng
+cmd s1 autosell off | autosell on       # tắt / bật lại (giữ nguyên danh sách + %)
+cmd s1 autosell                         # xem trạng thái
+cmd s1 autosell 70 macro ten_macro_ban  # kiểu cũ: chạy macro tự viết trong config.json
 ```
 
-Có độ trễ reset (phải dọn xuống dưới ngưỡng ~11 điểm % mới sẵn sàng bắn lại) để tránh bắn macro liên tục nếu số ô dao động ngay sát biên.
+- Tên item là **tên tiếng Anh trong game** (`cobblestone`, `iron_ingot`, `oak_log`…) và khớp **chính xác** — ghi `sword` sẽ không bán `diamond_sword`. Bot đang online thì tên gõ nhầm (vd `cobbstone`) bị từ chối ngay.
+- Cài đặt từng bot lưu ở file riêng **`autosell.json`** (cạnh `config.json`, giống `revenue.json`, update không đụng tới). Mặc định lệnh là `/sell`, 2 ô xác nhận là ô cuối GUI rồi ô đầu hàng cuối (`"clicks": [-1, -9]`, số âm = đếm ngược từ cuối GUI). Server khác lệnh/ô thì sửa riêng cho bot đó:
+  ```json
+  { "s1": { "enabled": true, "threshold": 50, "items": ["cobblestone"], "command": "/sell", "clicks": [-1, -9] } }
+  ```
+- Còn đồ khớp sau lượt bán thì lặp lại (tối đa 20 lượt/lần mở). Bán lỗi (GUI không mở, shop không nhận đồ) thì thử lại sau 30s, tối đa 5 lần liên tiếp. Túi không có item nào trong danh sách thì không gõ `/sell`.
+- Không tranh GUI với `spawnerprotect` / `autosell_spawn` / macro: đang bận thì chờ, bảo vệ lồng chen vào thì dừng ngay.
+- Báo cáo doanh thu (`autosell revenue ...`, webhook) dùng chung như trước.
+- Web: tab **Tự Động → Auto-sell khi đầy túi đồ** có thêm ô "Item bán".
+
+Có độ trễ reset (phải dọn xuống dưới ngưỡng ~11 điểm % mới sẵn sàng bán lại) để tránh bán liên tục nếu số ô dao động ngay sát biên.
 
 ## Đăng nhập acc Premium (Microsoft)
 
@@ -480,6 +523,7 @@ antares/
 └── src/
     ├── core/                Core engine
     │   ├── BotSession.js    Bot lifecycle & events
+    │   ├── autosell.js      Auto-sell via /sell GUI (settings in autosell.json)
     │   ├── ProxyManager.js  Proxy management & detection
     │   ├── CommandRegistry.js
     │   ├── WindowRouter.js  Minecraft GUI handling
@@ -517,6 +561,7 @@ Render injects `PORT` env var automatically. The app prioritizes `process.env.PO
 
 ## Changelog (bổ sung gần đây)
 
+- **Mới:** `autosell <%đầy> <item,item...>` — auto-sell tích hợp (`src/core/autosell.js`): túi đầy tới % thì gõ `/sell`, chuyển đúng các item đã liệt kê vào GUI, click 2 ô xác nhận rồi đóng. Không cần macro, cài đặt lưu ở `autosell.json` (không đụng `config.json`). Sửa lỗi `Macro "autosell" không tồn tại` khi `config.json` chưa có macro; kiểu macro cũ vẫn dùng được bằng `autosell <%> macro <tên>`.
 - **Mới:** Macro lặp `loop` / `until <chữ>` (+ `closewin`) — macro `mualong` mua liên tục tới khi server báo `Bạn cần có…` thì tự dừng (tối đa 500 lượt, `stopmacro` dừng tay). Macro đang có trong `config.json` của bạn: thêm dòng `loop 500` trước `chat /shop`, và thay dòng cuối `stopif Bạn cần có` bằng 3 dòng `delay 1200` / `closewin` / `until Bạn cần có`.
 - **Mới:** Tự về `/home treolong` (`spawnhome`) — phát hiện bot không còn ở gần lồng spawn (sau đăng nhập hoặc đang treo) thì tự gõ lệnh về, có giãn cách/giới hạn số lần, webhook `homeReturn` khi lệch và khi đã về.
 - **Sửa lỗi:** `spawnerprotect`, `autosell_spawn` và `autosell` (macro túi đầy) từng bật ngay lúc spawn, trước khi đăng nhập/vào menu xong và trước khi bot về tới chỗ treo lồng (gây báo nhầm người lạ, "quá xa/chunk chưa tải", macro bán chạy ngoài sảnh). Giờ đi đúng thứ tự: đợi tin `SẢNH ➞ Đăng nhập thành công…` → `/menu` + click ô 24 → chờ đứng cạnh lồng → mới bật cả ba và gửi webhook `featuresReady`.

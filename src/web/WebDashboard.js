@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const security = require('./security');
+const SpawnerGuard = require('../core/SpawnerGuard');
 class WebDashboard {
   constructor(botManager, options = {}) {
     this.manager = botManager;
@@ -552,9 +553,11 @@ class WebDashboard {
         if (cb) cb({ ok: true });
       });
       // ===== Auto-sell (đầy túi đồ) =====
-      sock.on('setAutoSell', ({ id, threshold, macro }, cb) => {
+      sock.on('setAutoSell', ({ id, threshold, macro, items }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
+        if (items) { const r = b.setAutoSellItems(threshold, items); if (cb) cb(r); return; } // auto-sell tích hợp (src/core/autosell.js): bán qua /sell theo danh sách item
+        if (b.autoSellEnabled) { b.autoSellEnabled = false; b._persistAutoSellItems(); } // tắt / chuyển sang macro -> tắt kiểu tích hợp
         if (!macro) {
           b.autoSellMacro = null; b._autoSellFired = false;
         } else {
@@ -572,13 +575,17 @@ class WebDashboard {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
         if (cb) cb({ ok: true, on: b._spawnerProtectOn, range: b.spawnerProtectRange, spawners: b.protectedSpawners, whitelist: b.spawnerWhitelist,
-          autoMine: b.spawnerAutoMine, autoDisconnect: b.spawnerAutoDisconnect, requireSilk: b.spawnerRequireSilk, enderCmd: b.enderChestCommand, saveRange: b.spawnerSaveRange });
+          autoMine: b.spawnerAutoMine, autoDisconnect: b.spawnerAutoDisconnect, requireSilk: b.spawnerRequireSilk, enderCmd: b.enderChestCommand, saveRange: b.spawnerSaveRange,
+          ...b.getSpawnerLevelInfo(), guard: SpawnerGuard.describe() });
       });
-      sock.on('setSpawnerProtect', ({ id, on, range, autoMine, autoDisconnect, whitelist, requireSilk, enderCmd }, cb) => {
+      sock.on('setSpawnerProtect', ({ id, on, range, autoMine, autoDisconnect, whitelist, requireSilk, enderCmd, level, tune, keepTune }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
-        if (typeof range === 'number') b.spawnerProtectRange = range;
-        if (typeof autoMine === 'boolean') b.spawnerAutoMine = autoMine;
+        // Cường độ: chọn mức (áp cả bộ thông số) rồi mới áp phần chỉnh tay (nếu có)
+        if (level !== undefined && level !== null) b.setSpawnerLevel(level, keepTune === true);
+        if (tune && typeof tune === 'object') b.setSpawnerTune(tune);
+        if (typeof range === 'number') b.setSpawnerTune({ range });
+        if (typeof autoMine === 'boolean') b.setSpawnerTune({ autoMine });
         if (typeof autoDisconnect === 'boolean') b.spawnerAutoDisconnect = autoDisconnect;
         if (Array.isArray(whitelist)) b.spawnerWhitelist = whitelist.map(s => String(s).toLowerCase());
         if (typeof requireSilk === 'boolean') b.spawnerRequireSilk = requireSilk;
@@ -590,13 +597,13 @@ class WebDashboard {
         } else if (on === false) b._stopSpawnerProtect();
         b.cfg.spawnerRequireSilk = b.spawnerRequireSilk;
         b.cfg.enderChestCommand = b.enderChestCommand;
-        b.cfg.spawnerProtectRange = b.spawnerProtectRange;
-        b.cfg.spawnerAutoMine = b.spawnerAutoMine;
         b.cfg.spawnerAutoDisconnect = b.spawnerAutoDisconnect;
         b.cfg.spawnerWhitelist = b.spawnerWhitelist;
         b.cfg.spawnerProtectOn = b._spawnerProtectOn;
+        b.cfg.spawnerProtectLevel = b._spLevel;
+        b.cfg.spawnerProtectTune = b._spTune;
         this._syncBotToConfig(b);
-        if (cb) cb({ ok: true, on: b._spawnerProtectOn, message, spawners: b.protectedSpawners });
+        if (cb) cb({ ok: true, on: b._spawnerProtectOn, message, spawners: b.protectedSpawners, ...b.getSpawnerLevelInfo() });
       });
       sock.on('addSpawner', ({ id, x, y, z }, cb) => {
         const b = this.manager.findBot(id);

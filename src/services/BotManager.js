@@ -6,6 +6,7 @@ const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
 const RevenueTracker = require('../core/RevenueTracker');
+const AutoSell = require('../core/autosell');
 const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
 const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
@@ -24,6 +25,7 @@ class BotManager {
     this.notifier = new Notifier({});
     this.revenueNotifier = new Notifier({}); // webhook RIÊNG cho báo cáo doanh thu (không đặt thì dùng webhook chung)
     this.revenue = new RevenueTracker(require('path').join(require('path').dirname(this.configPath), 'revenue.json'), () => this._scheduleTz());
+    this.autoSellStore = new AutoSell.Store(AutoSell.Store.pathNextTo(this.configPath)); // autosell.json: cài đặt auto-sell /sell của từng bot (file riêng, không nằm trong config.json)
     this.telegram = new TelegramNotifier({}); // bảng Auto sell spawner + cảnh báo qua Telegram (không đặt token thì không làm gì)
     this._tgMsgs = {};                        // botId -> message_id của bảng (để sửa tại chỗ, khỏi spam)
     this._tgLastAt = new Map();               // botId -> lần gửi bảng gần nhất (chống dội)
@@ -122,6 +124,7 @@ class BotManager {
       moneyGoal: cfg.moneyGoal ?? this._config.moneyGoal ?? null,
       moneyGoalMacro: cfg.moneyGoalMacro || this._config.moneyGoalMacro || null,
       autoSellMacro: cfg.autoSellMacro || null,
+      autosell: this.autoSellStore.get(cfg.id),
       autoSellThreshold: cfg.autoSellThreshold ?? 90,
       autoSellRevenue: cfg.autoSellRevenue ?? true,
       autoSellMsgKeyword: cfg.autoSellMsgKeyword || '',
@@ -130,6 +133,8 @@ class BotManager {
       autoSellReportMin: cfg.autoSellReportMin ?? 0,
       spawnerProtectOn: cfg.spawnerProtectOn ?? this._config.spawnerProtectOn ?? false,
       spawnerProtectRange: cfg.spawnerProtectRange ?? this._config.spawnerProtectRange ?? null,
+      spawnerProtectLevel: cfg.spawnerProtectLevel ?? this._config.spawnerProtectLevel,
+      spawnerProtectTune: cfg.spawnerProtectTune ?? this._config.spawnerProtectTune,
       spawnerAutoDisconnect: cfg.spawnerAutoDisconnect ?? this._config.spawnerAutoDisconnect ?? false,
       spawnerAutoMine: cfg.spawnerAutoMine ?? this._config.spawnerAutoMine ?? true,
       spawnerRequireSilk: cfg.spawnerRequireSilk ?? this._config.spawnerRequireSilk ?? true,
@@ -191,6 +196,7 @@ class BotManager {
       moneyGoal: data.moneyGoal ?? this._config.moneyGoal ?? null,
       moneyGoalMacro: data.moneyGoalMacro || this._config.moneyGoalMacro || null,
       autoSellMacro: data.autoSellMacro || null,
+      autosell: this.autoSellStore.get(data.id),
       autoSellThreshold: data.autoSellThreshold ?? 90,
       autoSellRevenue: data.autoSellRevenue ?? true,
       autoSellMsgKeyword: data.autoSellMsgKeyword || '',
@@ -199,6 +205,8 @@ class BotManager {
       autoSellReportMin: data.autoSellReportMin ?? 0,
       spawnerProtectOn: data.spawnerProtectOn ?? this._config.spawnerProtectOn ?? false,
       spawnerProtectRange: data.spawnerProtectRange ?? this._config.spawnerProtectRange ?? null,
+      spawnerProtectLevel: data.spawnerProtectLevel ?? this._config.spawnerProtectLevel,
+      spawnerProtectTune: data.spawnerProtectTune ?? this._config.spawnerProtectTune,
       spawnerAutoDisconnect: data.spawnerAutoDisconnect ?? this._config.spawnerAutoDisconnect ?? false,
       spawnerAutoMine: data.spawnerAutoMine ?? this._config.spawnerAutoMine ?? true,
       spawnerRequireSilk: data.spawnerRequireSilk ?? this._config.spawnerRequireSilk ?? true,

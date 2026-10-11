@@ -14,8 +14,10 @@ const SharedPool = require('./SharedPool');
 const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const MacroEngine = require('./MacroEngine');
+const AutoSell = require('./autosell');
 const Notifier = require('./Notifier');
 const { anglesTo, aimCheck } = require('./AimUtil');
+const SG = require('./SpawnerGuard');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
 const SELL_SPAWN_REACH = 6; // block — tầm chuột phải vào lồng của auto-sell spawn (từ mắt bot); cũng là ngưỡng "đang đứng đúng chỗ treo lồng"
@@ -101,23 +103,32 @@ class BotSession extends EventEmitter {
     this.autoSellMacro = cfg.autoSellMacro || null;
     this.autoSellThreshold = cfg.autoSellThreshold ?? 90;
     this._autoSellFired = false;
+    // Auto-sell tích hợp (src/core/autosell.js): bán qua /sell theo danh sách item, không cần macro.
+    // Cài đặt lưu ở autosell.json (BotManager nạp rồi đưa vào cfg.autosell). Ưu tiên hơn macro nếu cả hai cùng bật.
+    const as = AutoSell.sanitize(cfg.autosell);
+    this.autoSellEnabled = as.enabled;
+    this.autoSellItems = as.items;
+    this.autoSellItemsPct = as.threshold ?? 90;
+    this.autoSellCommand = as.command;
+    this.autoSellClicks = as.clicks;
+    this._autoSellBusy = false;
     // Bảo vệ Lồng Spawn — khi BẬT: tự lưu toạ độ lồng trong spawnerSaveRange (5)
-    // block quanh bot; cứ 5 tick quét người lạ trong spawnerProtectRange (20)
-    // block; thấy người lạ -> lấy cúp (túi đồ, không có thì ender chest), giữ
-    // shift đập hết lồng, cất item "lồng"/"spawn" vào ender chest. Không có cúp
-    // ở cả 2 nơi -> gửi cảnh báo webhook liên tục.
-    this.spawnerProtectRange = cfg.spawnerProtectRange || 20;
+    // block quanh bot; canh người lạ (spawnerProtectRange) + đập block gần lồng, đào bề mặt,
+    // TNT, wither (port từ mod "Spawner Protect" của Alatic); thấy nguy hiểm -> lấy cúp (túi đồ,
+    // không có thì ender chest), giữ shift đập hết lồng theo từng đợt, cất item "lồng"/"spawn"
+    // vào ender chest rồi MỞ LẠI để xác minh. Không có cúp ở cả 2 nơi -> cảnh báo liên tục.
+    // CƯỜNG ĐỘ PROTECT: spawnerProtectLevel (1-4) = bộ thông số dựng sẵn (xem SpawnerGuard.js);
+    // spawnerProtectTune = các thông số bạn chỉnh tay, đè lên mức đang chọn.
+    this._initSpawnerLevel(cfg);
     this.spawnerSaveRange = cfg.spawnerSaveRange || 5;
     // Chỉ "canh gác" khi THỰC SỰ đang đứng cạnh lồng: phải có ít nhất 1 lồng đã lưu nằm trong
     // spawnerArmRange block quanh bot (và chunk đã tải, đúng là block lồng), liên tục ít nhất
     // spawnerArmDelayMs. Nhờ vậy lúc vừa đăng nhập ở khu spawn (chưa được chuyển về chỗ cũ)
     // có người chơi đứng gần cũng KHÔNG bị báo nhầm là có người cạnh lồng.
     this.spawnerArmRange = cfg.spawnerArmRange || 8;
-    this.spawnerArmDelayMs = cfg.spawnerArmDelayMs ?? 3000;
     this._spawnerZone = 'unknown'; // 'in' = đang cạnh lồng | 'out' = không có lồng quanh bot
     this._spawnerArmedSince = 0;
     this.spawnerAutoDisconnect = cfg.spawnerAutoDisconnect ?? false;
-    this.spawnerAutoMine = cfg.spawnerAutoMine ?? true;
     this.spawnerRequireSilk = cfg.spawnerRequireSilk ?? true; // đào không Silk Touch thì lồng bị phá mất, không rơi ra
     this.enderChestCommand = cfg.enderChestCommand ?? '/ec';  // lệnh mở ender chest khi không có rương thật gần đó
     this.spawnerAlertIntervalMs = cfg.spawnerAlertIntervalMs || 5000;
@@ -128,6 +139,8 @@ class BotSession extends EventEmitter {
     this._spawnerBusy = false;
     this._spawnerRetryAt = 0;
     this._spawnerNoPickUntil = 0;
+    this._spawnerDeadline = 0;
+    this._spStashAgg = null;
     // Auto-sell Spawn — định kỳ (giờ/phút/giây tuỳ chỉnh): với từng lồng trong danh sách
     // chuột phải vào lồng (mở GUI, KHÔNG đập block) -> click 1 ô trong GUI (mặc định 51)
     // -> đóng GUI -> sang lồng kế tiếp. Bot không tự đi tới lồng: phải đứng trong tầm với.
@@ -384,26 +397,53 @@ class BotSession extends EventEmitter {
       this.log('err', 'Lỗi đọc inventory: ' + e.message);
     }
   }
+  // Auto-sell đang bật? Tích hợp (autosell.js, bán qua /sell theo danh sách item) hoặc kiểu cũ (chạy macro)
+  _autoSellBuiltin() { return this.autoSellEnabled && this.autoSellItems.length > 0; }
+  _autoSellOn() { return this._autoSellBuiltin() || !!this.autoSellMacro; }
+  _autoSellPct() { return this._autoSellBuiltin() ? this.autoSellItemsPct : this.autoSellThreshold; }
+  _autoSellDesc() { return this._autoSellBuiltin() ? `bán [${this.autoSellItems.join(', ')}] qua ${this.autoSellCommand}` : `macro "${this.autoSellMacro}"`; }
   // 36 = 27 ô chính + 9 ô hotbar (Window.items() của mineflayer với inventory
   // của chính bot chỉ trả về đúng vùng này, không tính giáp/offhand/crafting).
   _checkAutoSell(usedSlots) {
-    if (!this.autoSellMacro) return;
+    if (!this._autoSellOn()) return;
     if (!this._autoSellArmed) return; // chưa đăng nhập/vào menu/vào đúng vị trí xong thì chưa chạy macro bán
     const TOTAL = 36;
-    const highSlots = Math.ceil(TOTAL * this.autoSellThreshold / 100);
+    const builtin = this._autoSellBuiltin();
+    const highSlots = Math.ceil(TOTAL * this._autoSellPct() / 100);
     const lowSlots = Math.max(0, highSlots - 4);
     if (usedSlots >= highSlots && !this._autoSellFired) {
+      if (builtin && !AutoSell.canRun(this)) { this._retryAutoSellLater(10000); return; } // đang bận (bảo vệ lồng / bán lồng / macro) — chưa đánh dấu "đã bắn", thử lại sau
       this._autoSellFired = true;
       const pct = Math.round((usedSlots / TOTAL) * 100);
-      this.log('ok', `🎒 Túi đồ đầy ${pct}% (${usedSlots}/${TOTAL}) — tự chạy macro "${this.autoSellMacro}"`);
-      this._notify('autoSell', `🎒 ${this.cfg.id}: túi đồ đầy`, `${usedSlots}/${TOTAL} ô (${pct}%) — tự chạy macro "${this.autoSellMacro}".`, 0x38bdf8);
-      const cap = this.autoSellRevenue ? this._beginMacroSellCapture(this.autoSellMacro) : null; // bắt đầu đo TRƯỚC khi macro chạy
+      this.log('ok', `🎒 Túi đồ đầy ${pct}% (${usedSlots}/${TOTAL}) — tự ${builtin ? '' : 'chạy '}${this._autoSellDesc()}`);
+      this._notify('autoSell', `🎒 ${this.cfg.id}: túi đồ đầy`, `${usedSlots}/${TOTAL} ô (${pct}%) — tự ${builtin ? '' : 'chạy '}${this._autoSellDesc()}.`, 0x38bdf8);
+      const cap = this.autoSellRevenue ? this._beginMacroSellCapture(builtin ? 'autosell' : this.autoSellMacro) : null; // bắt đầu đo TRƯỚC khi bán
+      if (builtin) {
+        AutoSell.run(this, { items: this.autoSellItems, command: this.autoSellCommand, clicks: this.autoSellClicks })
+          .then(r => {
+            if (cap) this._onMacroSellDone(cap, r.status === 'sold');
+            if (r.status === 'sold') this._autoSellFails = 0;
+            else if (r.status === 'busy') { this._autoSellFired = false; this._retryAutoSellLater(10000); }
+            else if (r.status === 'fail') this._autoSellRetryOrGiveUp();
+          })
+          .catch(e => { this.log('err', `Auto-sell lỗi: ${e.message}`); if (cap) this._onMacroSellDone(cap, false); this._autoSellRetryOrGiveUp(); });
+        return;
+      }
       this.macroEngine.run(this.autoSellMacro)
         .then(ok => { if (cap) this._onMacroSellDone(cap, ok); })
         .catch(e => { this.log('err', `Auto-sell macro lỗi: ${e.message}`); if (cap) this._onMacroSellDone(cap, false); });
     } else if (usedSlots <= lowSlots) {
       this._autoSellFired = false;
+      this._autoSellFails = 0;
     }
+  }
+  _retryAutoSellLater(ms) { this._setTimer('autoSellRetry', () => this._updateInventory(), ms); }
+  // Bán lỗi (GUI không mở / shop không nhận đồ): thử lại sau 30s, tối đa 5 lần liên tiếp để không spam lệnh /sell mãi
+  _autoSellRetryOrGiveUp() {
+    this._autoSellFails = (this._autoSellFails || 0) + 1;
+    if (this._autoSellFails >= 5) { this.log('warn', 'Auto-sell: lỗi 5 lần liên tiếp — dừng tự thử lại (túi vơi bớt sẽ tự bật lại, hoặc gõ lại lệnh autosell). Kiểm tra lệnh/ô xác nhận trong autosell.json'); return; }
+    this._autoSellFired = false;
+    this._retryAutoSellLater(30000);
   }
   _cleanupOnDisconnect() {
     if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch { } }
@@ -657,6 +697,7 @@ class BotSession extends EventEmitter {
     this.packetMgr.attach(mc);
     this.protocolGuard.attach(mc);
     this._bindEvents(mc, proxy);
+    this._bindSpawnerEvents(mc);
     try { mc.once('login', () => this._logVersionInfo(mc)); } catch { }
   }
   _onConnectComplete() {
@@ -815,7 +856,7 @@ class BotSession extends EventEmitter {
       } catch { }
     });
     mc.on('windowOpen', win => {
-      if (this._spawnerBusy || this._sellSpawnBusy) return; // routine bảo vệ lồng / auto-sell spawn đang tự điều khiển GUI
+      if (this._spawnerBusy || this._sellSpawnBusy || this._autoSellBusy) return; // routine bảo vệ lồng / auto-sell spawn / auto-sell /sell đang tự điều khiển GUI
       if (this.macroEngine?._running) {
         // Macro đang chạy (winclick) — không để WindowRouter tự động
         // click/đóng GUI đè lên, nhường toàn quyền điều khiển cho macro.
@@ -1337,6 +1378,32 @@ class BotSession extends EventEmitter {
     if (c) Object.assign(c, data);
     mgr.persistence?.markDirty();
   }
+  // Auto-sell tích hợp (src/core/autosell.js): đặt % đầy + danh sách item bán qua /sell. Lưu vào autosell.json (không đụng config.json).
+  setAutoSellItems(pct, input) {
+    const p = parseInt(pct, 10);
+    if (!(p >= 1 && p <= 100)) return { ok: false, message: 'Auto-sell: % không hợp lệ (1-100)' };
+    const { items, bad } = AutoSell.parseItems(input);
+    if (bad.length) return { ok: false, message: `Auto-sell: tên item sai dạng: ${bad.join(', ')} (chỉ chữ thường/số/gạch dưới, vd cobblestone, iron_ingot)` };
+    if (!items.length) return { ok: false, message: 'Auto-sell: chưa có item nào — vd: autosell 50 cobblestone' };
+    const known = this.mc?.registry?.itemsByName; // bot đang online thì kiểm tên có thật không (tránh gõ nhầm "cobbstone")
+    const unknown = items.filter(n => ['on', 'off', 'macro'].includes(n) || (known && !known[n]));
+    if (unknown.length) return { ok: false, message: `Auto-sell: "${unknown.join(', ')}" không phải tên item trong game — ghi đúng tên tiếng Anh, vd cobblestone, iron_ingot` };
+    this.autoSellItems = items;
+    this.autoSellItemsPct = p;
+    this.autoSellEnabled = true;
+    this.autoSellMacro = null; // tích hợp thay cho macro
+    this._autoSellFired = false;
+    this._autoSellFails = 0;
+    this._persistMacroSellCfg();
+    this._persistAutoSellItems();
+    return { ok: true, message: `Đã đặt auto-sell: ${p}% đầy → ${this._autoSellDesc()}` };
+  }
+  _persistAutoSellItems() {
+    this._manager?.autoSellStore?.save(this.cfg.id, {
+      enabled: this.autoSellEnabled, threshold: this.autoSellItemsPct, items: this.autoSellItems,
+      command: this.autoSellCommand, clicks: this.autoSellClicks,
+    });
+  }
   // ===== Auto-sell Spawn =====
   _sellSpawnIntervalMs() {
     const raw = Math.round((this.autoSellSpawnSecond || 0) * 1000 + (this.autoSellSpawnMinute || 0) * 60000 + (this.autoSellSpawnHour || 0) * 3600000);
@@ -1576,7 +1643,7 @@ class BotSession extends EventEmitter {
   async _runSellSpawnCycle() {
     const mc = this.mc;
     const none = { done: 0, total: 0, ok: false, aborted: false, skipped: true, reasons: [] };
-    if (!this.isOnline || !mc?.entity?.position || this._sellSpawnBusy) return none;
+    if (!this.isOnline || !mc?.entity?.position || this._sellSpawnBusy || this._autoSellBusy) return none; // đang bán /sell thì bỏ vòng này, vòng sau tính tiếp
     const list = this.sellSpawnList.slice();
     if (!list.length) { this.log('warn', 'Auto-sell Spawn: danh sách lồng trống'); return none; }
     this._sellSpawnBusy = true;
@@ -1805,11 +1872,13 @@ class BotSession extends EventEmitter {
   _persistSpawnerState() {
     this.cfg.protectedSpawners = this.protectedSpawners;
     this.cfg.spawnerProtectOn = this._spawnerProtectOn;
+    this.cfg.spawnerProtectLevel = this._spLevel;
+    this.cfg.spawnerProtectTune = this._spTune;
     const mgr = this._manager;
     const list = mgr?._config?.bots;
     if (!list) return;
     const c = list.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
-    if (c) { c.protectedSpawners = this.protectedSpawners; c.spawnerProtectOn = this._spawnerProtectOn; }
+    if (c) { c.protectedSpawners = this.protectedSpawners; c.spawnerProtectOn = this._spawnerProtectOn; c.spawnerProtectLevel = this._spLevel; c.spawnerProtectTune = this._spTune; }
     mgr.persistence?.markDirty();
   }
   // Lưu toạ độ mọi lồng trong spawnerSaveRange block quanh bot; dọn toạ độ
@@ -1842,6 +1911,64 @@ class BotSession extends EventEmitter {
     if (added || removed) this._persistSpawnerState();
     return { added, removed };
   }
+  // ===== Cường độ protect =====
+  _initSpawnerLevel(cfg) {
+    const hasLevel = cfg.spawnerProtectLevel !== undefined && cfg.spawnerProtectLevel !== null;
+    this._spLevel = SG.clampLevel(hasLevel ? cfg.spawnerProtectLevel : SG.DEFAULT_LEVEL);
+    let tune = cfg.spawnerProtectTune;
+    if (!hasLevel && !tune) { // config cũ (trước khi có cường độ): giữ các giá trị đã đặt
+      tune = {};
+      if (Number(cfg.spawnerProtectRange) > 0) tune.range = Number(cfg.spawnerProtectRange);
+      if (cfg.spawnerAutoMine === false) tune.autoMine = false;
+      if (cfg.spawnerArmDelayMs !== undefined && cfg.spawnerArmDelayMs !== null) tune.armDelayMs = cfg.spawnerArmDelayMs;
+    }
+    this._spTune = SG.diffFromPreset(this._spLevel, SG.resolveSettings(this._spLevel, tune));
+    this._spRefresh();
+    this._spawnerDig = new SG.DigPattern();
+  }
+  _spRefresh() { this._sp = SG.resolveSettings(this._spLevel, this._spTune); }
+  _spTickMs() { return Math.max(1, this._sp.scanTicks) * 50; }
+  get spawnerProtectRange() { return this._sp.range; }
+  set spawnerProtectRange(v) { this.setSpawnerTune({ range: v }); }
+  get spawnerArmDelayMs() { return this._sp.armDelayMs; }
+  set spawnerArmDelayMs(v) { this.setSpawnerTune({ armDelayMs: v }); }
+  get spawnerAutoMine() { return this._sp.autoMine; }
+  set spawnerAutoMine(v) { this.setSpawnerTune({ autoMine: v }); }
+  get spawnerLevel() { return this._spLevel; }
+  // Chọn mức 1-4: áp cả bộ thông số của mức đó (xoá các chỉnh tay, trừ khi keepTune)
+  setSpawnerLevel(n, keepTune = false) {
+    this._spLevel = SG.clampLevel(n);
+    this._spTune = keepTune ? SG.diffFromPreset(this._spLevel, SG.resolveSettings(this._spLevel, this._spTune)) : {};
+    return this._spApply();
+  }
+  // Chỉnh tay từng thông số. Giá trị null / 'auto' = bỏ chỉnh, quay về giá trị của mức.
+  setSpawnerTune(patch) {
+    const next = { ...this._spTune };
+    for (const [k, v] of Object.entries(patch || {})) {
+      if (!SG.SPEC[k]) continue;
+      if (v === null || v === 'auto') { delete next[k]; continue; }
+      const c = SG.coerce(k, v);
+      if (c !== undefined) next[k] = c;
+    }
+    this._spTune = SG.diffFromPreset(this._spLevel, SG.resolveSettings(this._spLevel, next));
+    return this._spApply();
+  }
+  _spApply() {
+    this._spRefresh();
+    this._spawnerDig?.clear();
+    if (this._timers.has('spawnerProtect')) this._setTimer('spawnerProtect', () => this._spawnerProtectTick(), this._spTickMs(), true);
+    this._persistSpawnerState();
+    return this._sp;
+  }
+  getSpawnerLevelInfo() {
+    return { level: this._spLevel, name: SG.LEVELS[this._spLevel].name, settings: { ...this._sp }, tune: { ...this._spTune } };
+  }
+  _spSummary() {
+    const L = SG.LEVELS[this._spLevel];
+    const e = this._sp;
+    return `${L.icon} mức ${this._spLevel} "${L.name}"${Object.keys(this._spTune).length ? ` (+${Object.keys(this._spTune).length} chỉnh tay)` : ''}: người lạ ${e.range}b/${e.scanTicks}tick, nguy hiểm ${e.threatRadius}b`
+      + `${e.explosive ? ', TNT' : ''}${e.wither ? ', Wither' : ''}${e.surfaceDig ? `, đào bề mặt(${e.digThreshold})` : ''}${e.autoMine ? ', tự đập' : ', CHỈ báo'}`;
+  }
   _startSpawnerProtect() {
     if (!this.isOnline) { this.log('warn', 'Bảo vệ Lồng Spawn: bot offline — chưa bật được'); return false; }
     const { added, removed } = this._autoSaveSpawners();
@@ -1857,10 +1984,10 @@ class BotSession extends EventEmitter {
     this._spawnerProtectOn = true;
     this._spawnerRetryAt = 0;
     this._spawnerNoPickUntil = 0;
-    // 5 tick game = 5 × 50ms = 250ms
-    this._setTimer('spawnerProtect', () => this._spawnerProtectTick(), 250, true);
+    this._spawnerDig.clear();
+    this._setTimer('spawnerProtect', () => this._spawnerProtectTick(), this._spTickMs(), true);
     this._persistSpawnerState();
-    this.log('sys', `Bảo vệ Lồng Spawn: BẬT (${this.protectedSpawners.length} lồng, quét người lạ trong ${this.spawnerProtectRange} block mỗi 5 tick)`);
+    this.log('sys', `Bảo vệ Lồng Spawn: BẬT (${this.protectedSpawners.length} lồng) — ${this._spSummary()}`);
     return true;
   }
   _stopSpawnerProtect() {
@@ -1919,22 +2046,104 @@ class BotSession extends EventEmitter {
     }
     return now - this._spawnerArmedSince >= this.spawnerArmDelayMs;
   }
-  _spawnerProtectTick() {
-    if (!this.isOnline || !this.mc?.entity?.position) return;
-    if (this._spawnerBusy || !this.protectedSpawners.length) return;
-    if (nowMs() < this._spawnerRetryAt) return;
-    if (!this._spawnerArmed()) return; // không có lồng cạnh bot -> không báo, không đập
-    const strangers = this._nearbyStrangers();
-    if (!strangers.length) return;
-    // Bảo vệ lồng có ưu tiên cao hơn: ngắt vòng auto-sell spawn, tick 250ms sau sẽ xử lý
-    if (this._sellSpawnBusy || this._sellRecovering) { this._sellSpawnAbort = true; return; }
+  // Gửi cảnh báo + xử lý (đập lồng) khi có mối nguy. Dùng chung cho quét định kỳ và các sự kiện.
+  _spawnerDispatch(threats) {
+    if (!this._spawnerProtectOn || this._spawnerBusy || !this.protectedSpawners.length) return false;
+    if (!this.isOnline || !this.mc?.entity?.position) return false;
+    if (nowMs() < this._spawnerRetryAt) return false;
+    if (!this._spawnerArmed()) return false; // không có lồng cạnh bot -> không báo, không đập
+    // Bảo vệ lồng có ưu tiên cao hơn: ngắt vòng auto-sell spawn, lần quét sau sẽ xử lý
+    if (this._sellSpawnBusy || this._sellRecovering) { this._sellSpawnAbort = true; return false; }
     this._spawnerBusy = true;
-    this._onSpawnerThreat(strangers)
+    this._onSpawnerThreat(threats)
       .catch(e => this.log('err', 'Bảo vệ Lồng Spawn lỗi: ' + e.message))
       .finally(() => {
         this._spawnerBusy = false;
         try { this.mc?.setControlState('sneak', false); this.mc?.setControlState('forward', false); } catch { }
       });
+    return true;
+  }
+  _spawnerProtectTick() {
+    if (!this.isOnline || !this.mc?.entity?.position) return;
+    if (this._spawnerBusy || !this.protectedSpawners.length) return;
+    if (nowMs() < this._spawnerRetryAt) return;
+    if (!this._spawnerArmed()) return;
+    const threats = [...this._nearbyStrangers(), ...this._spawnerScanEntities()];
+    if (threats.length) this._spawnerDispatch(threats);
+  }
+  // Khoảng cách từ 1 điểm tới lồng gần nhất (full = chỉ tính ngang)
+  _spNearestDist(pos, full) {
+    let best = Infinity;
+    for (const p of this.protectedSpawners) best = Math.min(best, SG.threatDistance(p.x + .5 - pos.x, p.y + .5 - pos.y, p.z + .5 - pos.z, full));
+    return best;
+  }
+  // TNT / TNT minecart / Wither / sọ wither đang ở trong tầm nguy hiểm quanh lồng
+  _spEntityThreat(e) {
+    const kind = SG.entityKind(e?.name);
+    if (!kind || !e.position || e.isValid === false) return null;
+    const label = SG.threatLabel(kind, { ...this._sp, charged: /dangerous/.test(e.name) });
+    if (!label) return null;
+    const d = this._spNearestDist(e.position, this._sp.fullHeight);
+    if (!SG.insideRange(d, this._sp.threatRadius)) return null;
+    return { name: label, dist: d, kind, label: `${label} cách lồng ${d.toFixed(1)}m` };
+  }
+  _spawnerScanEntities() {
+    const e = this._sp;
+    if (!e.explosive && !e.wither) return [];
+    const out = [];
+    for (const ent of Object.values(this.mc?.entities || {})) {
+      const t = this._spEntityThreat(ent);
+      if (t) { out.push(t); if (out.length >= 5) break; }
+    }
+    return out;
+  }
+  _bindSpawnerEvents(mc) {
+    const safe = fn => (...a) => { try { fn(...a); } catch { /* phát hiện lỗi không được làm hỏng bot */ } };
+    mc.on('blockUpdate', safe((o, n) => this._spOnBlockUpdate(o, n)));
+    mc.on('entitySpawn', safe(e => this._spOnEntity(e)));
+    mc.on('explode', safe((pos, power) => this._spOnExplode(pos, power)));
+    try { mc._client?.on?.('block_break_animation', safe(p => this._spOnBreakAnim(p))); } catch { }
+  }
+  // Đào bề mặt (heuristic của mod gốc): block đặc ở trong bán kính ngang bị mất, N lần liên tiếp xuống dưới trong 1 cột / 5s
+  _spOnBlockUpdate(oldB, newB) {
+    if (!this._spawnerProtectOn || !this._sp.surfaceDig || this._spawnerBusy || !oldB || !newB) return;
+    if (!/^(air|cave_air|void_air)$/.test(newB.name || '')) return;
+    if (!SG.isDigEligible(oldB)) return;
+    const pos = newB.position || oldB.position;
+    if (!pos) return;
+    const d = this._spNearestDist({ x: pos.x + .5, y: pos.y + .5, z: pos.z + .5 }, true);
+    if (!(d <= this._sp.threatRadius)) return;
+    const td = this.mc?.targetDigBlock?.position; // chính bot đang đào thì bỏ qua
+    if (td && td.x === pos.x && td.y === pos.y && td.z === pos.z) return;
+    if (!this._spawnerDig.removed(pos.x, pos.y, pos.z, nowMs(), this._sp.digThreshold)) return;
+    this._spawnerDispatch([{ name: 'đào bề mặt', dist: d, kind: 'dig', label: `đào bề mặt (${oldB.name}) cách lồng ${d.toFixed(1)}m ngang` }]);
+  }
+  _spOnEntity(e) {
+    if (!this._spawnerProtectOn || !e?.position) return;
+    const t = this._spEntityThreat(e);
+    if (t) this._spawnerDispatch([t]);
+  }
+  _spOnExplode(pos, power) {
+    if (!this._spawnerProtectOn || !this._sp.explosive || !pos) return;
+    const d = this._spNearestDist(pos, this._sp.fullHeight);
+    if (!SG.insideRange(d, this._sp.threatRadius, Number(power) || 0)) return;
+    this._spawnerDispatch([{ name: 'vụ nổ', dist: d, kind: 'explosion', label: `vụ nổ cách lồng ${d.toFixed(1)}m` }]);
+  }
+  // Người chơi lạ đang đập block (block_break_animation) trong bán kính nguy hiểm quanh lồng
+  _spOnBreakAnim(p) {
+    if (!this._spawnerProtectOn || !this._sp.players || !p || !this.mc) return;
+    if (!(p.destroyStage >= 0 && p.destroyStage <= 9)) return;
+    const ent = this.mc.entities?.[p.entityId];
+    if (!ent || ent === this.mc.entity || ent.type !== 'player') return;
+    const uname = ent.username || ent.name;
+    if (!uname || this._spawnerTrusted(uname)) return;
+    const loc = p.location;
+    if (!loc) return;
+    const d = this._spNearestDist({ x: loc.x + .5, y: loc.y + .5, z: loc.z + .5 }, this._sp.fullHeight);
+    if (!SG.insideRange(d, this._sp.threatRadius)) return;
+    let bn = 'block';
+    try { bn = this.mc.blockAt(this._vec(loc))?.name || bn; } catch { }
+    this._spawnerDispatch([{ name: uname, dist: d, kind: 'player_break', label: `${uname} đang đập ${bn} cách lồng ${d.toFixed(1)}m` }]);
   }
   // Gửi webhook có giới hạn tần suất theo từng loại cảnh báo
   _spawnerAlert(key, minMs, title, desc, color) {
@@ -2020,28 +2229,65 @@ class BotSession extends EventEmitter {
       .normalize('NFC').toLowerCase();
     return txt.includes('lồng') || txt.includes('spawn');
   }
+  _spCountIn(slots, from, to) {
+    let n = 0;
+    for (let i = from; i < to; i++) { const it = slots[i]; if (it && this._isSpawnerItem(it)) n += it.count || 1; }
+    return n;
+  }
+  _countSpawnerItems() { return this.mc.inventory.items().filter(i => this._isSpawnerItem(i)).reduce((n, i) => n + (i.count || 1), 0); }
+  _spEmptySlots() {
+    const inv = this.mc.inventory;
+    if (typeof inv.emptySlotCount === 'function') return inv.emptySlotCount();
+    return Math.max(0, 36 - inv.items().length);
+  }
+  // Bỏ MỌI item lồng trong túi vào ender chest rồi MỞ LẠI rương 1 lần để xác minh bằng snapshot của server
+  // (rương có ≥ dự kiến, túi không còn lồng) — theo cách của mod gốc. verified=false -> KHÔNG được thoát game.
   async _stashSpawnerItems() {
     const mc = this.mc;
     const has = () => mc.inventory.items().filter(i => this._isSpawnerItem(i));
+    const agg = this._spStashAgg || (this._spStashAgg = { found: 0, moved: 0, left: 0, failed: false, unverified: false });
     const before = has();
-    if (!before.length) return { found: 0, left: 0, failed: false };
+    if (!before.length) return { found: 0, left: 0, failed: false, verified: false, moved: 0 };
+    const total = before.reduce((n, i) => n + (i.count || 1), 0);
     const win = await this._openEnderChest();
-    if (!win) return { found: before.length, left: before.length, failed: true };
+    if (!win) { agg.found += before.length; agg.left = before.length; agg.failed = true; return { found: before.length, left: before.length, failed: true, verified: false, moved: 0 }; }
     this.log('sys', `Bảo vệ Lồng Spawn: đã mở ender chest — bỏ ${before.length} stack lồng vào`);
+    const rate = this._sp.depositPerTick;
+    let chestBefore = 0, clicks = 0;
     try {
       const start = win.inventoryStart ?? Math.max(0, win.slots.length - 36);
+      chestBefore = this._spCountIn(win.slots, 0, start);
       for (let i = start; i < win.slots.length; i++) {
         const it = win.slots[i];
         if (!it || !this._isSpawnerItem(it)) continue;
         await mc.clickWindow(i, 0, 1); // shift-click -> vào ender chest
-        await sleep(250);
+        if (++clicks % rate === 0) await sleep(50); // depositPerTick thao tác mỗi tick (50ms)
       }
     } finally {
       try { mc.closeWindow(win); } catch { }
     }
     await sleep(900);
-    const left = has().length;
-    return { found: before.length, left, failed: false };
+    const leftItems = has();
+    const leftCount = leftItems.reduce((n, i) => n + (i.count || 1), 0);
+    const moved = Math.max(0, total - leftCount);
+    // Mở lại 1 lần cho cả đợt (không mở lại theo từng stack) để lấy snapshot chắc chắn từ server
+    let verified = false;
+    const win2 = await this._openEnderChest();
+    if (win2) {
+      try {
+        const start2 = win2.inventoryStart ?? Math.max(0, win2.slots.length - 36);
+        verified = SG.depositVerified({
+          snapshot: true,
+          chestCount: this._spCountIn(win2.slots, 0, start2),
+          expectedChest: chestBefore + moved,
+          playerCount: this._spCountIn(win2.slots, start2, win2.slots.length),
+        }) && leftCount === 0;
+      } finally { try { mc.closeWindow(win2); } catch { } }
+    }
+    agg.found += before.length; agg.moved += moved; agg.left = leftItems.length;
+    if (!verified) agg.unverified = true;
+    this.log(verified ? 'ok' : 'warn', `Bảo vệ Lồng Spawn: ${verified ? 'đã xác minh' : 'CHƯA xác minh được'} việc cất ${moved}/${total} item lồng (mở lại ender chest kiểm tra)`);
+    return { found: before.length, left: leftItems.length, failed: false, verified, moved };
   }
   // Nhặt item rơi quanh chỗ vừa đào (nếu server không tự cho vào túi)
   async _collectDrops(points) {
@@ -2069,14 +2315,40 @@ class BotSession extends EventEmitter {
       await sleep(250);
     }
   }
+  _spawnerExpired() { return this._spawnerDeadline > 0 && nowMs() > this._spawnerDeadline; }
+  // Chờ server giao item lồng vào túi sau mỗi đợt đào (true = đã thấy tăng)
+  async _waitSpawnerDelivery(before, maxMs = 2500) {
+    const t0 = nowMs();
+    while (nowMs() - t0 < maxMs) {
+      if (this._countSpawnerItems() > before) return true;
+      await sleep(50);
+    }
+    return this._countSpawnerItems() > before;
+  }
+  _spDropIsSpawner(e) { try { const it = e.getDroppedItem?.(); return it ? this._isSpawnerItem(it) : false; } catch { return false; } }
+  // Item lồng còn nằm dưới đất quanh chỗ vừa đào (chưa nhặt) — chặn việc thoát game
+  _spawnerGroundDrops(points) {
+    const mc = this.mc;
+    const me = mc?.entity?.position;
+    if (!me) return [];
+    return Object.values(mc.entities || {}).filter(e =>
+      (e.name === 'item' || e.objectType === 'Item') && e.position && e.isValid !== false &&
+      e.position.distanceTo(me) <= 16 && this._spDropIsSpawner(e) &&
+      (!points.length || points.some(p => e.position.distanceTo(makeVec3(p.x + 0.5, p.y + 0.5, p.z + 0.5)) <= 8)));
+  }
+  // Đập từng lồng theo ĐỢT như mod gốc: giữ shift -> đào -> chờ item vào túi -> nhả shift -> nghỉ pauseTicks -> shift lại.
+  // Túi gần đầy (< reserveSlots ô trống) thì cất vào ender chest giữa chừng rồi đào tiếp.
   async _breakSpawners(pick, targets) {
     const mc = this.mc;
     const broken = [];
+    let timedOut = false;
+    const pauseMs = this._sp.pauseTicks * 50;
     await mc.equip(pick, 'hand');
     mc.setControlState('sneak', true); // giữ shift: plugin gộp lồng sẽ cho đào cả stack trong 1 lần
     await sleep(200);
     try {
       for (const p of targets) {
+        if (this._spawnerExpired()) { timedOut = true; break; }
         let outOfReach = false;
         // nhìn thẳng vào lồng (kiểm tra tia ngắm trúng lồng) rồi MỚI đào
         const aimed = await this._faceBlock(mc, p, { reach: 6, stop: () => !this._spawnerProtectOn });
@@ -2084,6 +2356,7 @@ class BotSession extends EventEmitter {
         for (let i = 0; i < 12; i++) { // stack còn dư thì đập tiếp
           if (!this.isOnline) throw new Error('bot offline');
           if (!this._spawnerProtectOn) throw new Error('đã tắt bảo vệ giữa chừng');
+          if (this._spawnerExpired()) { timedOut = true; break; }
           const block = mc.blockAt(this._vec(p));
           if (!this._isSpawnerBlock(block)) break;
           if (!mc.heldItem || !/_pickaxe$/.test(mc.heldItem.name || '')) { // cúp hỏng giữa chừng
@@ -2092,9 +2365,32 @@ class BotSession extends EventEmitter {
             await mc.equip(alt, 'hand');
           }
           if (!mc.canDigBlock(block)) { outOfReach = true; break; }
+          // túi gần đầy -> cất giữa chừng rồi đào tiếp (cần còn chỗ cho 1 đợt item mới)
+          if (this._spEmptySlots() < this._sp.reserveSlots) {
+            if (!this._countSpawnerItems()) throw new Error('túi đầy item khác (không phải lồng) — cần dọn chỗ trống');
+            this.log('sys', `Bảo vệ Lồng Spawn: túi còn < ${this._sp.reserveSlots} ô trống — cất vào ender chest rồi đào tiếp`);
+            try { mc.setControlState('sneak', false); } catch { }
+            const mid = await this._stashSpawnerItems();
+            if (mid.failed) throw new Error('không mở được ender chest để cất giữa chừng');
+            await mc.equip(pick, 'hand');
+            mc.setControlState('sneak', true);
+            await sleep(200);
+            await this._faceBlock(mc, p, { reach: 6, stop: () => !this._spawnerProtectOn });
+          }
+          const before = this._countSpawnerItems();
           try { mc.stopDigging(); } catch { }
           try { await mc.dig(block, true); }
           catch (e) { this.log('warn', `Đào lỗi (${p.x},${p.y},${p.z}): ${e.message}`); await sleep(300); }
+          const got = await this._waitSpawnerDelivery(before);
+          const after = mc.blockAt(this._vec(p));
+          if (after && this._isSpawnerBlock(after)) {
+            // còn dư stack: nhả shift, nghỉ, shift lại rồi mới đợt kế (giống mod gốc)
+            if (!got) this.log('warn', 'Bảo vệ Lồng Spawn: chưa thấy item vào túi sau đợt đào — nghỉ rồi thử tiếp');
+            try { mc.setControlState('sneak', false); } catch { }
+            await sleep(150 + pauseMs);
+            mc.setControlState('sneak', true);
+            await sleep(100);
+          }
         }
         const after = mc.blockAt(this._vec(p));
         if (after && !this._isSpawnerBlock(after)) {
@@ -2104,20 +2400,24 @@ class BotSession extends EventEmitter {
         } else if (outOfReach) {
           this.log('warn', `Lồng (${p.x},${p.y},${p.z}) ngoài tầm với — bot không tự di chuyển`);
         }
+        if (timedOut) break;
       }
     } finally {
       try { mc.setControlState('sneak', false); } catch { }
       this._persistSpawnerState();
     }
-    return broken;
+    return { broken, timedOut };
   }
-  async _onSpawnerThreat(strangers) {
-    const names = strangers.map(s => `${s.name} (${s.dist.toFixed(1)}m)`).join(', ');
+  _spFmt(t) { return t.label || `${t.name} (${Number(t.dist).toFixed(1)}m)`; }
+  async _onSpawnerThreat(threats) {
+    const names = threats.map(t => this._spFmt(t)).join(', ');
+    const onlyPlayers = threats.every(t => !t.kind || t.kind === 'player_break');
+    const tag = onlyPlayers ? 'Người lạ' : 'Mối nguy';
     const id = this.cfg.id;
-    if (this._spawnerAlert('threat', 15000, `⚠️ ${id}: người lạ gần lồng`, `Người lạ: ${names}\nĐang bảo vệ ${this.protectedSpawners.length} lồng.`, 0xf59e0b)) {
-      this.log('warn', `⚠️ Bảo vệ Lồng Spawn: người lạ ${names}`);
+    if (this._spawnerAlert('threat', this._sp.alertCooldownMs, `⚠️ ${id}: ${onlyPlayers ? 'người lạ gần lồng' : 'nguy hiểm gần lồng'}`, `${tag}: ${names}\nĐang bảo vệ ${this.protectedSpawners.length} lồng (${this._spSummary()}).`, 0xf59e0b)) {
+      this.log('warn', `⚠️ Bảo vệ Lồng Spawn: ${tag.toLowerCase()} ${names}`);
     }
-    if (!this.spawnerAutoMine) {
+    if (!this._sp.autoMine) {
       if (this.spawnerAutoDisconnect) { this.log('warn', 'Bảo vệ Lồng Spawn: auto-disconnect'); this.shutdown(); }
       return;
     }
@@ -2140,29 +2440,53 @@ class BotSession extends EventEmitter {
     if (!pick) {
       // 3) không có cúp ở đâu -> báo webhook liên tục (mỗi spawnerAlertIntervalMs), bot ở lại để tiếp tục báo
       this._spawnerAlert('nopick', 0, `🚨 ${id}: KHÔNG CÓ CÚP${this.spawnerRequireSilk ? ' SILK TOUCH' : ''} — không đào được lồng`,
-        `Người lạ: ${names}\n${targets.length} lồng đang gặp nguy hiểm, vd (${targets[0].x}, ${targets[0].y}, ${targets[0].z}).\nCả túi đồ lẫn ender chest đều không có cúp — hãy vào xử lý gấp!`, 0xef4444);
+        `${tag}: ${names}\n${targets.length} lồng đang gặp nguy hiểm, vd (${targets[0].x}, ${targets[0].y}, ${targets[0].z}).\nCả túi đồ lẫn ender chest đều không có cúp — hãy vào xử lý gấp!`, 0xef4444);
       this.log('warn', '🚨 Bảo vệ Lồng Spawn: không có cúp ở túi đồ lẫn ender chest — đang báo webhook liên tục');
       this._spawnerRetryAt = nowMs() + this.spawnerAlertIntervalMs;
       return;
     }
-    this.log('sys', `Bảo vệ Lồng Spawn: dùng ${pick.name} đập ${targets.length} lồng (giữ shift)`);
-    const broken = await this._breakSpawners(pick, targets);
-    if (broken.length) await this._collectDrops(broken);
-    const stash = await this._stashSpawnerItems();
-    const stashed = stash.found - stash.left;
+    this._spawnerDeadline = nowMs() + this._sp.timeoutSec * 1000;
+    this._spStashAgg = { found: 0, moved: 0, left: 0, failed: false, unverified: false };
+    this.log('sys', `Bảo vệ Lồng Spawn: dùng ${pick.name} đập ${targets.length} lồng (giữ shift, nghỉ ${this._sp.pauseTicks} tick giữa các đợt, giới hạn ${this._sp.timeoutSec}s)`);
+    let broken = [], timedOut = false, ground = 0;
+    try {
+      ({ broken, timedOut } = await this._breakSpawners(pick, targets));
+      if (timedOut) { // hết giờ: cho thêm 30s để cất số đã đào được
+        this._spawnerDeadline = nowMs() + 30000;
+        this.log('warn', 'Bảo vệ Lồng Spawn: hết thời gian xử lý — cất số lồng đã đào được');
+      }
+      if (broken.length) await this._collectDrops(broken);
+      await this._stashSpawnerItems();
+      ground = this._spawnerGroundDrops(broken).length;
+      if (ground && broken.length) { // còn item rơi chưa nhặt: nhặt + cất thêm 1 vòng
+        await this._collectDrops(broken);
+        await this._stashSpawnerItems();
+        ground = this._spawnerGroundDrops(broken).length;
+      }
+    } finally { this._spawnerDeadline = 0; }
+    const agg = this._spStashAgg;
+    const carried = this._countSpawnerItems();
     const remaining = this.protectedSpawners.length;
-    const lines = [`Người lạ: ${names}`, `Đã đập ${broken.length}/${targets.length} lồng.`];
-    if (stash.found) lines.push(stash.failed ? '⚠️ Không mở được ender chest — item lồng vẫn nằm trong túi.' : `Đã cất ${stashed}/${stash.found} stack item lồng/spawn vào ender chest${stash.left ? ` (còn ${stash.left} trong túi — ender chest đầy?)` : ''}.`);
-    else if (broken.length) lines.push('Không thấy item lồng trong túi (rơi dưới đất/server không trả item?).');
+    const lines = [`${tag}: ${names}`, `Đã đập ${broken.length}/${targets.length} lồng.`];
+    if (agg.found) lines.push(agg.failed ? '⚠️ Không mở được ender chest — item lồng vẫn nằm trong túi.'
+      : `Đã cất ${agg.moved} item lồng/spawn vào ender chest — ${agg.unverified ? '⚠️ CHƯA xác minh được bằng snapshot server' : 'đã xác minh ✅'}${carried ? ` (còn ${carried} trong túi — ender chest đầy?)` : ''}.`);
+    else if (broken.length) lines.push('⚠️ Không thấy item lồng trong túi (rơi dưới đất/server không trả item?).');
+    if (ground) lines.push(`⚠️ Còn ${ground} item lồng dưới đất chưa nhặt được.`);
+    if (timedOut) lines.push('⚠️ Hết thời gian xử lý khẩn cấp.');
     if (remaining) lines.push(`⚠️ Còn ${remaining} lồng chưa đập được (ngoài tầm với).`);
-    const ok = broken.length > 0 && !stash.failed && !stash.left && !remaining;
+    const stored = agg.found > 0 && !agg.failed && !agg.unverified;
+    const ok = SG.mayLogout({ stored, carried, ground, remaining, failed: timedOut || broken.length === 0 });
     this._notify('spawnerThreat', `${ok ? '✅' : '⚠️'} ${id}: xử lý bảo vệ lồng`, lines.join('\n'), ok ? 0x22c55e : 0xf59e0b);
     this.log(ok ? 'ok' : 'warn', 'Bảo vệ Lồng Spawn: ' + lines.join(' | '));
     if (!this.protectedSpawners.length) this._stopSpawnerProtect();
     else this._spawnerRetryAt = nowMs() + 4000;
-    if (this.spawnerAutoDisconnect && broken.length) {
-      this.log('warn', 'Bảo vệ Lồng Spawn: auto-disconnect — ngắt kết nối để bảo toàn tài khoản/đồ đạc');
-      this.shutdown();
+    if (this.spawnerAutoDisconnect) {
+      if (ok) {
+        this.log('warn', 'Bảo vệ Lồng Spawn: đã xác minh cất xong — ngắt kết nối để bảo toàn tài khoản/đồ đạc');
+        this.shutdown();
+      } else if (broken.length) {
+        this.log('warn', 'Bảo vệ Lồng Spawn: KHÔNG ngắt kết nối vì chưa xác minh được việc cất đồ/còn lồng — bot ở lại để bạn xử lý');
+      }
     }
   }
   // ===== Xoay Proxy Tự Động =====
@@ -2284,7 +2608,7 @@ class BotSession extends EventEmitter {
     this._posNearSince = 0;
     this._posAwaySince = 0;
     this._posLastPos = null;
-    const want = [this._spawnerProtectOn && 'spawnerprotect', this._sellSpawnOn && 'autosell_spawn', this.autoSellMacro && 'autosell macro'].filter(Boolean);
+    const want = [this._spawnerProtectOn && 'spawnerprotect', this._sellSpawnOn && 'autosell_spawn', this._autoSellOn() && 'autosell'].filter(Boolean);
     this.log('sys', want.length
       ? `Cổng vị trí: sẽ bật ${want.join(' + ')} khi bot ở gần lồng spawn${this.spawnHomeEnabled ? ` (lệch vị trí → tự gõ ${this.spawnHomeCommand})` : ''}`
       : 'Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng');
@@ -2433,9 +2757,9 @@ class BotSession extends EventEmitter {
   _armAutoSell(results = null) {
     if (this._autoSellArmed) return;
     this._autoSellArmed = true;
-    if (!this.autoSellMacro) return;
-    this.log('ok', `Đã bật autosell macro: túi đầy ${this.autoSellThreshold}% → macro "${this.autoSellMacro}"`);
-    if (results) results.push({ name: 'autosell macro', ok: true, detail: `túi đầy ${this.autoSellThreshold}% → macro "${this.autoSellMacro}"` });
+    if (!this._autoSellOn()) return;
+    this.log('ok', `Đã bật autosell: túi đầy ${this._autoSellPct()}% → ${this._autoSellDesc()}`);
+    if (results) results.push({ name: 'autosell macro', ok: true, detail: `túi đầy ${this._autoSellPct()}% → ${this._autoSellDesc()}` });
     this._autoSellFired = false;
     this._setTimer('autoSellFirstCheck', () => this._updateInventory(), 1500); // túi đã đầy sẵn thì chạy luôn, khỏi chờ lần quét túi sau
   }
@@ -2988,7 +3312,7 @@ class BotSession extends EventEmitter {
       this.log('sys', `— #${args[1]} ${e.item} (slot ${e.slot}) —`);
       (e.raw.length ? e.raw : ['(không có lore)']).forEach(l => this.log('sys', `  ${l}`));
     });
-    r.register('autosell', 'Tự chạy macro khi đầy túi đồ: autosell <%đầy> <macro> | autosell off | autosell | autosell revenue ...', (args) => {
+    r.register('autosell', 'Tự bán qua /sell khi đầy túi đồ: autosell <%đầy> <item,item...> | autosell on|off | autosell | autosell <%> macro <tên> | autosell revenue ...', (args) => {
       const sub0 = String(args[0] || '').toLowerCase();
       if (sub0 === 'revenue' || sub0 === 'rev' || sub0 === 'doanhthu') {
         const a1 = String(args[1] || '').toLowerCase();
@@ -3030,30 +3354,49 @@ class BotSession extends EventEmitter {
         return;
       }
       if (!args[0]) {
-        if (!this.autoSellMacro) { this.log('sys', 'Chưa đặt auto-sell. Cú pháp: autosell <%đầy, vd 90> <tên macro>'); return; }
+        if (!this._autoSellOn()) { this.log('sys', 'Chưa đặt auto-sell. Cú pháp: autosell <%đầy, vd 50> <item,item...>   vd: autosell 50 cobblestone'); return; }
         const used = this.state.inventory?.length || 0;
-        this.log('sys', `Auto-sell: ${this.autoSellThreshold}% đầy → macro "${this.autoSellMacro}" (hiện ${used}/36 ô)${this._autoSellFired ? ' [đã bắn, chờ dọn bớt để reset]' : ''}`);
+        this.log('sys', `Auto-sell: ${this._autoSellPct()}% đầy → ${this._autoSellDesc()} (hiện ${used}/36 ô)${this._autoSellFired ? ' [đã bắn, chờ dọn bớt để reset]' : ''}`);
         return;
       }
-      if (args[0].toLowerCase() === 'off') {
+      const a0 = args[0].toLowerCase();
+      if (a0 === 'off') {
         this.autoSellMacro = null;
+        this.autoSellEnabled = false;
         this._autoSellFired = false;
         this._persistMacroSellCfg();
+        this._persistAutoSellItems();
         this.log('sys', 'Đã tắt auto-sell');
+        return;
+      }
+      if (a0 === 'on') {
+        if (!this.autoSellItems.length) { this.log('warn', 'Chưa có danh sách item. Cú pháp: autosell <%đầy> <item,item...>   vd: autosell 50 cobblestone'); return; }
+        const r0 = this.setAutoSellItems(this.autoSellItemsPct, this.autoSellItems);
+        this.log(r0.ok ? 'ok' : 'warn', r0.message);
         return;
       }
       const pct = parseInt(args[0], 10);
       if (!Number.isInteger(pct) || pct < 1 || pct > 100) { this.log('warn', 'Auto-sell: % không hợp lệ (1-100)'); return; }
-      const macroName = args[1];
-      if (!macroName) { this.log('warn', 'Cú pháp: autosell <%đầy> <tên macro>'); return; }
+      if (!args[1]) { this.log('warn', 'Cú pháp: autosell <%đầy> <item,item...>   vd: autosell 50 cobblestone   (kiểu macro cũ: autosell <%đầy> macro <tên macro>)'); return; }
+      if (args[1].toLowerCase() !== 'macro') {
+        const r1 = this.setAutoSellItems(pct, args.slice(1));
+        this.log(r1.ok ? 'ok' : 'warn', r1.message);
+        if (r1.ok) this._askRevenueWebhook(); // bật xong -> hỏi liên kết webhook Discord (bỏ trống = bỏ qua)
+        return;
+      }
+      // Kiểu cũ: chạy 1 macro do bạn tự định nghĩa trong config.json > macros
+      const macroName = args[2];
+      if (!macroName) { this.log('warn', 'Cú pháp: autosell <%đầy> macro <tên macro>'); return; }
       if (!this.macroEngine.list().some(n => n.toLowerCase() === macroName.toLowerCase())) {
         this.log('warn', `Auto-sell: macro "${macroName}" không tồn tại (xem: listmacro)`);
         return;
       }
       this.autoSellThreshold = pct;
       this.autoSellMacro = macroName;
+      this.autoSellEnabled = false; // macro thay cho kiểu tích hợp
       this._autoSellFired = false;
       this._persistMacroSellCfg();
+      this._persistAutoSellItems();
       this.log('ok', `Đã đặt auto-sell: ${pct}% đầy → macro "${macroName}"`);
       this._askRevenueWebhook(); // bật xong -> hỏi liên kết webhook Discord (bỏ trống = bỏ qua)
     });
@@ -3088,12 +3431,33 @@ class BotSession extends EventEmitter {
       if (want === 'on' || !want) { this._startProxyRotate(); return; }
       this.log('warn', 'Cú pháp: proxyrotate on|off');
     });
-    r.register('spawnerprotect', 'Bật/Tắt bảo vệ lồng spawn (bật = tự lưu lồng trong 5 block quanh bot): spawnerprotect on|off', (args) => {
+    r.register('spawnerprotect', 'Bảo vệ lồng spawn: spawnerprotect on|off | level [1-4] | set <khoá> <giá trị|auto> | status', (args) => {
+      const sub = (args[0] || '').toLowerCase();
+      if (sub === 'level' || sub === 'muc' || sub === 'mức') {
+        if (args[1] === undefined) { this.log('sys', `Cường độ hiện tại: ${this._spSummary()}`); for (const n of [1, 2, 3, 4]) this.log('sys', `  ${SG.LEVELS[n].icon} ${n} ${SG.LEVELS[n].name} — ${SG.LEVELS[n].desc}`); return; }
+        const n = Number(args[1]);
+        if (!SG.LEVELS[n]) { this.log('warn', 'Cú pháp: spawnerprotect level <1|2|3|4> [keep]  (keep = giữ các thông số đã chỉnh tay)'); return; }
+        this.setSpawnerLevel(n, String(args[2] || '').toLowerCase() === 'keep');
+        this.log('ok', `Bảo vệ Lồng Spawn: ${this._spSummary()}`);
+        return;
+      }
+      if (sub === 'set') {
+        const key = args[1], val = args[2];
+        if (!key || !SG.SPEC[key] || val === undefined) { this.log('warn', `Cú pháp: spawnerprotect set <khoá> <giá trị|auto>. Khoá: ${SG.KEYS.join(', ')}`); return; }
+        if (val !== 'auto' && SG.coerce(key, val) === undefined) { this.log('warn', `Giá trị không hợp lệ cho ${key} (${SG.SPEC[key].type === 'bool' ? 'on/off' : `${SG.SPEC[key].min}-${SG.SPEC[key].max}`})`); return; }
+        this.setSpawnerTune({ [key]: val });
+        this.log('ok', `Đã đặt ${key} = ${this._sp[key]}${key in this._spTune ? ' (chỉnh tay)' : ' (theo mức)'} — ${this._spSummary()}`);
+        return;
+      }
+      if (sub === 'status' || sub === 'info') {
+        this.log('sys', `— ${this._spSummary()} — ${this._spawnerProtectOn ? 'BẬT' : 'TẮT'}, ${this.protectedSpawners.length} lồng`);
+        for (const k of SG.KEYS) this.log('sys', `  ${k} = ${this._sp[k]}${SG.SPEC[k].unit ? ' ' + SG.SPEC[k].unit : ''}${k in this._spTune ? '  *chỉnh tay' : ''}  — ${SG.SPEC[k].label}`);
+        return;
+      }
       if (!this.requireOnline('spawnerprotect')) return;
-      const want = (args[0] || '').toLowerCase();
-      if (want === 'off') { this._stopSpawnerProtect(); return; }
-      if (want === 'on' || !want) { this._startSpawnerProtect(); return; }
-      this.log('warn', 'Cú pháp: spawnerprotect on|off');
+      if (sub === 'off') { this._stopSpawnerProtect(); return; }
+      if (sub === 'on' || !sub) { this._startSpawnerProtect(); return; }
+      this.log('warn', 'Cú pháp: spawnerprotect on|off | level [1-4] | set <khoá> <giá trị|auto> | status');
     });
     r.register('addspawner', 'Thêm toạ độ lồng cần bảo vệ: addspawner [x y z] (bỏ trống = vị trí hiện tại)', (args) => {
       if (!this.requireOnline('addspawner')) return;
@@ -3125,7 +3489,7 @@ class BotSession extends EventEmitter {
     });
     r.register('listspawners', 'Xem danh sách lồng đang bảo vệ', () => {
       if (!this.protectedSpawners.length) { this.log('sys', 'Chưa có lồng nào'); return; }
-      this.log('sys', `— Đang bảo vệ ${this.protectedSpawners.length} lồng (quét người lạ ${this.spawnerProtectRange} block, ${this._spawnerProtectOn ? 'BẬT' : 'TẮT'}${this.spawnerAutoMine ? '' : ', chỉ cảnh báo'}) —`);
+      this.log('sys', `— Đang bảo vệ ${this.protectedSpawners.length} lồng (${this._spawnerProtectOn ? 'BẬT' : 'TẮT'}) — ${this._spSummary()} —`);
       this.protectedSpawners.forEach(p => this.log('sys', `  (${p.x}, ${p.y}, ${p.z})`));
       if (this.spawnerWhitelist.length) this.log('sys', `Whitelist: ${this.spawnerWhitelist.join(', ')}`);
     });

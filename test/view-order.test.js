@@ -43,6 +43,7 @@ function mkBot(cfg = {}) {
   const world = new Map([[key(SPAWNER), 'spawner'], [key(CHEST), 'ender_chest']]);
   const shapesOf = { ender_chest: [[0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375]], small_amethyst_bud: [[0.25, 0, 0.25, 0.75, 0.25, 0.75]], air: [] };
   const invItems = [];
+  const chestStore = { count: 0 }; // nội dung ender chest giả
   const sellWin = { title: '{"text":"SHOP"}', inventoryStart: 54, slots: Array.from({ length: 90 }, (_, i) => (i === 51 ? { name: 'emerald', count: 1 } : null)) };
   const mc = new EventEmitter();
   Object.assign(mc, {
@@ -66,18 +67,19 @@ function mkBot(cfg = {}) {
     async equip() { }, setControlState() { }, getControlState: () => false, stopDigging() { }, canDigBlock: () => true,
     async dig(b) { events.push(`dig ${key(b.position)}`); world.set(key(b.position), 'air'); invItems.push({ name: 'spawner', slot: 30, count: 1 }); },
     async activateBlock(b) { events.push(`activate ${key(b.position)}`); setImmediate(() => mc.emit('windowOpen', sellWin)); },
-    async clickWindow(slot, btn, mode) { events.push(`click ${slot},${btn},${mode}`); if (mode === 1) invItems.splice(0, invItems.length, ...invItems.filter(i => i.name !== 'spawner')); },
+    async clickWindow(slot, btn, mode) { events.push(`click ${slot},${btn},${mode}`); if (mode === 1) { chestStore.count += invItems.filter(i => i.name === 'spawner').reduce((n, i) => n + i.count, 0); invItems.splice(0, invItems.length, ...invItems.filter(i => i.name !== 'spawner')); } },
     closeWindow() { }, chat() { },
     findBlock: () => ({ name: 'ender_chest', position: V(CHEST.x, CHEST.y, CHEST.z) }),
     async openContainer(b) {
       events.push(`open ${key(b.position)}`);
       const slots = Array(63).fill(null); // 27 ô rương + 36 ô túi đồ; lồng nằm ở ô 40
       invItems.forEach(it => { if (it.name === 'spawner') slots[40] = it; });
+      if (chestStore.count) slots[0] = { name: 'spawner', count: chestStore.count };
       return { inventoryStart: 27, slots, title: 'Ender Chest' };
     },
   });
   bot.mc = mc;
-  return { bot, mc, events, logs, world };
+  return { bot, mc, events, logs, world, chestStore };
 }
 const idx = (events, s) => events.findIndex(e => e.startsWith(s));
 
@@ -175,6 +177,8 @@ const idx = (events, s) => events.findIndex(e => e.startsWith(s));
     assert(logs.some(l => l.includes('nhìn vào lồng (3,64,0) → đào')));
     assert(logs.some(l => l.includes('nhìn vào ender chest (3,64,2) → mở rương')));
     assert(logs.some(l => l.includes('bỏ 1 stack lồng vào')));
+    assert(logs.some(l => l.includes('đã xác minh việc cất 1/1')), 'phải mở lại ender chest và xác minh');
+    assert.strictEqual(bot._spStashAgg.unverified, false);
   }
 
   // 6) AFK không được ghi đè góc nhìn khi đang bán / đang nhắm
