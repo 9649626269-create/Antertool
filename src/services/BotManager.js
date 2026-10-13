@@ -36,6 +36,7 @@ class BotManager {
     this.telegramLogs = new TelegramLogger(this.telegram, {
       tz: () => this._scheduleTz(),
       secrets: () => this.bots.map(b => b?.cfg?.botPassword).filter(Boolean),
+      stats: (id) => this._serverStats(id), // stats server (scoreboard: money, shard, kills...) ghi đầu file log_<bot>.txt
     });
     this.dashboard = null;
     this._config = null;
@@ -108,6 +109,20 @@ class BotManager {
   // Log hệ thống không thuộc bot nào (khởi động, tắt, lỗi chưa bắt được...) -> cùng đường gửi Telegram với log bot
   runtimeLog(level, msg) {
     try { this.telegramLogs.push(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); } catch { }
+  }
+  // Stats server của 1 bot cho đầu file log: tên scoreboard + từng dòng (MONEY, SHARD, KILLS...). Không có bảng thì dùng số đã đọc.
+  _serverStats(id) {
+    const b = this.findBot(id);
+    if (!b) return null;
+    const lines = [`Trạng thái: ${b.state.connState}${b.state.ping >= 0 ? ` · ping ${b.state.ping}ms` : ''}`];
+    const board = b.readBoard();
+    if (board && board.lines.length) {
+      for (const l of board.lines) lines.push(l.text);
+      return { title: board.title, lines };
+    }
+    if (b.state.money) lines.push(`Money: ${b.state.money.toLocaleString('en-US')}`);
+    if (b.state.shard) lines.push(`Shard: ${b.state.shard.toLocaleString('en-US')}`);
+    return lines;
   }
   flushTelegramLogs(timeoutMs = 3000) { return this.telegramLogs.flushNow(timeoutMs); }
   _createBotFromConfig(cfg, index) {

@@ -5,7 +5,8 @@ const RingBuffer = require('./RingBuffer');
 /**
  * TelegramLogger — đẩy LOG RUNTIME (log của từng bot + log hệ thống của tool) lên Telegram.
  *
- *  - Không gửi từng dòng: gom theo lô (mặc định 10s) rồi gửi 1 tin gộp; lỗi (err) gửi nhanh hơn (≤2s).
+ *  - Không gửi từng dòng: gom theo lô (mặc định 10s) rồi gửi FILE văn bản log_<bot>.txt (mỗi bot 1 file, log hệ thống = log_system.txt);
+ *    đầu file có phần STATS SERVER (scoreboard: money, shard, kills...) của bot đó. Lỗi (err) gửi nhanh hơn (≤2s).
  *  - Tin log gửi IM LẶNG (không rung điện thoại) — cảnh báo kick/hết reconnect... vẫn là tin riêng có thông báo đẩy.
  *  - Chống dội: dòng y hệt liên tiếp của cùng 1 bot gộp thành "(×N)"; tối đa N tin/phút; hàng đợi Telegram bận
  *    hoặc đang bị 429 thì GIỮ log lại gửi sau (bộ đệm giới hạn 400 dòng, tràn thì bỏ dòng cũ nhất và báo số dòng bỏ).
@@ -27,12 +28,13 @@ const PRESETS = {
 const ALIASES = { error: 'err', errors: 'err', warning: 'warn', warnings: 'warn', system: 'sys', debug: 'sys' };
 const ICONS = { sys: '⚙️', ok: '✅', warn: '⚠️', err: '❌', afk: '💤', shard: '✨', proxy: '🌐', health: '🩺', chat: '💬' };
 const SYSTEM = 'system'; // nguồn log không thuộc bot nào (khởi động, tắt, lỗi chưa bắt được...)
+const LABELS = { sys: 'SYS', ok: 'OK', warn: 'WARN', err: 'ERR', afk: 'AFK', shard: 'SHARD', proxy: 'PROXY', health: 'HEALTH', chat: 'CHAT' };
 
 const DEFAULTS = { enabled: true, intervalSec: 10, silent: true, maxPerMin: 10 };
 const MAX_BUFFER = 400;      // dòng chờ gửi tối đa
 const MAX_MSG = 500;         // ký tự tối đa của 1 dòng log
 const MAX_MSG_LINES = 6;     // số dòng tối đa của 1 mục log nhiều dòng (bảng, stack trace)
-const CHUNK_LIMIT = 3600;    // ký tự (đã gồm thẻ HTML) tối đa của 1 tin — Telegram cho 4096, notifier cắt ở 4000
+const MAX_STAT_LINES = 40;   // số dòng stats server tối đa ghi ở đầu file
 const MAX_TRIES = 3;         // gửi lỗi quá chừng này lần thì bỏ dòng đó
 const ERR_FLUSH_MS = 2000;   // có lỗi (err) thì không chờ hết nhịp gom
 
@@ -50,12 +52,14 @@ const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 class TelegramLogger {
   /**
    * @param notifier  TelegramNotifier (send, enabled, paused, pending)
-   * @param opts      { tz: () => 'Asia/Ho_Chi_Minh', secrets: () => ['mật khẩu bot', ...], recentSize }
+   * @param opts      { tz: () => 'Asia/Ho_Chi_Minh', secrets: () => ['mật khẩu bot', ...], recentSize,
+   *                    stats: (botId) => { title, lines: ['MONEY 832.5M', ...] } | ['dòng', ...] | null  — stats server ghi đầu file }
    */
   constructor(notifier, opts = {}) {
     this.tg = notifier;
     this._tz = typeof opts.tz === 'function' ? opts.tz : () => 'Asia/Ho_Chi_Minh';
     this._secrets = typeof opts.secrets === 'function' ? opts.secrets : () => [];
+    this._stats = typeof opts.stats === 'function' ? opts.stats : () => null;
     this.recent = new RingBuffer(opts.recentSize || 500);
     this._buf = [];
     this._dropped = 0;
@@ -260,7 +264,7 @@ class TelegramLogger {
         }
         this._sentAt.push(Date.now());
         let id = null;
-        try { id = await this.tg.send(chunks[i].text, { silent: this.silent }); } catch { id = null; }
+        try { id = await this.tg.sendDocument(chunks[i].name, chunks[i].text, { caption: chunks[i].caption, silent: this.silent }); } catch { id = null; }
         if (id) { this.stats.messages++; this.stats.lines += chunks[i].recs.length; continue; }
         this.stats.failed++;
         this._requeue(chunks.slice(i));
@@ -293,10 +297,10 @@ class TelegramLogger {
   // Gửi 1 dòng log thử qua đúng đường gửi thật (kiểm tra Telegram + định dạng; không phụ thuộc bộ lọc mức)
   async test() {
     if (!this.tg || !this.tg.enabled) return { ok: false, message: 'Telegram chưa cấu hình (telegram set <token> → telegram chatid)' };
-    const rec = { t: Date.now(), bot: SYSTEM, level: 'ok', msg: 'Kiểm tra log runtime — thấy dòng này nghĩa là log đã gửi được lên Telegram', n: 1 };
+    const rec = { t: Date.now(), bot: SYSTEM, level: 'ok', msg: 'Kiểm tra log runtime — thấy file này nghĩa là log đã gửi được lên Telegram', n: 1 };
     let id = null;
-    try { id = await this.tg.send(this._chunk([rec])[0].text, { silent: this.silent }); } catch { }
-    return id ? { ok: true, message: 'Đã gửi dòng log thử' } : { ok: false, message: `Gửi thất bại: ${this.tg.lastError || 'không rõ lý do'}` };
+    try { const c = this._chunk([rec])[0]; id = await this.tg.sendDocument(c.name, c.text, { caption: c.caption, silent: this.silent }); } catch { }
+    return id ? { ok: true, message: 'Đã gửi file log thử' } : { ok: false, message: `Gửi thất bại: ${this.tg.lastError || 'không rõ lý do'}` };
   }
 
   // ===== xem lại theo yêu cầu (/logs, "telegram logs send") =====
@@ -311,7 +315,7 @@ class TelegramLogger {
     if (!tail.length) return { count: 0, messages: 0 };
     let messages = 0;
     for (const c of this._chunk(tail.map(r => ({ ...r, n: 1 })), 0)) {
-      if (await this.tg.send(c.text, { silent: true })) messages++;
+      if (await this.tg.sendDocument(c.name, c.text, { caption: c.caption, silent: true })) messages++;
     }
     return { count: tail.length, messages };
   }
@@ -328,29 +332,55 @@ class TelegramLogger {
     }
     return f;
   }
-  // "<code>14:05:09</code> <b>bot-1</b> ⚠️ nội dung (×3)"  — chữ thường (không <pre>) để điện thoại tự xuống dòng, khỏi phải cuộn ngang
+  // "14:05:09 [WARN ] bot-1: nội dung (×3)" — văn bản thuần trong file .txt; dòng nhiều dòng thụt vào dưới
   _line(r, fmt = this._timeFmt()) {
     let time;
     try { time = fmt.format(new Date(r.t)); } catch { time = '--:--:--'; }
     const [first, ...rest] = r.msg.split('\n');
-    let s = `<code>${time}</code> <b>${escapeHtml(r.bot)}</b> ${ICONS[r.level] || '•'} ${escapeHtml(first)}`;
-    for (const x of rest) s += `\n   ↳ ${escapeHtml(x)}`;
-    if (r.n > 1) s += ` <i>(×${r.n})</i>`;
+    let s = `${time} [${(LABELS[r.level] || r.level.toUpperCase()).padEnd(6)}] ${first}`;
+    for (const x of rest) s += `\n           ↳ ${x}`;
+    if (r.n > 1) s += ` (×${r.n})`;
     return s;
   }
-  // -> [{ text, recs }]  mỗi tin ≤ CHUNK_LIMIT ký tự; dòng "bỏ qua N dòng" (nếu có) nằm đầu tin đầu tiên
+  // Phần STATS SERVER (scoreboard) của 1 bot, đã làm sạch + che bí mật. [] nếu không có.
+  _statsLines(bot) {
+    if (bot === SYSTEM) return [];
+    let st = null;
+    try { st = this._stats(bot); } catch { st = null; }
+    if (!st) return [];
+    const raw = Array.isArray(st) ? st : [...(st.title ? [`Scoreboard: ${st.title}`] : []), ...(st.lines || [])];
+    return raw.map(x => this._clean(x).replace(/\n+/g, ' ')).filter(Boolean).slice(0, MAX_STAT_LINES);
+  }
+  _fileName(bot) { return `log_${String(bot).replace(/[^\w.-]+/g, '_').slice(0, 60) || SYSTEM}.txt`; }
+  _fileText(bot, recs, dropped, fmt) {
+    let now;
+    try { now = new Date().toLocaleString('en-GB', { timeZone: this._tz() || 'Asia/Ho_Chi_Minh', hour12: false }); } catch { now = new Date().toISOString(); }
+    const out = [`Antertool — log runtime: ${bot}`, `Xuất lúc: ${now}`];
+    const stats = this._statsLines(bot);
+    if (stats.length) out.push('', '===== STATS SERVER =====', ...stats);
+    out.push('', `===== LOG (${recs.length} mục) =====`);
+    if (dropped) out.push(`… đã bỏ qua ${dropped} dòng (log tới quá nhanh — lọc bớt bằng "telegram logs level" hoặc tăng "telegram logs every")`);
+    for (const r of recs) out.push(this._line(r, fmt));
+    return out.join('\n') + '\n';
+  }
+  // -> [{ name, text, caption, recs }]  mỗi bot 1 file log_<bot>.txt (theo thứ tự xuất hiện đầu tiên).
+  // Số dòng bị bỏ do tràn bộ đệm (nếu có) ghi vào file đầu tiên.
   _chunk(recs, dropped = 0) {
     const fmt = this._timeFmt();
+    const by = new Map();
+    for (const r of recs) { if (!by.has(r.bot)) by.set(r.bot, []); by.get(r.bot).push(r); }
     const out = [];
-    let cur = [], size = 0;
-    const close = () => { if (cur.length) { out.push({ text: cur.map(x => x.s).join('\n'), recs: cur.map(x => x.r).filter(Boolean) }); cur = []; size = 0; } };
-    const items = recs.map(r => ({ r, s: this._line(r, fmt) }));
-    if (dropped) items.unshift({ r: null, s: `<i>… đã bỏ qua ${dropped} dòng (log tới quá nhanh — lọc bớt bằng "telegram logs level" hoặc tăng "telegram logs every")</i>` });
-    for (const it of items) {
-      if (cur.length && size + it.s.length + 1 > CHUNK_LIMIT) close();
-      cur.push(it); size += it.s.length + 1;
+    for (const [bot, list] of by) {
+      const lines = list.reduce((t, r) => t + r.n, 0);
+      const errs = list.filter(r => r.level === 'err').length, warns = list.filter(r => r.level === 'warn').length;
+      let time = '';
+      try { time = fmt.format(new Date(list[list.length - 1].t)); } catch { }
+      let caption = `📜 <b>${escapeHtml(bot)}</b> · ${lines} dòng · ${time}`;
+      if (errs) caption += ` · ❌ ${errs}`;
+      if (warns) caption += ` · ⚠️ ${warns}`;
+      out.push({ name: this._fileName(bot), text: this._fileText(bot, list, out.length ? 0 : dropped, fmt), caption, recs: list });
     }
-    close();
+    if (!out.length && dropped) out.push({ name: this._fileName(SYSTEM), text: `… đã bỏ qua ${dropped} dòng\n`, caption: '📜 log', recs: [] });
     return out;
   }
 }

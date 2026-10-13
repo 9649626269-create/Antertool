@@ -26,22 +26,31 @@ function startMock() {
   const calls = [];
   let nextId = 500;
   const server = http.createServer((req, res) => {
-    let raw = '';
-    req.on('data', c => raw += c);
+    const bufs = [];
+    req.on('data', c => bufs.push(c));
     req.on('end', () => {
+      const raw = Buffer.concat(bufs).toString('utf8');
       const method = req.url.split('/').pop();
-      const body = raw ? JSON.parse(raw) : {};
+      let body = {};
+      const ct = req.headers['content-type'] || '';
+      if (ct.startsWith('multipart/form-data')) { // sendDocument: dựng lại { chat_id, caption, ..., filename, text }
+        for (const part of raw.split('--' + ct.split('boundary=')[1])) {
+          const mm = /Content-Disposition: form-data; name="(\w+)"(?:; filename="([^"]*)")?\r\n(?:Content-Type: [^\r]*\r\n)?\r\n([\s\S]*?)\r\n$/.exec(part);
+          if (!mm) continue;
+          if (mm[2] !== undefined) { body.filename = mm[2]; body.text = mm[3]; } else body[mm[1]] = mm[3];
+        }
+        if (body.disable_notification === 'true') body.disable_notification = true;
+      } else if (raw) body = JSON.parse(raw);
       calls.push({ method, body });
       const out = (o) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(o)); };
-      if (method === 'sendMessage') return out({ ok: true, result: { message_id: nextId++ } });
+      if (method === 'sendMessage' || method === 'sendDocument') return out({ ok: true, result: { message_id: nextId++ } });
       if (method === 'getUpdates') return out({ ok: true, result: [] });
       out({ ok: true, result: true });
     });
   });
   return new Promise(r => server.listen(0, '127.0.0.1', () => r({ server, calls, base: `http://127.0.0.1:${server.address().port}` })));
 }
-const sent = (mock) => mock.calls.filter(c => c.method === 'sendMessage');
-const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}>`, 'g')) || []).length === (t.match(new RegExp(`</${k}>`, 'g')) || []).length);
+const sent = (mock) => mock.calls.filter(c => c.method === 'sendDocument'); // log gửi dạng FILE .txt (body.filename, body.text = nội dung file)
 
 (async () => {
   const mock = await startMock();
@@ -85,16 +94,22 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   assert.strictEqual(L.buffered, 3);
   assert.strictEqual(sent(mock).length, 0, 'chưa tới nhịp gom thì chưa gửi');
   await sleep(450); // tới nhịp gom
-  assert.strictEqual(sent(mock).length, 1, '3 dòng -> đúng 1 tin');
+  assert.strictEqual(sent(mock).length, 2, '3 dòng của 2 bot -> 2 file (mỗi bot 1 file)');
+  assert.strictEqual(mock.calls.filter(c => c.method === 'sendMessage').length, 0, 'không gửi dạng tin văn bản nữa');
   let m = sent(mock)[0].body;
-  assert.strictEqual(m.parse_mode, 'HTML');
+  assert.strictEqual(m.filename, 'log_bot-1.txt');
   assert.strictEqual(m.disable_notification, true, 'tin log im lặng (không rung)');
   assert.strictEqual(m.chat_id, '555');
-  assert.ok(m.text.includes('<code>07:00:05</code> <b>bot-1</b> ✅ Đã đăng nhập'), m.text);
-  assert.ok(m.text.includes('<b>bot-2</b> ⚠️ Mất kết nối') && m.text.includes('<code>07:00:07</code> <b>bot-1</b> ⚙️ Click slot 24'));
-  assert.ok(m.text.indexOf('Đã đăng nhập') < m.text.indexOf('Mất kết nối') && m.text.indexOf('Mất kết nối') < m.text.indexOf('Click slot'), 'đúng thứ tự thời gian');
+  assert.ok(m.caption.includes('bot-1') && m.caption.includes('2 dòng'), m.caption);
+  assert.ok(m.text.includes('07:00:05 [OK    ] Đã đăng nhập'), m.text);
+  assert.ok(m.text.includes('07:00:07 [SYS   ] Click slot 24') && !m.text.includes('Mất kết nối'), 'file bot-1 chỉ có log của bot-1');
+  assert.ok(m.text.indexOf('Đã đăng nhập') < m.text.indexOf('Click slot'), 'đúng thứ tự thời gian');
+  assert.ok(!m.text.includes('STATS SERVER'), 'không có nguồn stats thì không có phần stats');
+  m = sent(mock)[1].body;
+  assert.strictEqual(m.filename, 'log_bot-2.txt');
+  assert.ok(m.text.includes('07:00:06 [WARN  ] Mất kết nối') && m.caption.includes('⚠️ 1'), m.text);
   assert.strictEqual(L.buffered, 0);
-  assert.strictEqual(L.status().messages, 1);
+  assert.strictEqual(L.status().messages, 2);
   assert.strictEqual(L.status().lines, 3);
   // tin im lặng có thể tắt
   mock.calls.length = 0;
@@ -155,11 +170,10 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   L.push('bot-1', { level: 'sys', msg: 'bảng:\nhàng 1\nhàng 2' });
   await L.flush();
   m = sent(mock)[0].body.text;
-  assert.ok(m.includes('lặp <i>(×3)</i>'), m);
+  assert.ok(m.includes('lặp (×3)'), m);
   assert.strictEqual((m.match(/\(×/g) || []).length, 1);
-  assert.ok(m.includes('a &lt;b&gt;&amp;&lt;/b&gt; đỏ ansi'), 'escape HTML, bỏ §c và mã ANSI: ' + m);
-  assert.ok(m.includes('bảng:\n   ↳ hàng 1\n   ↳ hàng 2'), 'log nhiều dòng thụt vào');
-  assert.ok(balanced(m));
+  assert.ok(m.includes('a <b>&</b> đỏ ansi'), 'file văn bản thuần (không escape HTML), bỏ §c và mã ANSI: ' + m);
+  assert.ok(m.includes('bảng:\n           ↳ hàng 1\n           ↳ hàng 2'), 'log nhiều dòng thụt vào');
   // mục quá dài bị cắt, nhiều dòng quá bị cắt
   mock.calls.length = 0;
   L.push('bot-1', { level: 'err', msg: 'x'.repeat(5000) });
@@ -182,7 +196,7 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   L.push('bot-1', { level: 'err', msg: 'Lỗi gửi /dn: boom — /home treolong' });
   await L.flush();
   m = sent(mock)[0].body.text;
-  assert.ok(m.includes('&lt;telegram-token&gt;') && !m.includes('AAHxxx'), m);
+  assert.ok(m.includes('<telegram-token>') && !m.includes('AAHxxx'), m);
   assert.ok(m.includes('webhooks/123456789012345678/***') && !m.includes('abcDEF'));
   assert.ok(m.includes('/dn ***') && m.includes('/dk ***') && !m.includes('hunter2pass') && !m.includes('pw1'));
   assert.ok(m.includes('socks5://user:***@1.2.3.4:1080') && !m.includes('p4ss'));
@@ -198,11 +212,11 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   L = mk({}, { tz: () => 'UTC' });
   L.push('bot-1', { level: 'ok', msg: 'giờ', time: T0 });
   await L.flush();
-  assert.ok(sent(mock)[0].body.text.includes('<code>00:00:05</code>'), 'theo múi giờ cấu hình');
+  assert.ok(sent(mock)[0].body.text.includes('00:00:05 [OK'), 'theo múi giờ cấu hình');
   L = mk({}, { tz: () => 'Not/AZone' });
   L.push('bot-1', { level: 'ok', msg: 'giờ', time: T0 });
   await L.flush();
-  assert.ok(/<code>\d\d:\d\d:\d\d<\/code>/.test(sent(mock).at(-1).body.text), 'múi giờ sai không làm hỏng việc gửi');
+  assert.ok(/\d\d:\d\d:\d\d \[OK/.test(sent(mock).at(-1).body.text), 'múi giờ sai không làm hỏng việc gửi');
 
   // ---------- 8) tràn bộ đệm + chia tin ----------
   mock.calls.length = 0;
@@ -212,10 +226,10 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   assert.strictEqual(L.status().dropped, 50);
   await L.flush();
   const msgs = sent(mock);
-  assert.ok(msgs.length >= 5, 'nhiều dòng -> chia nhiều tin: ' + msgs.length);
-  assert.ok(msgs.every(x => x.body.text.length < 4000 && balanced(x.body.text)), 'mỗi tin < 4000 ký tự, thẻ HTML đóng đủ');
+  assert.strictEqual(msgs.length, 1, 'nhiều dòng của 1 bot vẫn là 1 file (không còn chia tin 4096 ký tự)');
+  assert.ok(msgs[0].body.text.length > 30000, 'file chứa đủ 400 dòng: ' + msgs[0].body.text.length);
   assert.ok(msgs[0].body.text.includes('đã bỏ qua 50 dòng'), 'báo số dòng bị bỏ');
-  const all = msgs.map(x => x.body.text).join('\n');
+  const all = msgs[0].body.text;
   assert.ok(all.includes('dòng số 449') && all.includes('dòng số 50 ') && !all.includes('dòng số 49 '), 'bỏ dòng CŨ nhất, giữ dòng mới');
   assert.strictEqual(L.buffered, 0);
 
@@ -235,7 +249,7 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   // nhiều tin trong 1 lần gửi cũng không vượt giới hạn: phần còn lại xếp lại
   mock.calls.length = 0;
   L = mk({ maxPerMin: 2 });
-  for (let i = 0; i < 300; i++) L.push('bot-1', { level: 'sys', msg: `n${i} ` + 'z'.repeat(60) });
+  for (const id of ['bot-a', 'bot-b', 'bot-c']) L.push(id, { level: 'sys', msg: `log của ${id}` }); // 3 bot = 3 file trong 1 lần gửi
   await L.flush();
   assert.strictEqual(sent(mock).length, 2);
   assert.ok(L.buffered > 0, 'phần chưa gửi được giữ lại');
@@ -308,7 +322,8 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   mock.calls.length = 0;
   r = await L.sendRecent({ n: 100 });
   assert.strictEqual(r.count, 9 - 1, 'không chỉ mức err: mọi mức trừ chat');
-  assert.ok(sent(mock)[0].body.text.includes('sys-line') && sent(mock)[0].body.text.includes('b2-x'));
+  assert.deepStrictEqual(sent(mock).map(x => x.body.filename), ['log_bot-1.txt', 'log_bot-2.txt', 'log_system.txt'], 'mỗi bot 1 file, log hệ thống = log_system.txt');
+  assert.ok(sent(mock)[2].body.text.includes('sys-line') && sent(mock)[1].body.text.includes('b2-x'));
   r = await L.sendRecent({ bot: 'system', n: 5 });
   assert.strictEqual(r.count, 1);
   r = await L.sendRecent({ bot: 'khong-co' });
@@ -342,6 +357,8 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   const bot = new EventEmitter();
   bot.cfg = { id: 'bot-1', botPassword: 'SuperSecret1' };
   bot.shutdown = () => { };
+  bot.state = { connState: 'online', ping: 23, money: 0, shard: 0 };
+  bot.readBoard = () => ({ title: 'kingmcxxx', lines: [{ text: 'MONEY 832.5M', score: 5 }, { text: 'SHARD 1045', score: 4 }, { text: 'KILLS 67', score: 3 }] });
   mgr.bots.push(bot);
   mgr._wireBotLog(bot);
   const emitLog = (level, msg) => { const entry = { id: 'bot-1', time: Date.now(), level, msg }; bot.emit('log', { level, id: 'bot-1', msg, theme: null, entry }); };
@@ -352,7 +369,22 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   assert.strictEqual(seen[0][0], 'bot-1');
   assert.strictEqual(mgr.telegramLogs.buffered, 1, 'Telegram nhận log (chat bị lọc)');
   await mgr.telegramLogs.flush();
-  assert.ok(sent(mock)[0].body.text.includes('<b>bot-1</b> ⚠️ Mất kết nối (***)'), 'mật khẩu của bot bị che: ' + sent(mock)[0].body.text);
+  m = sent(mock)[0].body;
+  assert.strictEqual(m.filename, 'log_bot-1.txt');
+  assert.ok(m.text.includes('[WARN  ] Mất kết nối (***)'), 'mật khẩu của bot bị che: ' + m.text);
+  assert.ok(m.text.includes('===== STATS SERVER =====') && m.text.includes('Scoreboard: kingmcxxx') && m.text.includes('MONEY 832.5M') && m.text.includes('SHARD 1045') && m.text.includes('KILLS 67'), 'stats server ở đầu file: ' + m.text);
+  assert.ok(m.text.indexOf('STATS SERVER') < m.text.indexOf('===== LOG'), 'stats nằm trước phần log');
+  assert.ok(m.text.includes('Trạng thái: online · ping 23ms'));
+  // bot chưa có bảng điểm -> dùng money/shard đã đọc
+  bot.readBoard = () => null; bot.state.money = 1500000; bot.state.shard = 12;
+  assert.deepStrictEqual(mgr._serverStats('bot-1'), ['Trạng thái: online · ping 23ms', 'Money: 1,500,000', 'Shard: 12']);
+  assert.strictEqual(mgr._serverStats('ghost'), null);
+  bot.readBoard = () => { throw new Error('boom'); }; // đọc stats lỗi không được làm hỏng việc gửi log
+  mgr.telegramLogs.push('bot-1', { level: 'ok', msg: 'vẫn gửi' });
+  mock.calls.length = 0;
+  await mgr.telegramLogs.flush();
+  assert.ok(sent(mock)[0].body.text.includes('vẫn gửi') && !sent(mock)[0].body.text.includes('STATS SERVER'));
+  bot.readBoard = () => ({ title: 'kingmcxxx', lines: [{ text: 'MONEY 832.5M', score: 5 }] });
   // không có onBotLog (Render/Docker, không console tương tác) thì log vẫn lên Telegram
   const mgr2 = new BotManager({ configPath: cfgPath });
   await mgr2.init();
@@ -367,7 +399,8 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   assert.strictEqual(mgr.telegramLogs.buffered, 1);
   mock.calls.length = 0;
   await mgr.flushTelegramLogs(2000);
-  assert.ok(sent(mock)[0].body.text.includes('<b>system</b> ❌ [UNCAUGHT] boom'));
+  assert.strictEqual(sent(mock)[0].body.filename, 'log_system.txt');
+  assert.ok(sent(mock)[0].body.text.includes('[ERR   ] [UNCAUGHT] boom') && !sent(mock)[0].body.text.includes('STATS SERVER'));
 
   // CLI "telegram logs ..."
   const cli = async (...a) => (await mgr.telegramLogsCommand(a)).map(([k, t]) => `${k}:${t.trim()}`);
@@ -433,7 +466,7 @@ const balanced = (t) => ['code', 'b', 'i'].every(k => (t.match(new RegExp(`<${k}
   mock.calls.length = 0;
   await mgr._onTelegramEvent({ type: 'command', cmd: 'logs', arg: 'bot-1 2', reply });
   assert.strictEqual(sent(mock).length, 1);
-  assert.ok(sent(mock)[0].body.text.includes('<b>bot-1</b>'));
+  assert.strictEqual(sent(mock)[0].body.filename, 'log_bot-1.txt');
   await mgr._onTelegramEvent({ type: 'command', cmd: 'logs', arg: 'ghost', reply });
   assert.ok(replies.at(-1).includes('Chưa có log nào của "ghost"'));
   await mgr._onTelegramEvent({ type: 'command', cmd: 'logs', arg: 'off', reply });

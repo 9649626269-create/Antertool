@@ -68,7 +68,8 @@ class TelegramNotifier {
   static looksLikeToken(t) { return /^\d{6,12}:[\w-]{30,}$/.test(String(t || '').trim()); }
 
   // Gọi 1 method của Bot API. Trả về { ok, result, description, error_code } — không bao giờ throw.
-  _call(method, payload = {}, timeoutMs = 10000) {
+  // raw = { body: Buffer, type: 'multipart/form-data; boundary=...' } thay cho JSON (dùng cho sendDocument)
+  _call(method, payload = {}, timeoutMs = 10000, raw = null) {
     if (!this.token) return Promise.resolve({ ok: false, description: 'chưa có token' });
     return new Promise((resolve) => {
       let done = false;
@@ -76,10 +77,10 @@ class TelegramNotifier {
       try {
         const u = new URL(`${this.apiBase}/bot${this.token}/${method}`);
         const lib = u.protocol === 'http:' ? http : https;
-        const data = JSON.stringify(payload);
+        const data = raw ? raw.body : JSON.stringify(payload);
         const req = lib.request(u, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+          headers: { 'Content-Type': raw ? raw.type : 'application/json', 'Content-Length': Buffer.byteLength(data) },
           timeout: timeoutMs,
         }, (res) => {
           const chunks = [];
@@ -129,6 +130,33 @@ class TelegramNotifier {
       this.lastError = r.ok ? null : (r.description || 'lỗi');
       return r.ok ? r.result.message_id : null;
     });
+  }
+  // Gửi 1 file văn bản (vd log_bot-1.txt). Trả về message_id (hoặc null nếu lỗi). opts: { caption (HTML, ≤1000 ký tự), silent }
+  sendDocument(filename, content, opts = {}) {
+    if (!this.enabled) return Promise.resolve(null);
+    return this._enqueue(async () => {
+      const wait = Math.min(30000, this._pauseUntil - Date.now()); // đang bị giới hạn tốc độ -> chờ rồi gửi
+      if (wait > 0) await new Promise(res => setTimeout(res, wait));
+      const fields = { chat_id: this.chatId };
+      if (opts.caption) { fields.caption = String(opts.caption).substring(0, 1000); fields.parse_mode = 'HTML'; }
+      if (opts.silent) fields.disable_notification = 'true';
+      const r = await this._call('sendDocument', null, 30000, TelegramNotifier.multipart(fields, 'document', filename, content));
+      this.lastError = r.ok ? null : (r.description || 'lỗi');
+      return r.ok ? r.result.message_id : null;
+    });
+  }
+  // Dựng body multipart/form-data: các trường chữ + 1 file văn bản UTF-8
+  static multipart(fields, fileField, filename, content) {
+    const boundary = '----antertool' + Math.random().toString(16).slice(2) + Date.now().toString(16);
+    const parts = [];
+    for (const [k, v] of Object.entries(fields)) {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`, 'utf8'));
+    }
+    const safe = String(filename).replace(/[^\w.-]/g, '_');
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${safe}"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n`, 'utf8'));
+    parts.push(Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'));
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'));
+    return { body: Buffer.concat(parts), type: `multipart/form-data; boundary=${boundary}` };
   }
   // Sửa tin đã gửi (bảng cập nhật tại chỗ, không ting ting). Tin bị xoá/không sửa được -> gửi tin mới.
   // Trả về message_id đang dùng (có thể khác messageId cũ).

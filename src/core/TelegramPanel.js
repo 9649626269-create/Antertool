@@ -133,7 +133,7 @@ const HELP_TEXT = [
   '🤖 <b>Antertool</b> — lệnh Telegram',
   '/status — trạng thái + thu nhập cả dàn bot',
   '/panel — gửi lại bảng Auto sell spawner (mỗi bot 1 bảng)',
-  '/logs [id bot] [số dòng] — xem lại log runtime gần nhất (vd /logs bot-1 50)',
+  '/logs [id bot] [số dòng] — gửi file log runtime gần nhất (vd /logs bot-1 50)',
   '/logs on|off|status — bật/tắt/xem việc tự gửi log runtime',
   '/help — xem lại danh sách này',
   '',

@@ -18,7 +18,7 @@ A premium Minecraft bot management dashboard with CLI support. Proxy auto-detect
 - **Order GUI Reader** — Reads the "/order" GUI (paginated order book) into a table: price, quantity, buyer, time
 - **Discord Webhook** — Notifications for disconnects, reconnect status, Money Goal hits, and Spawner Protect alerts
 - **Telegram** — live Auto-sell Spawn income panel (edited in place), alerts with push notification, `/status` & `/panel` commands
-- **Runtime logs → Telegram** — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô gửi im lặng, lọc theo mức/bot, `/logs` xem lại, tự che mật khẩu/token
+- **Runtime logs → Telegram** — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô rồi gửi **file `log_<bot>.txt`** (đầu file có stats server: money, shard, kills...) im lặng, lọc theo mức/bot, `/logs` xem lại, tự che mật khẩu/token
 - **Proxy Auto-Rotate** — Randomized 1-10 min proxy rotation per bot, plus bulk import from a .txt file
 - **Scheduled Out/In** — Daily fleet-wide rest window (e.g., off at 23:00, back on at 06:00)
 - **Auto-Sell** — Fires a user-defined macro once inventory crosses a fullness threshold
@@ -468,7 +468,7 @@ Mẫu tin (mỗi tin gộp nhiều dòng, giờ theo `timezone`):
 ```
 
 Cách gửi (để không spam, không làm chậm bot):
-- **Gom lô** mỗi 10 giây thành 1 tin (đổi: `telegram logs every 30s`, tối thiểu 2s). Có dòng lỗi (`err`) thì gửi trong ≤2s. Tin dài tự chia nhiều tin ≤ ~3.6k ký tự.
+- **Gom lô** mỗi 10 giây rồi gửi **file văn bản** (đổi: `telegram logs every 30s`, tối thiểu 2s). Mỗi bot 1 file `log_<tên bot>.txt` (log hệ thống: `log_system.txt`); đầu file có phần `STATS SERVER` lấy từ scoreboard của server (tên bảng, MONEY, SHARD, KILLS, DEATHS...; chưa có bảng thì ghi Money/Shard đã đọc) rồi tới phần `LOG` theo giờ. Có dòng lỗi (`err`) thì gửi trong ≤2s. Tin kèm chú thích ngắn: số dòng, số lỗi/cảnh báo.
 - **Tin im lặng** — không rung/không kêu điện thoại (`telegram logs silent off` để có thông báo). Cảnh báo kick/hết reconnect/bán lỗi vẫn là tin riêng có thông báo đẩy như cũ.
 - **Gộp dòng lặp:** cùng 1 bot lặp y hệt dòng liền trước → `(×N)`.
 - **Chống dội:** tối đa 10 tin/phút (`telegramLogMaxPerMin`); Telegram trả 429 hoặc hàng đợi bận thì **giữ log lại gửi sau** (bộ đệm 400 dòng; tràn thì bỏ dòng cũ nhất và ghi "đã bỏ qua N dòng"). Gửi lỗi (mạng) thì thử lại tối đa 3 lần/dòng rồi bỏ — không bao giờ chặn hay làm chết bot.
@@ -486,7 +486,7 @@ telegram logs bots bot-1,bot-2      # chỉ log của các bot này (log hệ th
 telegram logs every 30s             # khoảng gom log
 telegram logs silent on|off         # on = không rung (mặc định)
 telegram logs send [id] [n]         # gửi NGAY n dòng gần nhất (mặc định 25, tối đa 150)
-telegram logs test                  # gửi 1 dòng thử qua đúng đường gửi thật
+telegram logs test                  # gửi 1 file log thử qua đúng đường gửi thật
 ```
 Trong Telegram: `/logs` (25 dòng gần nhất, cả dàn) · `/logs bot-1 50` · `/logs system` · `/logs off` · `/logs on` · `/logs status`. Lệnh `/logs` xem lại **mọi mức** (trừ chat) từ 500 dòng gần nhất, không phụ thuộc bộ lọc tự động.
 
