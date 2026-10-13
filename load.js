@@ -13,7 +13,7 @@
  *   load.js                 bộ nạp này
  *   config.json             mật khẩu, bot, macro, proxy  } dữ liệu của bạn — update KHÔNG BAO GIỜ đụng tới
  *                           (chưa có thì load.js tạo file trống)
- *   revenue.json, autosell.json, proxies.txt, auth_cache/, logs/, backups/ }
+ *   revenue.json, proxies.txt, auth_cache/, logs/, backups/ }
  *   .anter/                 code + node_modules tải từ GitHub (xoá đi cũng được, lần sau tự tải lại)
  *
  * Cấu hình repo (ưu tiên từ trên xuống): biến môi trường GH_OWNER / GH_REPO / GH_BRANCH / GITHUB_TOKEN

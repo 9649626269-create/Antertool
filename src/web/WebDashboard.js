@@ -553,11 +553,9 @@ class WebDashboard {
         if (cb) cb({ ok: true });
       });
       // ===== Auto-sell (đầy túi đồ) =====
-      sock.on('setAutoSell', ({ id, threshold, macro, items }, cb) => {
+      sock.on('setAutoSell', ({ id, threshold, macro }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
-        if (items) { const r = b.setAutoSellItems(threshold, items); if (cb) cb(r); return; } // auto-sell tích hợp (src/core/autosell.js): bán qua /sell theo danh sách item
-        if (b.autoSellEnabled) { b.autoSellEnabled = false; b._persistAutoSellItems(); } // tắt / chuyển sang macro -> tắt kiểu tích hợp
         if (!macro) {
           b.autoSellMacro = null; b._autoSellFired = false;
         } else {

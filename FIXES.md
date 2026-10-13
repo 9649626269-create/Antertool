@@ -1,20 +1,23 @@
-# Bản cập nhật (fixed18) — Auto-sell tích hợp: không cần macro, logic ở file riêng `src/core/autosell.js`
+# Bản thêm (fixed18) — module log runtime gửi lên Telegram
 
-**Lỗi bạn gặp:** `autosell 50 cobblestone` / `autosell 50 autosell` báo `macro "..." không tồn tại` và `listmacro` báo `Chưa có macro nào trong config.json`. Không phải bug code: `autosell` cũ chỉ là cò súng "túi đầy → chạy 1 macro do bạn tự viết", mà `config.json` của bạn chưa có macro nào. (Lệnh `listmacro` / `autosell` gõ thẳng ở dấu `⬡` cũng không phải lệnh chung — phải có `cmd <id> ...`.)
+**Yêu cầu:** thêm module runtime logs gửi lên Telegram.
 
-**Sửa theo yêu cầu (không dùng `config.json`, không cần macro — logic nằm ở file riêng, bán theo cách tool HEXTEKO):**
-- Mới `src/core/autosell.js`: túi đầy tới % → gõ `/sell` → shift-click các stack có tên **đúng** trong danh sách item sang GUI → click ô xác nhận 1, chờ 0.5s, click ô xác nhận 2 → lặp nếu còn đồ (tối đa 20 lượt) → đóng GUI.
-- Lệnh: `cmd <id> autosell <%đầy> <item,item...>` (vd `autosell 50 cobblestone`), `autosell on|off`, `autosell` (xem). Kiểu macro cũ vẫn còn: `autosell <%> macro <tên>`. Web: ô "Item bán" ở card Auto-sell.
-- Cài đặt từng bot lưu ở **`autosell.json`** cạnh `config.json` (như `revenue.json`; update không đụng; đã thêm vào `.gitignore`). Có thể sửa tay `command` (mặc định `/sell`) và `clicks` (mặc định `[-1, -9]` = ô cuối GUI rồi ô đầu hàng cuối; số âm đếm ngược từ cuối).
-- Báo cáo doanh thu, webhook, cổng vị trí (chỉ bán sau khi bot đứng đúng chỗ treo) dùng lại nguyên cơ chế cũ.
+**Đã thêm:**
+- `src/core/TelegramLogger.js` (mới): nhận mọi log của bot (`BotSession.log` → `BotManager._wireBotLog`) và log hệ thống của tool (`manager.runtimeLog`), gom lô rồi gửi qua `TelegramNotifier` có sẵn (dùng chung hàng đợi + cơ chế nghỉ khi 429 với bảng/cảnh báo). Mặc định **bật** khi Telegram đã cấu hình: mọi mức trừ chat người chơi, gom 10s/tin, tin im lặng (không rung), tối đa 10 tin/phút.
+- Chống spam/mất log: dòng y hệt liền trước của cùng bot gộp `(×N)`; Telegram đang 429/hàng đợi bận/quá nhịp thì **giữ log gửi sau**; bộ đệm 400 dòng (tràn thì bỏ dòng cũ + báo số dòng bỏ); gửi lỗi mạng thì xếp lại, thử tối đa 3 lần/dòng; dòng `err` gửi trong ≤2s; tin dài tự chia ≤ ~3.6k ký tự (thẻ HTML luôn đóng đủ).
+- Che thông tin nhạy cảm trước khi gửi: token Telegram, webhook Discord, mật khẩu sau `/dn` `/dk` `/login`..., `user:pass@` của proxy, mật khẩu bot đang cấu hình (≥6 ký tự, chỉ khi đứng riêng).
+- `main.js`: log khởi động / "đang tắt" và `[UNCAUGHT]` / `[UNHANDLED]` / `[FATAL]` đi cùng đường; khi tắt tool (`exit`, SIGINT/SIGTERM, `update`) **đẩy nốt log** (chờ tối đa 3s) rồi mới thoát.
+- Lệnh CLI `telegram logs [on|off|level|chat|bots|every|silent|send|test]` (lưu vào `config.json`: `telegramLogs`, `telegramLogLevels`, `telegramLogBots`, `telegramLogEverySec`, `telegramLogSilent`, `telegramLogMaxPerMin`); lệnh Telegram `/logs [id] [n]`, `/logs on|off|status` (xem lại từ 500 dòng gần nhất, mọi mức trừ chat). Cập nhật `help notify`, `/help`, README.
+- Sửa nhỏ: `BotManager._wireBotLog` trước đây chỉ nối log khi có `onBotLog` (console tương tác) — nay luôn nối, nên chạy Render/Docker không có CLI vẫn có log lên Telegram.
+- Test mới `test/telegram-logs.test.js` (có trong `npm test`, Telegram giả trên localhost): gom lô/thứ tự/giờ, lọc mức/bot, gộp lặp, escape HTML + mã màu/ANSI, che bí mật, tràn bộ đệm + chia tin, giới hạn nhịp, 429/bận, gửi lỗi, flush lúc tắt (có timeout), `/logs`, CLI, đọc config, tích hợp BotManager. Toàn bộ 15 bộ test cũ vẫn qua.
+- Đã chạy `main.js` thật (thư viện ngoài thay bằng bản giả vì môi trường không cài được npm; Telegram giả) trong terminal ảo: CLI `telegram logs ...`, log thật của `BotSession` lên Telegram, gộp `(×3)`, đẩy nốt log khi `exit`/SIGTERM, `[UNCAUGHT]`/`[UNHANDLED]` — đều đúng, tiến trình thoát bình thường (mã 0) như bản gốc.
 
-**Khác với tool tham khảo (cố ý):** khớp tên item **chính xác** thay vì khớp hậu tố (ghi `sword` sẽ không bán `diamond_sword`); bán theo ngưỡng % túi đồ đầy như `autosell` cũ chứ không giữ GUI mở liên tục; không có chế độ hẹn giờ; tên item gõ sai (vd `cobbstone`) bị từ chối khi bot đang online.
-
-**An toàn / va chạm:** không chạy khi `spawnerprotect`, `autosell_spawn` hoặc macro đang điều khiển GUI (chờ, thử lại sau 10s); bảo vệ lồng chen vào giữa chừng thì dừng và KHÔNG đóng GUI của nó; `autosell_spawn` bỏ vòng nếu đang bán `/sell`. Bán lỗi thử lại sau 30s, tối đa 5 lần liên tiếp. Túi không có item nào trong danh sách thì không gõ `/sell`.
-
-**Test:** `test/autosell.test.js` (có trong `npm test`): hàm thuần, `autosell.json`, bán với GUI giả (chỉ đúng item, đúng thứ tự click, nhiều lượt khi shop nhỏ, shop đầy, GUI không mở, bị bảo vệ lồng ngắt), trigger/hysteresis/retry, các lệnh CLI, và `BotManager` nạp `autosell.json`. Các test cũ vẫn qua. `protocol-guard.test.js` đôi khi fail ngẫu nhiên (~1/6 lần) — bản fixed17 gốc cũng vậy, không liên quan thay đổi này.
-
-**Chưa test trên server KingMC thật:** lệnh `/sell`, vị trí 2 ô xác nhận và việc shift-click có chuyển được đồ vào GUI đều lấy theo tool tham khảo; nếu server bạn khác, sửa `command` / `clicks` trong `autosell.json`.
+**Lưu ý / chưa làm:**
+- **Chưa test với Telegram thật và chưa test với bot kết nối server thật** (không có mạng ra ngoài). Lần đầu: `telegram logs test` → `telegram logs send`.
+- Mặc định gửi **cả log `sys`** (nhiều dòng thủ tục). Thấy nhiều quá: `telegram logs level info` (hoặc `warn`). Muốn thêm chat người chơi: `telegram logs chat on` (rất nhiều tin).
+- Cập nhật tự động qua `load.js` sẽ bật tính năng này ngay nếu bạn đã cấu hình Telegram từ trước; tắt: `telegram logs off`.
+- Không bắt: thông báo in thẳng ra console không qua hệ thống log (vd `[Persistence] Save error`, thông báo của thư viện, mã đăng nhập Microsoft).
+- Không đổi mức log của bất kỳ dòng log nào trong code (chỉ lọc theo mức đang có: sys/ok/warn/err/afk/shard/proxy/health/chat).
 
 ---
 

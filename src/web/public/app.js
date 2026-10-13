@@ -799,8 +799,7 @@ function renderAutomation(b) {
     </div>
     <div class="automation-card"><div class="cfg-section-title">Auto-sell khi đầy túi đồ</div>
       <div class="cfg-row"><span class="cfg-label">% đầy để bán</span><input class="cfg-input" id="as-pct" type="number" min="1" max="100" value="90"></div>
-      <div class="cfg-row"><span class="cfg-label">Item bán (qua /sell)</span><input class="cfg-input" id="as-items" placeholder="vd: cobblestone,stone"></div>
-      <div class="cfg-row"><span class="cfg-label">hoặc Macro bán</span><input class="cfg-input" id="as-macro" placeholder="tên macro (nếu không dùng item)"></div>
+      <div class="cfg-row"><span class="cfg-label">Macro bán</span><input class="cfg-input" id="as-macro" placeholder="tên macro"></div>
       <div class="cfg-row"><button class="btn btn-primary btn-sm" onclick="saveAutoSell()">Lưu</button><button class="btn btn-sm" onclick="clearAutoSell()">Tắt</button></div>
     </div>
     <div class="automation-card"><div class="cfg-section-title">Auto-sell Spawn</div>
@@ -901,10 +900,10 @@ function clearMoneyGoal() {
 }
 function saveAutoSell() {
   if(!ST.activeId)return;
-  const threshold=$('as-pct')?.value, macro=$('as-macro')?.value?.trim(), items=$('as-items')?.value?.trim();
-  if(!items && !macro){ toast('Cần nhập item bán (vd cobblestone) hoặc tên macro','error'); return; }
-  SOCK.emit('setAutoSell',{id:ST.activeId,threshold,...(items?{items}:{macro})},r=>{
-    toast(r?.ok?'Đã lưu Auto-sell':(r?.message||'Lỗi lưu Auto-sell'), r?.ok?'success':'error');
+  const threshold=$('as-pct')?.value, macro=$('as-macro')?.value?.trim();
+  if(!macro){ toast('Cần nhập tên macro bán','error'); return; }
+  SOCK.emit('setAutoSell',{id:ST.activeId,threshold,macro},r=>{
+    toast(r?.ok?'Đã lưu Auto-sell':'Lỗi lưu Auto-sell', r?.ok?'success':'error');
   });
 }
 function clearAutoSell() {

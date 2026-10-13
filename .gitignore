@@ -3,7 +3,6 @@ config.json
 config.json.bak
 config.json.tmp
 revenue.json
-autosell.json
 proxies.txt
 .env
 backups/

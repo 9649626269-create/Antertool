@@ -14,7 +14,6 @@ const SharedPool = require('./SharedPool');
 const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const MacroEngine = require('./MacroEngine');
-const AutoSell = require('./autosell');
 const Notifier = require('./Notifier');
 const { anglesTo, aimCheck } = require('./AimUtil');
 const SG = require('./SpawnerGuard');
@@ -103,15 +102,6 @@ class BotSession extends EventEmitter {
     this.autoSellMacro = cfg.autoSellMacro || null;
     this.autoSellThreshold = cfg.autoSellThreshold ?? 90;
     this._autoSellFired = false;
-    // Auto-sell tích hợp (src/core/autosell.js): bán qua /sell theo danh sách item, không cần macro.
-    // Cài đặt lưu ở autosell.json (BotManager nạp rồi đưa vào cfg.autosell). Ưu tiên hơn macro nếu cả hai cùng bật.
-    const as = AutoSell.sanitize(cfg.autosell);
-    this.autoSellEnabled = as.enabled;
-    this.autoSellItems = as.items;
-    this.autoSellItemsPct = as.threshold ?? 90;
-    this.autoSellCommand = as.command;
-    this.autoSellClicks = as.clicks;
-    this._autoSellBusy = false;
     // Bảo vệ Lồng Spawn — khi BẬT: tự lưu toạ độ lồng trong spawnerSaveRange (5)
     // block quanh bot; canh người lạ (spawnerProtectRange) + đập block gần lồng, đào bề mặt,
     // TNT, wither (port từ mod "Spawner Protect" của Alatic); thấy nguy hiểm -> lấy cúp (túi đồ,
@@ -397,53 +387,26 @@ class BotSession extends EventEmitter {
       this.log('err', 'Lỗi đọc inventory: ' + e.message);
     }
   }
-  // Auto-sell đang bật? Tích hợp (autosell.js, bán qua /sell theo danh sách item) hoặc kiểu cũ (chạy macro)
-  _autoSellBuiltin() { return this.autoSellEnabled && this.autoSellItems.length > 0; }
-  _autoSellOn() { return this._autoSellBuiltin() || !!this.autoSellMacro; }
-  _autoSellPct() { return this._autoSellBuiltin() ? this.autoSellItemsPct : this.autoSellThreshold; }
-  _autoSellDesc() { return this._autoSellBuiltin() ? `bán [${this.autoSellItems.join(', ')}] qua ${this.autoSellCommand}` : `macro "${this.autoSellMacro}"`; }
   // 36 = 27 ô chính + 9 ô hotbar (Window.items() của mineflayer với inventory
   // của chính bot chỉ trả về đúng vùng này, không tính giáp/offhand/crafting).
   _checkAutoSell(usedSlots) {
-    if (!this._autoSellOn()) return;
+    if (!this.autoSellMacro) return;
     if (!this._autoSellArmed) return; // chưa đăng nhập/vào menu/vào đúng vị trí xong thì chưa chạy macro bán
     const TOTAL = 36;
-    const builtin = this._autoSellBuiltin();
-    const highSlots = Math.ceil(TOTAL * this._autoSellPct() / 100);
+    const highSlots = Math.ceil(TOTAL * this.autoSellThreshold / 100);
     const lowSlots = Math.max(0, highSlots - 4);
     if (usedSlots >= highSlots && !this._autoSellFired) {
-      if (builtin && !AutoSell.canRun(this)) { this._retryAutoSellLater(10000); return; } // đang bận (bảo vệ lồng / bán lồng / macro) — chưa đánh dấu "đã bắn", thử lại sau
       this._autoSellFired = true;
       const pct = Math.round((usedSlots / TOTAL) * 100);
-      this.log('ok', `🎒 Túi đồ đầy ${pct}% (${usedSlots}/${TOTAL}) — tự ${builtin ? '' : 'chạy '}${this._autoSellDesc()}`);
-      this._notify('autoSell', `🎒 ${this.cfg.id}: túi đồ đầy`, `${usedSlots}/${TOTAL} ô (${pct}%) — tự ${builtin ? '' : 'chạy '}${this._autoSellDesc()}.`, 0x38bdf8);
-      const cap = this.autoSellRevenue ? this._beginMacroSellCapture(builtin ? 'autosell' : this.autoSellMacro) : null; // bắt đầu đo TRƯỚC khi bán
-      if (builtin) {
-        AutoSell.run(this, { items: this.autoSellItems, command: this.autoSellCommand, clicks: this.autoSellClicks })
-          .then(r => {
-            if (cap) this._onMacroSellDone(cap, r.status === 'sold');
-            if (r.status === 'sold') this._autoSellFails = 0;
-            else if (r.status === 'busy') { this._autoSellFired = false; this._retryAutoSellLater(10000); }
-            else if (r.status === 'fail') this._autoSellRetryOrGiveUp();
-          })
-          .catch(e => { this.log('err', `Auto-sell lỗi: ${e.message}`); if (cap) this._onMacroSellDone(cap, false); this._autoSellRetryOrGiveUp(); });
-        return;
-      }
+      this.log('ok', `🎒 Túi đồ đầy ${pct}% (${usedSlots}/${TOTAL}) — tự chạy macro "${this.autoSellMacro}"`);
+      this._notify('autoSell', `🎒 ${this.cfg.id}: túi đồ đầy`, `${usedSlots}/${TOTAL} ô (${pct}%) — tự chạy macro "${this.autoSellMacro}".`, 0x38bdf8);
+      const cap = this.autoSellRevenue ? this._beginMacroSellCapture(this.autoSellMacro) : null; // bắt đầu đo TRƯỚC khi macro chạy
       this.macroEngine.run(this.autoSellMacro)
         .then(ok => { if (cap) this._onMacroSellDone(cap, ok); })
         .catch(e => { this.log('err', `Auto-sell macro lỗi: ${e.message}`); if (cap) this._onMacroSellDone(cap, false); });
     } else if (usedSlots <= lowSlots) {
       this._autoSellFired = false;
-      this._autoSellFails = 0;
     }
-  }
-  _retryAutoSellLater(ms) { this._setTimer('autoSellRetry', () => this._updateInventory(), ms); }
-  // Bán lỗi (GUI không mở / shop không nhận đồ): thử lại sau 30s, tối đa 5 lần liên tiếp để không spam lệnh /sell mãi
-  _autoSellRetryOrGiveUp() {
-    this._autoSellFails = (this._autoSellFails || 0) + 1;
-    if (this._autoSellFails >= 5) { this.log('warn', 'Auto-sell: lỗi 5 lần liên tiếp — dừng tự thử lại (túi vơi bớt sẽ tự bật lại, hoặc gõ lại lệnh autosell). Kiểm tra lệnh/ô xác nhận trong autosell.json'); return; }
-    this._autoSellFired = false;
-    this._retryAutoSellLater(30000);
   }
   _cleanupOnDisconnect() {
     if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch { } }
@@ -856,7 +819,7 @@ class BotSession extends EventEmitter {
       } catch { }
     });
     mc.on('windowOpen', win => {
-      if (this._spawnerBusy || this._sellSpawnBusy || this._autoSellBusy) return; // routine bảo vệ lồng / auto-sell spawn / auto-sell /sell đang tự điều khiển GUI
+      if (this._spawnerBusy || this._sellSpawnBusy) return; // routine bảo vệ lồng / auto-sell spawn đang tự điều khiển GUI
       if (this.macroEngine?._running) {
         // Macro đang chạy (winclick) — không để WindowRouter tự động
         // click/đóng GUI đè lên, nhường toàn quyền điều khiển cho macro.
@@ -1378,32 +1341,6 @@ class BotSession extends EventEmitter {
     if (c) Object.assign(c, data);
     mgr.persistence?.markDirty();
   }
-  // Auto-sell tích hợp (src/core/autosell.js): đặt % đầy + danh sách item bán qua /sell. Lưu vào autosell.json (không đụng config.json).
-  setAutoSellItems(pct, input) {
-    const p = parseInt(pct, 10);
-    if (!(p >= 1 && p <= 100)) return { ok: false, message: 'Auto-sell: % không hợp lệ (1-100)' };
-    const { items, bad } = AutoSell.parseItems(input);
-    if (bad.length) return { ok: false, message: `Auto-sell: tên item sai dạng: ${bad.join(', ')} (chỉ chữ thường/số/gạch dưới, vd cobblestone, iron_ingot)` };
-    if (!items.length) return { ok: false, message: 'Auto-sell: chưa có item nào — vd: autosell 50 cobblestone' };
-    const known = this.mc?.registry?.itemsByName; // bot đang online thì kiểm tên có thật không (tránh gõ nhầm "cobbstone")
-    const unknown = items.filter(n => ['on', 'off', 'macro'].includes(n) || (known && !known[n]));
-    if (unknown.length) return { ok: false, message: `Auto-sell: "${unknown.join(', ')}" không phải tên item trong game — ghi đúng tên tiếng Anh, vd cobblestone, iron_ingot` };
-    this.autoSellItems = items;
-    this.autoSellItemsPct = p;
-    this.autoSellEnabled = true;
-    this.autoSellMacro = null; // tích hợp thay cho macro
-    this._autoSellFired = false;
-    this._autoSellFails = 0;
-    this._persistMacroSellCfg();
-    this._persistAutoSellItems();
-    return { ok: true, message: `Đã đặt auto-sell: ${p}% đầy → ${this._autoSellDesc()}` };
-  }
-  _persistAutoSellItems() {
-    this._manager?.autoSellStore?.save(this.cfg.id, {
-      enabled: this.autoSellEnabled, threshold: this.autoSellItemsPct, items: this.autoSellItems,
-      command: this.autoSellCommand, clicks: this.autoSellClicks,
-    });
-  }
   // ===== Auto-sell Spawn =====
   _sellSpawnIntervalMs() {
     const raw = Math.round((this.autoSellSpawnSecond || 0) * 1000 + (this.autoSellSpawnMinute || 0) * 60000 + (this.autoSellSpawnHour || 0) * 3600000);
@@ -1643,7 +1580,7 @@ class BotSession extends EventEmitter {
   async _runSellSpawnCycle() {
     const mc = this.mc;
     const none = { done: 0, total: 0, ok: false, aborted: false, skipped: true, reasons: [] };
-    if (!this.isOnline || !mc?.entity?.position || this._sellSpawnBusy || this._autoSellBusy) return none; // đang bán /sell thì bỏ vòng này, vòng sau tính tiếp
+    if (!this.isOnline || !mc?.entity?.position || this._sellSpawnBusy) return none;
     const list = this.sellSpawnList.slice();
     if (!list.length) { this.log('warn', 'Auto-sell Spawn: danh sách lồng trống'); return none; }
     this._sellSpawnBusy = true;
@@ -2608,7 +2545,7 @@ class BotSession extends EventEmitter {
     this._posNearSince = 0;
     this._posAwaySince = 0;
     this._posLastPos = null;
-    const want = [this._spawnerProtectOn && 'spawnerprotect', this._sellSpawnOn && 'autosell_spawn', this._autoSellOn() && 'autosell'].filter(Boolean);
+    const want = [this._spawnerProtectOn && 'spawnerprotect', this._sellSpawnOn && 'autosell_spawn', this.autoSellMacro && 'autosell macro'].filter(Boolean);
     this.log('sys', want.length
       ? `Cổng vị trí: sẽ bật ${want.join(' + ')} khi bot ở gần lồng spawn${this.spawnHomeEnabled ? ` (lệch vị trí → tự gõ ${this.spawnHomeCommand})` : ''}`
       : 'Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng');
@@ -2757,9 +2694,9 @@ class BotSession extends EventEmitter {
   _armAutoSell(results = null) {
     if (this._autoSellArmed) return;
     this._autoSellArmed = true;
-    if (!this._autoSellOn()) return;
-    this.log('ok', `Đã bật autosell: túi đầy ${this._autoSellPct()}% → ${this._autoSellDesc()}`);
-    if (results) results.push({ name: 'autosell macro', ok: true, detail: `túi đầy ${this._autoSellPct()}% → ${this._autoSellDesc()}` });
+    if (!this.autoSellMacro) return;
+    this.log('ok', `Đã bật autosell macro: túi đầy ${this.autoSellThreshold}% → macro "${this.autoSellMacro}"`);
+    if (results) results.push({ name: 'autosell macro', ok: true, detail: `túi đầy ${this.autoSellThreshold}% → macro "${this.autoSellMacro}"` });
     this._autoSellFired = false;
     this._setTimer('autoSellFirstCheck', () => this._updateInventory(), 1500); // túi đã đầy sẵn thì chạy luôn, khỏi chờ lần quét túi sau
   }
@@ -3312,7 +3249,7 @@ class BotSession extends EventEmitter {
       this.log('sys', `— #${args[1]} ${e.item} (slot ${e.slot}) —`);
       (e.raw.length ? e.raw : ['(không có lore)']).forEach(l => this.log('sys', `  ${l}`));
     });
-    r.register('autosell', 'Tự bán qua /sell khi đầy túi đồ: autosell <%đầy> <item,item...> | autosell on|off | autosell | autosell <%> macro <tên> | autosell revenue ...', (args) => {
+    r.register('autosell', 'Tự chạy macro khi đầy túi đồ: autosell <%đầy> <macro> | autosell off | autosell | autosell revenue ...', (args) => {
       const sub0 = String(args[0] || '').toLowerCase();
       if (sub0 === 'revenue' || sub0 === 'rev' || sub0 === 'doanhthu') {
         const a1 = String(args[1] || '').toLowerCase();
@@ -3354,49 +3291,30 @@ class BotSession extends EventEmitter {
         return;
       }
       if (!args[0]) {
-        if (!this._autoSellOn()) { this.log('sys', 'Chưa đặt auto-sell. Cú pháp: autosell <%đầy, vd 50> <item,item...>   vd: autosell 50 cobblestone'); return; }
+        if (!this.autoSellMacro) { this.log('sys', 'Chưa đặt auto-sell. Cú pháp: autosell <%đầy, vd 90> <tên macro>'); return; }
         const used = this.state.inventory?.length || 0;
-        this.log('sys', `Auto-sell: ${this._autoSellPct()}% đầy → ${this._autoSellDesc()} (hiện ${used}/36 ô)${this._autoSellFired ? ' [đã bắn, chờ dọn bớt để reset]' : ''}`);
+        this.log('sys', `Auto-sell: ${this.autoSellThreshold}% đầy → macro "${this.autoSellMacro}" (hiện ${used}/36 ô)${this._autoSellFired ? ' [đã bắn, chờ dọn bớt để reset]' : ''}`);
         return;
       }
-      const a0 = args[0].toLowerCase();
-      if (a0 === 'off') {
+      if (args[0].toLowerCase() === 'off') {
         this.autoSellMacro = null;
-        this.autoSellEnabled = false;
         this._autoSellFired = false;
         this._persistMacroSellCfg();
-        this._persistAutoSellItems();
         this.log('sys', 'Đã tắt auto-sell');
-        return;
-      }
-      if (a0 === 'on') {
-        if (!this.autoSellItems.length) { this.log('warn', 'Chưa có danh sách item. Cú pháp: autosell <%đầy> <item,item...>   vd: autosell 50 cobblestone'); return; }
-        const r0 = this.setAutoSellItems(this.autoSellItemsPct, this.autoSellItems);
-        this.log(r0.ok ? 'ok' : 'warn', r0.message);
         return;
       }
       const pct = parseInt(args[0], 10);
       if (!Number.isInteger(pct) || pct < 1 || pct > 100) { this.log('warn', 'Auto-sell: % không hợp lệ (1-100)'); return; }
-      if (!args[1]) { this.log('warn', 'Cú pháp: autosell <%đầy> <item,item...>   vd: autosell 50 cobblestone   (kiểu macro cũ: autosell <%đầy> macro <tên macro>)'); return; }
-      if (args[1].toLowerCase() !== 'macro') {
-        const r1 = this.setAutoSellItems(pct, args.slice(1));
-        this.log(r1.ok ? 'ok' : 'warn', r1.message);
-        if (r1.ok) this._askRevenueWebhook(); // bật xong -> hỏi liên kết webhook Discord (bỏ trống = bỏ qua)
-        return;
-      }
-      // Kiểu cũ: chạy 1 macro do bạn tự định nghĩa trong config.json > macros
-      const macroName = args[2];
-      if (!macroName) { this.log('warn', 'Cú pháp: autosell <%đầy> macro <tên macro>'); return; }
+      const macroName = args[1];
+      if (!macroName) { this.log('warn', 'Cú pháp: autosell <%đầy> <tên macro>'); return; }
       if (!this.macroEngine.list().some(n => n.toLowerCase() === macroName.toLowerCase())) {
         this.log('warn', `Auto-sell: macro "${macroName}" không tồn tại (xem: listmacro)`);
         return;
       }
       this.autoSellThreshold = pct;
       this.autoSellMacro = macroName;
-      this.autoSellEnabled = false; // macro thay cho kiểu tích hợp
       this._autoSellFired = false;
       this._persistMacroSellCfg();
-      this._persistAutoSellItems();
       this.log('ok', `Đã đặt auto-sell: ${pct}% đầy → macro "${macroName}"`);
       this._askRevenueWebhook(); // bật xong -> hỏi liên kết webhook Discord (bỏ trống = bỏ qua)
     });

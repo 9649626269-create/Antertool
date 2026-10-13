@@ -282,9 +282,11 @@ async function shutdown(code = 0) {
   console.log(chalk.cyan('\n  Shutting down...'));
   const watchdog = setTimeout(() => process.exit(code), 5000); // không để treo nếu đóng cổng chậm
   if (watchdog.unref) watchdog.unref();
+  try { manager.runtimeLog('sys', code === 42 ? 'Antertool đang tắt để cập nhật bản mới...' : 'Antertool đang tắt...'); } catch { }
   try { if (dashboard) dashboard.shutdown(); } catch { }
   try { if (manager) manager.shutdown(); } catch { }
   try { if (dashboard) await dashboard.stop(); } catch { }
+  try { await manager.flushTelegramLogs(3000); } catch { } // đẩy nốt log runtime lên Telegram trước khi thoát
   process.exit(code);
 }
 (async () => {
@@ -296,6 +298,7 @@ async function shutdown(code = 0) {
     const webWanted = AUTO_EXE || !process.stdin.isTTY || manager._config.webDashboard !== false;
     const webOk = webWanted ? await dashboard.start() : false;
     console.log(colors.accent(`⬡  Antares Manager started — ${manager.bots.length} bots loaded, none auto-started`));
+    manager.runtimeLog('ok', `Antertool khởi động — ${manager.bots.length} bot đã nạp (chưa tự chạy) · Node ${process.version} · ${process.platform}/${process.arch}`);
     if (webOk) console.log(colors.accent(`   Dashboard: http://localhost:${dashboard.port}`));
     else if (!webWanted) console.log(colors.muted('   Dashboard: TẮT — gõ "web on" để bật'));
     else console.log(colors.warn('   Dashboard: không mở được (xem lỗi phía trên) — CLI vẫn dùng bình thường, thử "web on" sau'));
@@ -412,6 +415,7 @@ async function shutdown(code = 0) {
               const tgUsage = () => {
                 console.log(colors.muted('  Usage: telegram set <token> [chatId] | chatid | test | panel | off'));
                 console.log(colors.muted('         telegram every <1s|10s|10m|off>  (nhịp cập nhật bảng) | mode edit|new | events [a,b,c] | commands on|off'));
+                console.log(colors.muted('         telegram logs [on|off|level|chat|bots|every|silent|send|test]  (log runtime gửi lên Telegram — gõ: telegram logs)'));
               };
               if (sub === 'set' && args[1]) {
                 if (!TelegramNotifier.looksLikeToken(args[1])) { console.log(colors.warn('  Token không đúng dạng — lấy từ @BotFather (vd 123456789:AAH...)')); break; }
@@ -460,6 +464,12 @@ async function shutdown(code = 0) {
                 if (m !== 'edit' && m !== 'new') { console.log(colors.warn('  Cú pháp: telegram mode edit|new  (edit = 1 bảng/bot sửa tại chỗ, new = mỗi lần 1 tin mới có thông báo)')); break; }
                 manager.setTelegramOption('telegramMode', m);
                 console.log(colors.ok('  ✓ Chế độ bảng: ' + m));
+              } else if (sub === 'logs' || sub === 'log') {
+                const paint = { ok: colors.ok, warn: colors.warn, err: colors.err, muted: colors.muted };
+                manager.telegramLogsCommand(args.slice(1)).then(lines => {
+                  for (const [kind, text] of lines) console.log((paint[kind] || colors.muted)(text));
+                  if (rl) { readline.cursorTo(process.stdout, 0); readline.clearLine(process.stdout, 0); rl.prompt(true); }
+                });
               } else if (sub === 'events') {
                 if (!args[1]) {
                   console.log(colors.muted('  Đang bật: ' + [...tg.events].join(', ')));
@@ -599,6 +609,7 @@ async function shutdown(code = 0) {
   } catch (e) {
     console.error(colors.err('[FATAL]'), e.message);
     console.error(e.stack);
+    try { manager.runtimeLog('err', '[FATAL] ' + (e && e.stack ? e.stack : e)); await manager.flushTelegramLogs(2500); } catch { }
     process.exit(1);
   }
 })();
@@ -606,7 +617,9 @@ process.on('SIGINT', () => shutdown());
 process.on('SIGTERM', () => shutdown());
 process.on('uncaughtException', err => {
   console.error(colors.err('[UNCAUGHT]'), err.message || err);
+  try { manager.runtimeLog('err', '[UNCAUGHT] ' + ((err && err.stack) || err)); } catch { }
 });
 process.on('unhandledRejection', (reason) => {
   console.error(colors.err('[UNHANDLED]'), reason?.message || reason);
+  try { manager.runtimeLog('err', '[UNHANDLED] ' + ((reason && reason.stack) || reason)); } catch { }
 });

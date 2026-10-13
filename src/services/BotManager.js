@@ -6,9 +6,9 @@ const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
 const RevenueTracker = require('../core/RevenueTracker');
-const AutoSell = require('../core/autosell');
 const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
+const TelegramLogger = require('../core/TelegramLogger');
 const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
 class BotManager {
   constructor(options = {}) {
@@ -25,7 +25,6 @@ class BotManager {
     this.notifier = new Notifier({});
     this.revenueNotifier = new Notifier({}); // webhook RIÊNG cho báo cáo doanh thu (không đặt thì dùng webhook chung)
     this.revenue = new RevenueTracker(require('path').join(require('path').dirname(this.configPath), 'revenue.json'), () => this._scheduleTz());
-    this.autoSellStore = new AutoSell.Store(AutoSell.Store.pathNextTo(this.configPath)); // autosell.json: cài đặt auto-sell /sell của từng bot (file riêng, không nằm trong config.json)
     this.telegram = new TelegramNotifier({}); // bảng Auto sell spawner + cảnh báo qua Telegram (không đặt token thì không làm gì)
     this._tgMsgs = {};                        // botId -> message_id của bảng (để sửa tại chỗ, khỏi spam)
     this._tgLastAt = new Map();               // botId -> lần gửi bảng gần nhất (chống dội)
@@ -33,6 +32,11 @@ class BotManager {
     this._tgBusy = new Set();                 // bot đang có lần gửi/sửa bảng chưa xong (nhịp 1s bỏ qua bot này)
     this._tgSig = new Map();                  // botId -> "chữ ký" trạng thái bảng gửi gần nhất (bot offline chỉ sửa khi chữ ký đổi)
     this._tgRR = 0;                           // vòng xoay: mỗi nhịp sửa 1 bảng
+    // Log runtime (log từng bot + log hệ thống) -> Telegram: gom lô, gộp dòng lặp, che mật khẩu/token (xem TelegramLogger.js)
+    this.telegramLogs = new TelegramLogger(this.telegram, {
+      tz: () => this._scheduleTz(),
+      secrets: () => this.bots.map(b => b?.cfg?.botPassword).filter(Boolean),
+    });
     this.dashboard = null;
     this._config = null;
     this._poolPruneInterval = setInterval(() => this.sharedPool.pruneCache(), 10 * 60 * 1000);
@@ -94,12 +98,18 @@ class BotManager {
     }
   }
   _wireBotLog(bot) {
-    if (this.onBotLog) {
-      bot.on('log', entry => {
-        try { this.onBotLog(bot.cfg.id, entry); } catch { }
-      });
-    }
+    bot.on('log', ev => {
+      try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch { } // log runtime -> Telegram (không bao giờ làm hỏng bot)
+      if (this.onBotLog) {
+        try { this.onBotLog(bot.cfg.id, ev); } catch { }
+      }
+    });
   }
+  // Log hệ thống không thuộc bot nào (khởi động, tắt, lỗi chưa bắt được...) -> cùng đường gửi Telegram với log bot
+  runtimeLog(level, msg) {
+    try { this.telegramLogs.push(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); } catch { }
+  }
+  flushTelegramLogs(timeoutMs = 3000) { return this.telegramLogs.flushNow(timeoutMs); }
   _createBotFromConfig(cfg, index) {
     const merged = {
       host: cfg.host || this._config.host,
@@ -124,7 +134,6 @@ class BotManager {
       moneyGoal: cfg.moneyGoal ?? this._config.moneyGoal ?? null,
       moneyGoalMacro: cfg.moneyGoalMacro || this._config.moneyGoalMacro || null,
       autoSellMacro: cfg.autoSellMacro || null,
-      autosell: this.autoSellStore.get(cfg.id),
       autoSellThreshold: cfg.autoSellThreshold ?? 90,
       autoSellRevenue: cfg.autoSellRevenue ?? true,
       autoSellMsgKeyword: cfg.autoSellMsgKeyword || '',
@@ -196,7 +205,6 @@ class BotManager {
       moneyGoal: data.moneyGoal ?? this._config.moneyGoal ?? null,
       moneyGoalMacro: data.moneyGoalMacro || this._config.moneyGoalMacro || null,
       autoSellMacro: data.autoSellMacro || null,
-      autosell: this.autoSellStore.get(data.id),
       autoSellThreshold: data.autoSellThreshold ?? 90,
       autoSellRevenue: data.autoSellRevenue ?? true,
       autoSellMsgKeyword: data.autoSellMsgKeyword || '',
@@ -467,7 +475,23 @@ class BotManager {
     const c = this._config || {};
     this.telegram.configure(c.telegramToken || process.env.TELEGRAM_BOT_TOKEN || null, c.telegramChatId ?? process.env.TELEGRAM_CHAT_ID ?? null, c.telegramEvents);
     this._tgMsgs = (c.telegramMessages && typeof c.telegramMessages === 'object') ? { ...c.telegramMessages } : {};
+    this._applyTelegramLogConfig();
     this._armTelegram();
+  }
+  // Log runtime -> Telegram. Config (config.json, gốc):
+  //   telegramLogs (true) bật/tắt · telegramLogLevels (mặc định "all" = mọi mức trừ chat; "info"|"warn"|"err"|["warn","err",...])
+  //   telegramLogBots (null = mọi bot | ["bot-1",...]) · telegramLogEverySec (10, tối thiểu 2) · telegramLogSilent (true = không rung)
+  //   telegramLogMaxPerMin (10)
+  _applyTelegramLogConfig() {
+    const c = this._config || {};
+    this.telegramLogs.configure({
+      enabled: c.telegramLogs !== false,
+      levels: c.telegramLogLevels ?? 'all',
+      bots: c.telegramLogBots ?? [],
+      intervalSec: c.telegramLogEverySec ?? 10,
+      silent: c.telegramLogSilent !== false,
+      maxPerMin: c.telegramLogMaxPerMin ?? 10,
+    });
   }
   _armTelegram() {
     if (this._tgTimer) { clearInterval(this._tgTimer); this._tgTimer = null; }
@@ -514,6 +538,7 @@ class BotManager {
     this._config[key] = value;
     this.persistence.set(key, value);
     if (key === 'telegramEvents') this.telegram.configure(this.telegram.token, this.telegram.chatId, value);
+    if (key.startsWith('telegramLog')) this._applyTelegramLogConfig();
     this._armTelegram();
   }
   _panelRelevant(bot) { return !!(bot._sellSpawnOn || this.revenue.stats(bot.cfg.id)); }
@@ -591,6 +616,7 @@ class BotManager {
     if (ev.type !== 'command') return;
     const now = Date.now();
     if (ev.cmd === 'start' || ev.cmd === 'help') { ev.reply(TelegramPanel.HELP_TEXT); return; }
+    if (ev.cmd === 'logs' || ev.cmd === 'log') { await this._tgLogsCommand(ev); return; }
     if (ev.cmd === 'status') {
       ev.reply(TelegramPanel.buildStatusList(this.bots.map(b => this._botPanelInfo(b, now)), this.revenue.clock(now)));
       return;
@@ -600,6 +626,130 @@ class BotManager {
       if (!list.length) { ev.reply(ev.arg ? `Không có bot "${TelegramNotifier.escapeHtml(ev.arg)}".` : 'Chưa có bot nào bật autosell_spawn.'); return; }
       for (const b of list) this.sendTelegramPanel(b, { fresh: true }); // gửi bảng mới (và nhớ làm bảng chính)
     }
+  }
+
+  // ===== Log runtime -> Telegram: lệnh =====
+  // "bot-1 50" | "50" | "bot-1" | "" -> { id, n }.  Số trần là SỐ DÒNG, trừ khi đúng là id của 1 bot (vd bot tên "123").
+  _parseLogsTarget(parts) {
+    const rest = parts.filter(Boolean);
+    let id = null, n = 25;
+    if (rest.length && (!/^\d+$/.test(rest[0]) || this.findBot(rest[0]))) id = rest.shift();
+    if (rest.length && /^\d+$/.test(rest[0])) n = Number(rest[0]);
+    if (id && id.toLowerCase() === 'system') id = TelegramLogger.SYSTEM;
+    return { id, n };
+  }
+  _logsStatusLines() {
+    const s = this.telegramLogs.status();
+    const lv = s.preset ? `${s.preset} (${s.levels.join(', ')})` : s.levels.join(', ');
+    return [
+      `Log runtime → Telegram: ${s.enabled ? (s.telegramReady ? 'BẬT' : 'BẬT nhưng Telegram chưa cấu hình (telegram set <token> → telegram chatid)') : 'TẮT'}`,
+      `Mức: ${lv}${s.levels.includes('chat') ? '' : '  — chat người chơi: tắt'}`,
+      `Bot: ${s.bots ? s.bots.join(', ') : 'tất cả'}  (+ log hệ thống)`,
+      `Gộp mỗi ${s.intervalSec}s · tối đa ${s.maxPerMin} tin/phút · ${s.silent ? 'tin im lặng (không rung)' : 'tin CÓ rung điện thoại'}`,
+      `Đã gửi ${s.messages} tin / ${s.lines} dòng · bỏ ${s.dropped} dòng · gửi lỗi ${s.failed} lần · đang chờ ${s.buffered} dòng`,
+    ];
+  }
+  // CLI: "telegram logs ..." -> [[kind, text], ...] (kind: ok | warn | err | muted) để main.js tô màu. Không bao giờ throw.
+  async telegramLogsCommand(args = []) {
+    const out = [];
+    const say = (kind, text) => out.push([kind, '  ' + text]);
+    const L = this.telegramLogs;
+    const sub = String(args[0] || 'status').toLowerCase();
+    const val = String(args[1] || '').toLowerCase();
+    const onOff = (v) => (v === 'on' || v === 'bat' || v === 'bật' ? true : (v === 'off' || v === 'tat' || v === 'tắt' ? false : null));
+    const usage = () => {
+      say('muted', 'Usage: telegram logs on|off | level <all|info|warn|err|a,b,c> | chat on|off | bots <all|id1,id2>');
+      say('muted', '       telegram logs every <10s|1m> | silent on|off | send [id] [n] | test');
+    };
+    try {
+      if (sub === 'status') {
+        const lines = this._logsStatusLines();
+        say(L.enabled && L.tg.enabled ? 'ok' : 'warn', lines[0]);
+        for (const l of lines.slice(1)) say('muted', l);
+        usage();
+      } else if (sub === 'on' || sub === 'off') {
+        this.setTelegramOption('telegramLogs', sub === 'on');
+        say('ok', sub === 'on' ? '✓ Đã BẬT gửi log runtime lên Telegram' : '✓ Đã TẮT gửi log runtime lên Telegram (/logs trong Telegram vẫn xem lại được)');
+        if (sub === 'on' && !this.telegram.enabled) say('warn', 'Telegram chưa cấu hình — dùng: telegram set <token>, rồi telegram chatid');
+      } else if (sub === 'level' || sub === 'levels' || sub === 'muc') {
+        if (!args[1]) {
+          say('muted', 'Đang gửi: ' + [...L.levels].join(', '));
+          say('muted', 'Mức có: ' + TelegramLogger.LEVELS.join(', '));
+          say('muted', 'Mẫu: all (mọi mức trừ chat) · info (ok,warn,err,proxy,health) · warn (warn,err,health) · err — hoặc liệt kê: warn,err,sys · thêm chat: all,chat');
+        } else {
+          const r = TelegramLogger.parseLevels(args.slice(1).join(','));
+          if (!r.ok) say('warn', r.error);
+          else { this.setTelegramOption('telegramLogLevels', r.levels); say('ok', '✓ Mức log gửi lên Telegram: ' + r.levels.join(', ')); }
+        }
+      } else if (sub === 'chat') {
+        const on = onOff(val);
+        if (on === null) { say('warn', 'Cú pháp: telegram logs chat on|off  (gửi cả chat của người chơi/server — rất nhiều tin)'); }
+        else {
+          const set = new Set(L.levels);
+          if (on) set.add('chat'); else set.delete('chat');
+          if (!set.size) set.add('err');
+          this.setTelegramOption('telegramLogLevels', [...set]);
+          say('ok', '✓ Chat người chơi trong log Telegram: ' + (on ? 'BẬT' : 'TẮT'));
+        }
+      } else if (sub === 'bots' || sub === 'bot') {
+        if (!args[1]) {
+          say('muted', 'Đang lọc bot: ' + (L.bots ? [...L.bots].join(', ') : 'tất cả') + '   (đổi: telegram logs bots <all|id1,id2>)');
+        } else if (val === 'all' || val === '*') {
+          this.setTelegramOption('telegramLogBots', null);
+          say('ok', '✓ Gửi log của tất cả bot');
+        } else {
+          const list = args.slice(1).join(',').split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+          this.setTelegramOption('telegramLogBots', list);
+          say('ok', '✓ Chỉ gửi log của: ' + list.join(', ') + '  (log hệ thống vẫn gửi)');
+          const unknown = list.filter(x => !this.findBot(x));
+          if (unknown.length) say('warn', 'Chưa có bot tên: ' + unknown.join(', ') + ' (vẫn lưu — bot thêm sau sẽ được tính)');
+        }
+      } else if (sub === 'every' || sub === 'interval') {
+        const sec = TelegramLogger.parseSeconds(args.slice(1).join(''));
+        if (sec === null) say('warn', 'Cú pháp: telegram logs every <10s|1m|90>  (khoảng gom log thành 1 tin, tối thiểu 2s)');
+        else if (sec < 2) say('warn', 'Tối thiểu 2 giây (Telegram chỉ cho ~1 tin/giây/chat)');
+        else { this.setTelegramOption('telegramLogEverySec', sec); say('ok', `✓ Gom log gửi mỗi ${sec} giây (lỗi err vẫn gửi trong ≤2s)`); }
+      } else if (sub === 'silent') {
+        const on = onOff(val);
+        if (on === null) say('warn', 'Cú pháp: telegram logs silent on|off  (on = tin log không rung điện thoại)');
+        else { this.setTelegramOption('telegramLogSilent', on); say('ok', '✓ Tin log: ' + (on ? 'im lặng (không rung)' : 'có rung điện thoại')); }
+      } else if (sub === 'send' || sub === 'now') {
+        if (!this.telegram.enabled) say('warn', 'Chưa cấu hình Telegram — dùng: telegram set <token>');
+        else {
+          const { id, n } = this._parseLogsTarget(args.slice(1));
+          const r = await L.sendRecent({ bot: id, n });
+          if (!r.count) say('warn', id ? `Chưa có log nào của "${id}"` : 'Chưa có log nào để gửi');
+          else say(r.messages ? 'ok' : 'err', r.messages ? `✓ Đã gửi ${r.count} dòng log gần nhất${id ? ' của ' + id : ''} (${r.messages} tin)` : '✗ Gửi thất bại: ' + (this.telegram.lastError || 'không rõ lý do'));
+        }
+      } else if (sub === 'test') {
+        const r = await L.test();
+        say(r.ok ? 'ok' : 'err', (r.ok ? '✓ ' : '✗ ') + r.message);
+      } else {
+        usage();
+      }
+    } catch (e) {
+      say('err', 'Lỗi: ' + (e && e.message || e));
+    }
+    return out;
+  }
+  // Telegram: /logs [id] [n] · /logs on|off|status
+  async _tgLogsCommand(ev) {
+    const L = this.telegramLogs;
+    const e = TelegramNotifier.escapeHtml;
+    const parts = String(ev.arg || '').split(/\s+/).filter(Boolean);
+    const sub = (parts[0] || '').toLowerCase();
+    if (sub === 'on' || sub === 'off') {
+      this.setTelegramOption('telegramLogs', sub === 'on');
+      ev.reply(`📜 Gửi log runtime tự động: <b>${sub === 'on' ? 'BẬT' : 'TẮT'}</b>`);
+      return;
+    }
+    if (sub === 'status') {
+      ev.reply('📜 <b>Log runtime</b>\n' + this._logsStatusLines().map(l => e(l)).join('\n'));
+      return;
+    }
+    const { id, n } = this._parseLogsTarget(parts);
+    const r = await L.sendRecent({ bot: id, n });
+    if (!r.count) ev.reply(id ? `Chưa có log nào của "${e(id)}".` : 'Chưa có log nào.');
   }
 
   // ===== Báo cáo doanh thu TỔNG HỢP (gộp tất cả bot) =====

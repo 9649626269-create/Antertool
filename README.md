@@ -18,9 +18,10 @@ A premium Minecraft bot management dashboard with CLI support. Proxy auto-detect
 - **Order GUI Reader** — Reads the "/order" GUI (paginated order book) into a table: price, quantity, buyer, time
 - **Discord Webhook** — Notifications for disconnects, reconnect status, Money Goal hits, and Spawner Protect alerts
 - **Telegram** — live Auto-sell Spawn income panel (edited in place), alerts with push notification, `/status` & `/panel` commands
+- **Runtime logs → Telegram** — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô gửi im lặng, lọc theo mức/bot, `/logs` xem lại, tự che mật khẩu/token
 - **Proxy Auto-Rotate** — Randomized 1-10 min proxy rotation per bot, plus bulk import from a .txt file
 - **Scheduled Out/In** — Daily fleet-wide rest window (e.g., off at 23:00, back on at 06:00)
-- **Auto-Sell** — Once inventory crosses a fullness threshold, opens `/sell` and sells the items you listed (built into `src/core/autosell.js`, no macro needed); a user-defined macro is still supported
+- **Auto-Sell** — Fires a user-defined macro once inventory crosses a fullness threshold
 - **Premium (Microsoft) Login** — Optional real Microsoft/Xbox account auth alongside the default offline mode
 - **Colored Termux Chat** — Player vs. server chat, color-coded, printed live to the CLI
 - **Per-Bot Logs** — Isolated log streams for each bot, never mixed
@@ -364,27 +365,15 @@ Chỉ những bot **bị chính lịch này out** mới được tự vô lại 
 
 ## Auto-sell khi đầy túi đồ
 
-**Không cần macro, không cần sửa `config.json`.** Logic nằm trong file riêng `src/core/autosell.js` (cách bán tham khảo tool HEXTEKO). Tới ngưỡng % đầy thì bot gõ `/sell`, chuyển các item bạn liệt kê vào GUI, click 2 ô xác nhận rồi đóng GUI:
+Cùng cơ chế với Money Goal: tới ngưỡng % đầy thì tự chạy 1 macro do bạn định nghĩa — vì cách bán (`/sell`, `/sellall`, GUI...) tuỳ mỗi server, không đoán bừa:
 
 ```
-cmd s1 autosell 50 cobblestone          # túi đầy 50% (18/36 ô) -> bán cobblestone
-cmd s1 autosell 50 cobblestone,stone    # nhiều item: ngăn bằng dấu phẩy hoặc khoảng trắng
-cmd s1 autosell off | autosell on       # tắt / bật lại (giữ nguyên danh sách + %)
-cmd s1 autosell                         # xem trạng thái
-cmd s1 autosell 70 macro ten_macro_ban  # kiểu cũ: chạy macro tự viết trong config.json
+cmd s1 autosell 90 ten_macro_ban    # 90% đầy (33/36 ô) là tự chạy macro
+cmd s1 autosell off
+cmd s1 autosell                      # xem trạng thái
 ```
 
-- Tên item là **tên tiếng Anh trong game** (`cobblestone`, `iron_ingot`, `oak_log`…) và khớp **chính xác** — ghi `sword` sẽ không bán `diamond_sword`. Bot đang online thì tên gõ nhầm (vd `cobbstone`) bị từ chối ngay.
-- Cài đặt từng bot lưu ở file riêng **`autosell.json`** (cạnh `config.json`, giống `revenue.json`, update không đụng tới). Mặc định lệnh là `/sell`, 2 ô xác nhận là ô cuối GUI rồi ô đầu hàng cuối (`"clicks": [-1, -9]`, số âm = đếm ngược từ cuối GUI). Server khác lệnh/ô thì sửa riêng cho bot đó:
-  ```json
-  { "s1": { "enabled": true, "threshold": 50, "items": ["cobblestone"], "command": "/sell", "clicks": [-1, -9] } }
-  ```
-- Còn đồ khớp sau lượt bán thì lặp lại (tối đa 20 lượt/lần mở). Bán lỗi (GUI không mở, shop không nhận đồ) thì thử lại sau 30s, tối đa 5 lần liên tiếp. Túi không có item nào trong danh sách thì không gõ `/sell`.
-- Không tranh GUI với `spawnerprotect` / `autosell_spawn` / macro: đang bận thì chờ, bảo vệ lồng chen vào thì dừng ngay.
-- Báo cáo doanh thu (`autosell revenue ...`, webhook) dùng chung như trước.
-- Web: tab **Tự Động → Auto-sell khi đầy túi đồ** có thêm ô "Item bán".
-
-Có độ trễ reset (phải dọn xuống dưới ngưỡng ~11 điểm % mới sẵn sàng bán lại) để tránh bán liên tục nếu số ô dao động ngay sát biên.
+Có độ trễ reset (phải dọn xuống dưới ngưỡng ~11 điểm % mới sẵn sàng bắn lại) để tránh bắn macro liên tục nếu số ô dao động ngay sát biên.
 
 ## Đăng nhập acc Premium (Microsoft)
 
@@ -452,7 +441,7 @@ Bot gửi **bảng thu nhập autosell_spawn** lên Telegram, mỗi bot 1 bảng
 
 **Cập nhật bảng:** mặc định **mỗi 1 giây** (đồng hồ + thời gian hoạt động chạy từng giây), đổi nhịp bằng `telegram every <1s|10s|10m|off>`; ngoài ra cập nhật ngay khi đổi trạng thái (kick/vào lại/bán lỗi) hoặc bấm nút **🔄 Làm mới**. Telegram chỉ cho ~1 lần sửa/giây/chat nên mỗi nhịp tool sửa **đúng 1 bảng**, xoay vòng giữa các bot (1 bot = mỗi giây; 3 bot = mỗi bảng ~3 giây). Bot offline không bị sửa liên tục — chỉ sửa 1 lần khi hiện 🔴. Nếu Telegram báo 429 (quá nhanh, hay gặp ở **group**) tool tự nghỉ đúng số giây được yêu cầu rồi chạy tiếp; dùng chat riêng với bot hoặc tăng nhịp (`telegram every 3s`) cho êm. Nhịp chỉ chạy ở `mode edit`. Sửa tin thì điện thoại không rung; **cảnh báo** (kick, hết reconnect, đã vào lại, bán lỗi sau N lần `/home`, cảnh báo lồng) là tin mới → có thông báo đẩy. Chọn loại cảnh báo: `telegram events a,b,c`.
 
-**Lệnh trong Telegram** (chỉ phản hồi đúng chat_id đã lưu): `/status` (cả dàn bot + tổng thu nhập/ngày), `/panel [id bot]` (gửi lại bảng), `/help`. Tắt nhận lệnh: `telegram commands off`.
+**Lệnh trong Telegram** (chỉ phản hồi đúng chat_id đã lưu): `/status` (cả dàn bot + tổng thu nhập/ngày), `/panel [id bot]` (gửi lại bảng), `/logs [id bot] [số dòng]` (xem lại log runtime), `/logs on|off|status`, `/help`. Tắt nhận lệnh: `telegram commands off`.
 
 | CLI | Việc |
 |---|---|
@@ -461,8 +450,49 @@ Bot gửi **bảng thu nhập autosell_spawn** lên Telegram, mỗi bot 1 bảng
 | `telegram every <1s\|10s\|10m\|off>` | nhịp cập nhật bảng (mặc định 1s) |
 | `telegram mode edit\|new` | `edit` = sửa tại chỗ (mặc định), `new` = mỗi lần 1 tin mới |
 | `telegram events [a,b,c]` | loại cảnh báo gửi qua Telegram |
+| `telegram logs [on\|off\|level\|chat\|bots\|every\|silent\|send\|test]` | log runtime gửi lên Telegram (xem mục dưới) |
 
 Config tuỳ chọn: `telegramRefreshSec` (1), `telegramMinGapSec` (30), `telegramMode`, `telegramCommands`. Token nằm trong `config.json` (đã nằm trong `.gitignore`, không bị đẩy lên GitHub). *Tổng thời gian hoạt động* = tổng thời gian bot ở trạng thái ONLINE, cộng dồn qua các lần vào/ra (lưu trong `revenue.json`, không bị xoá khi `autosell_spawn revenue reset`).
+
+### Telegram — log runtime
+
+Mọi dòng log bạn thấy trên console (log của từng bot: đăng nhập, menu, `/home`, bán, kick, reconnect, lỗi...) cùng với log hệ thống của tool (khởi động, đang tắt, `[UNCAUGHT]`, `[UNHANDLED]`, `[FATAL]`) được gửi lên Telegram **khi đã cấu hình Telegram** (`telegram set` + `telegram chatid`). Mặc định **bật**; tắt: `telegram logs off`.
+
+Mẫu tin (mỗi tin gộp nhiều dòng, giờ theo `timezone`):
+
+```
+14:05:09 bot-1 ✅ Đã đăng nhập
+14:05:12 bot-1 ⚙️ Click slot 24 trong [MENU]
+14:07:40 bot-2 ⚠️ Mất kết nối (timed out) — thử lại lần 1/10 sau 1.2s (×3)
+14:07:41 system ❌ [UNCAUGHT] Error: ...
+```
+
+Cách gửi (để không spam, không làm chậm bot):
+- **Gom lô** mỗi 10 giây thành 1 tin (đổi: `telegram logs every 30s`, tối thiểu 2s). Có dòng lỗi (`err`) thì gửi trong ≤2s. Tin dài tự chia nhiều tin ≤ ~3.6k ký tự.
+- **Tin im lặng** — không rung/không kêu điện thoại (`telegram logs silent off` để có thông báo). Cảnh báo kick/hết reconnect/bán lỗi vẫn là tin riêng có thông báo đẩy như cũ.
+- **Gộp dòng lặp:** cùng 1 bot lặp y hệt dòng liền trước → `(×N)`.
+- **Chống dội:** tối đa 10 tin/phút (`telegramLogMaxPerMin`); Telegram trả 429 hoặc hàng đợi bận thì **giữ log lại gửi sau** (bộ đệm 400 dòng; tràn thì bỏ dòng cũ nhất và ghi "đã bỏ qua N dòng"). Gửi lỗi (mạng) thì thử lại tối đa 3 lần/dòng rồi bỏ — không bao giờ chặn hay làm chết bot.
+- **Tắt tool** (`exit`, Ctrl+C, SIGTERM, `update`): đẩy nốt log còn lại (chờ tối đa 3 giây) rồi mới thoát.
+- **Che thông tin nhạy cảm:** token Telegram, webhook Discord, mật khẩu trong `/dn` `/dk` `/login` `/register`, `user:pass@` của proxy, và mật khẩu bot (nếu xuất hiện nguyên văn, từ 6 ký tự) bị thay bằng `***` trước khi gửi.
+
+Mức log: `sys ok warn err afk shard proxy health chat`. Mẫu dựng sẵn: `all` (mặc định: mọi mức **trừ chat**), `info` (ok, warn, err, proxy, health), `warn` (warn, err, health), `err`.
+
+```
+telegram logs                       # xem trạng thái + số tin đã gửi
+telegram logs on | off              # bật / tắt tự gửi
+telegram logs level warn            # mẫu: all | info | warn | err   (hoặc liệt kê: warn,err,sys · thêm chat: all,chat)
+telegram logs chat on|off           # gửi cả chat người chơi/server (RẤT nhiều tin — mặc định tắt)
+telegram logs bots bot-1,bot-2      # chỉ log của các bot này (log hệ thống vẫn gửi); bots all = tất cả
+telegram logs every 30s             # khoảng gom log
+telegram logs silent on|off         # on = không rung (mặc định)
+telegram logs send [id] [n]         # gửi NGAY n dòng gần nhất (mặc định 25, tối đa 150)
+telegram logs test                  # gửi 1 dòng thử qua đúng đường gửi thật
+```
+Trong Telegram: `/logs` (25 dòng gần nhất, cả dàn) · `/logs bot-1 50` · `/logs system` · `/logs off` · `/logs on` · `/logs status`. Lệnh `/logs` xem lại **mọi mức** (trừ chat) từ 500 dòng gần nhất, không phụ thuộc bộ lọc tự động.
+
+Config tuỳ chọn (`config.json`, cấp gốc; lệnh CLI tự ghi vào đây): `telegramLogs` (true) · `telegramLogLevels` (`"all"` | `"warn"` | `["warn","err","sys"]`) · `telegramLogBots` (`null` = tất cả | `["bot-1"]`) · `telegramLogEverySec` (10) · `telegramLogSilent` (true) · `telegramLogMaxPerMin` (10).
+
+Giới hạn: chỉ bắt log đi qua hệ thống log của bot + các lỗi chưa bắt được của tool; vài thông báo in thẳng ra console (vd `[Persistence] Save error`, thông báo của thư viện) **không** có trong log Telegram. Mã xác thực Microsoft (acc Premium) in thô ra console cũng không được gửi.
 
 ## CLI Commands
 
@@ -523,11 +553,11 @@ antares/
 └── src/
     ├── core/                Core engine
     │   ├── BotSession.js    Bot lifecycle & events
-    │   ├── autosell.js      Auto-sell via /sell GUI (settings in autosell.json)
     │   ├── ProxyManager.js  Proxy management & detection
     │   ├── CommandRegistry.js
     │   ├── WindowRouter.js  Minecraft GUI handling
     │   ├── PacketMonitor.js Packet rate tracking
+    │   ├── TelegramLogger.js Runtime logs → Telegram (batch, filter, redact)
     │   ├── constants.js     Timing & config constants
     │   └── utils.js         Utility functions
     ├── services/
@@ -561,7 +591,7 @@ Render injects `PORT` env var automatically. The app prioritizes `process.env.PO
 
 ## Changelog (bổ sung gần đây)
 
-- **Mới:** `autosell <%đầy> <item,item...>` — auto-sell tích hợp (`src/core/autosell.js`): túi đầy tới % thì gõ `/sell`, chuyển đúng các item đã liệt kê vào GUI, click 2 ô xác nhận rồi đóng. Không cần macro, cài đặt lưu ở `autosell.json` (không đụng `config.json`). Sửa lỗi `Macro "autosell" không tồn tại` khi `config.json` chưa có macro; kiểu macro cũ vẫn dùng được bằng `autosell <%> macro <tên>`.
+- **Mới:** Log runtime gửi lên Telegram (`telegram logs ...`, `/logs`) — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô gửi im lặng, lọc theo mức/bot, gộp dòng lặp, chống 429, tự che mật khẩu/token, đẩy nốt log khi tắt tool. Chi tiết: mục "Telegram — log runtime".
 - **Mới:** Macro lặp `loop` / `until <chữ>` (+ `closewin`) — macro `mualong` mua liên tục tới khi server báo `Bạn cần có…` thì tự dừng (tối đa 500 lượt, `stopmacro` dừng tay). Macro đang có trong `config.json` của bạn: thêm dòng `loop 500` trước `chat /shop`, và thay dòng cuối `stopif Bạn cần có` bằng 3 dòng `delay 1200` / `closewin` / `until Bạn cần có`.
 - **Mới:** Tự về `/home treolong` (`spawnhome`) — phát hiện bot không còn ở gần lồng spawn (sau đăng nhập hoặc đang treo) thì tự gõ lệnh về, có giãn cách/giới hạn số lần, webhook `homeReturn` khi lệch và khi đã về.
 - **Sửa lỗi:** `spawnerprotect`, `autosell_spawn` và `autosell` (macro túi đầy) từng bật ngay lúc spawn, trước khi đăng nhập/vào menu xong và trước khi bot về tới chỗ treo lồng (gây báo nhầm người lạ, "quá xa/chunk chưa tải", macro bán chạy ngoài sảnh). Giờ đi đúng thứ tự: đợi tin `SẢNH ➞ Đăng nhập thành công…` → `/menu` + click ô 24 → chờ đứng cạnh lồng → mới bật cả ba và gửi webhook `featuresReady`.
