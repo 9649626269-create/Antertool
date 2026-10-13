@@ -1,3 +1,20 @@
+# Bản sửa (fixed19) — Auto-sell Spawn: cảnh báo "bị bedrock che" + báo giả "KHÔNG bị dịch chuyển" + chuột phải thử lại
+
+**Yêu cầu:** sửa các lỗi trong log Auto-sell Spawn (tia ngắm "bị bedrock che", "GUI không mở sau 6s" → phải gõ `/home treolong`, rồi cảnh báo "Gõ /home treolong đã 8s mà KHÔNG bị dịch chuyển" dù server đã báo thành công).
+
+**Nguyên nhân & cách sửa:**
+1. **"Tia ngắm chưa tới — bị bedrock (-6903,-62,-17575) che"** — bedrock đó chính là ô chứa *mắt* của bot. Bot đứng ở Y=-63.00 trong khe cao 1 block sát tầng bedrock (server ép tư thế ngồi/bò), nhưng `_eyePos()` luôn cộng cứng 1.62 → mắt "lọt" vào bedrock trên đầu → mọi tia ngắm đều bị chính khối đó che (và góc nhìn/pitch cũng tính từ điểm mắt sai). Nay `_eyePos()` dùng `eyeHeightFor()` (AimUtil): nếu ô chứa mắt đứng thẳng là khối đặc thì thử tư thế ngồi (1.27) rồi bò (0.4), lấy mức đầu tiên có ô mắt thoáng; không mức nào thoáng thì giữ như cũ (không đoán bừa). Bot đứng thẳng bình thường → không đổi gì.
+2. **"Gõ /home treolong đã 8s mà KHÔNG bị dịch chuyển"** — báo giả. Bot đã đứng sẵn ở home nên server đếm ngược rồi "dịch chuyển" tại chỗ (vị trí không đổi) → `TeleportWatch` chỉ dựa vào khoảng dịch ≥ 3 block nên hết hạn là báo timeout, dù server đã nhắn "Dịch chuyển thành công tới home treolong". Nay `TeleportWatch` nhận ra tin "thành công" (VI/EN: `dịch chuyển/teleport/tp thành công`, `teleported`, `đã dịch chuyển`...; tin đếm ngược "Đang dịch chuyển..." KHÔNG tính) và nếu bot đứng yên ≥ 1s sau tin đó thì trả `arrived` + `inPlace: true` → log `ok` "Server báo /home treolong thành công ... vị trí không đổi". Không có tin thành công + đứng yên, hoặc bot tự xê dịch ≥ 0.5 block → vẫn báo timeout như cũ (không che lỗi thật). Chỉ ảnh hưởng dòng log, không đổi luồng bán/về home.
+3. **"GUI không mở sau 6s"** → trước đây báo lỗi ngay và kéo theo cả chuỗi `/home` + bán lại (~15s/lần). Nay chuột phải **tối đa 2 lần** mỗi lồng: lần 1 chờ 3.5s, GUI chưa mở thì nhắm lại + chuột phải lần 2 (chờ 5s), rồi mới báo lỗi (`GUI không mở sau 9s`) và đi tiếp chuỗi `/home` như cũ. Bị ngắt giữa hai lần thì dừng ngay, không báo lỗi giả. Hằng số: `SELL_GUI_CLICKS`, `SELL_GUI_FIRST_WAIT_MS`, `SELL_GUI_LAST_WAIT_MS` (đầu `BotSession.js`).
+
+**Test:** mở rộng `aim-util.test.js` (tái hiện đúng số liệu log: chân -6902.51,-63,-17574.69 / bedrock -6903,-62,-17575 / lồng -6903,-63,-17574: cách cũ bị che, cách mới trúng), `teleport-watch.test.js` (teleport tại chỗ, tin đếm ngược không tính, bot tự xê dịch, teleport xa, tin đến sát hạn chót), `sell-recovery.test.js` (lần 2 mở được → không gõ `/home`; không mở → đúng 2 lần chuột phải; bị ngắt giữa chừng). Các test mới **fail trên code fixed18** và qua trên fixed19; toàn bộ test cũ vẫn qua.
+
+**Lưu ý / chưa chắc chắn:**
+- **Chưa test với server thật** (không có mạng). Mục 1 suy ra từ log: tọa độ bedrock trùng khớp chính xác với ô mắt đứng thẳng của bot, nhưng mình không thấy được dữ liệu thế giới thật.
+- **Nguyên nhân gốc của "GUI không mở sau 6s" lần đầu chưa xác định được** — trong log lần chuột phải thứ 2 (sau `/home`) cũng bị cảnh báo tia ngắm y hệt mà vẫn mở được GUI, nên cảnh báo bedrock KHÔNG phải nguyên nhân. Mục 3 chỉ là giảm thiệt hại (thử lại tại chỗ trước khi gõ `/home`). Nếu vẫn lặp lại thường xuyên, gửi log đoạn trước đó (có thể do cooldown/độ trễ GUI của plugin hoặc tư thế ngồi/shift) để xem tiếp.
+
+---
+
 # Bản thêm (fixed18) — module log runtime gửi lên Telegram
 
 **Yêu cầu:** thêm module runtime logs gửi lên Telegram.

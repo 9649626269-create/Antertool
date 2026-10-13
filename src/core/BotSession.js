@@ -15,11 +15,14 @@ const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const MacroEngine = require('./MacroEngine');
 const Notifier = require('./Notifier');
-const { anglesTo, aimCheck } = require('./AimUtil');
+const { anglesTo, aimCheck, eyeHeightFor, EYE_STAND } = require('./AimUtil');
 const SG = require('./SpawnerGuard');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
 const SELL_SPAWN_REACH = 6; // block — tầm chuột phải vào lồng của auto-sell spawn (từ mắt bot); cũng là ngưỡng "đang đứng đúng chỗ treo lồng"
+const SELL_GUI_CLICKS = 2; // số lần chuột phải vào lồng trước khi coi là "GUI không mở" (mở được ở lần 2 thì khỏi phải gõ /home)
+const SELL_GUI_FIRST_WAIT_MS = 3500; // chờ GUI sau lần chuột phải đầu; lần cuối chờ SELL_GUI_LAST_WAIT_MS
+const SELL_GUI_LAST_WAIT_MS = 5000;
 const SELL_FAIL_MENTION_ID = '1413104059333873764'; // người được tag khi autosell_spawn thất bại sau khi đã gõ /home nhiều lần (đổi: sellFailMention trong config của bot)
 const TP_PRESEND_MS = 600; // thả hết phím + chờ vận tốc về 0 rồi mới gõ lệnh teleport
 // tin action bar / title chỉ hiện ra log khi đang chờ teleport hoặc khớp mẫu này (tránh spam bảng điểm/HUD)
@@ -1502,9 +1505,13 @@ class BotSession extends EventEmitter {
     return true;
   }
   // Mắt bot (toạ độ thế giới)
+  // Chiều cao mắt có kiểm tra thực tế: bot đứng trong khe cao 1 block (lồng treo sát bedrock) bị server ép tư thế ngồi/bò nhưng
+  // mineflayer vẫn báo 1.62 -> mắt lọt vào khối đặc trên đầu, tia ngắm luôn "bị bedrock che". Xem eyeHeightFor (AimUtil).
   _eyePos(mc) {
     const p = mc.entity.position;
-    const h = typeof mc.entity.eyeHeight === 'number' ? mc.entity.eyeHeight : 1.62;
+    const base = typeof mc.entity.eyeHeight === 'number' ? mc.entity.eyeHeight : EYE_STAND;
+    let h = base;
+    try { h = eyeHeightFor({ pos: p, base, getBlock: q => mc.blockAt(this._vec(q)) }); } catch { }
     return { x: p.x, y: p.y + h, z: p.z };
   }
   // Tia ngắm HIỆN TẠI (yaw/pitch của bot) có tới được block p không? Chỉ khối đặc nguyên khối mới che tia —
@@ -1635,14 +1642,28 @@ class BotSession extends EventEmitter {
     if (aimed && !this._aimCheckBlock(mc, p).hit) aimed = await this._faceBlock(mc, p, { stop }); // góc nhìn bị đổi sát lúc click -> nhắm lại
     if (stop()) return false;
     if (!aimed) this.log('warn', `Auto-sell Spawn [${tag}] ${at}: tia ngắm chưa trúng lồng${this._aimWhy()} — vẫn thử chuột phải`);
-    // đăng ký chờ GUI TRƯỚC khi click để không lỡ sự kiện windowOpen
-    const winP = this._waitWindowOpen(mc, 6000);
-    try { await this._withTimeout(mc.activateBlock(block), 2500); }
-    catch (e) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: click chuột phải lỗi: ${e.message}`); }
-    const win = await winP;
+    // Chuột phải tối đa SELL_GUI_CLICKS lần: lần đầu GUI không mở thì nhắm lại + chuột phải thêm 1 lần TRƯỚC khi báo lỗi
+    // (báo lỗi = cả chuỗi gõ /home rồi bán lại, tốn ~15s mỗi lần).
+    let win = null, waited = 0;
+    for (let attempt = 1; attempt <= SELL_GUI_CLICKS && !win; attempt++) {
+      const waitMs = attempt < SELL_GUI_CLICKS ? SELL_GUI_FIRST_WAIT_MS : SELL_GUI_LAST_WAIT_MS;
+      // đăng ký chờ GUI TRƯỚC khi click để không lỡ sự kiện windowOpen
+      const winP = this._waitWindowOpen(mc, waitMs);
+      try { await this._withTimeout(mc.activateBlock(block), 2500); }
+      catch (e) { this.log('warn', `Auto-sell Spawn [${tag}] ${at}: click chuột phải lỗi: ${e.message}`); }
+      win = await winP;
+      waited += waitMs;
+      if (!win && this.mc === mc && mc.currentWindow) win = mc.currentWindow; // GUI mở trễ đúng lúc hết giờ chờ
+      if (win || stop()) break;
+      if (attempt < SELL_GUI_CLICKS) {
+        this.log('warn', `Auto-sell Spawn [${tag}] ${at}: GUI chưa mở sau ${(waitMs / 1000).toFixed(1)}s — nhắm lại rồi chuột phải lần ${attempt + 1}/${SELL_GUI_CLICKS}`);
+        await this._faceBlock(mc, p, { stop });
+        if (stop()) return false;
+      }
+    }
     if (!win) {
       if (stop()) return false; // vòng thuộc kết nối cũ (đã mất kết nối/bị ngắt) — không báo lỗi giả
-      return this._sellFail(tag, at, 'GUI không mở sau 6s');
+      return this._sellFail(tag, at, `GUI không mở sau ${(waited / 1000).toFixed(0)}s`);
     }
     try {
       await sleep(jit(650, 150)); // đợi server gửi đủ ô đồ
@@ -2618,6 +2639,11 @@ class BotSession extends EventEmitter {
     const pos = this.mc?.entity?.position;
     const said = ev.msgs.length ? ` Server nói: ${ev.msgs.map(m => `"${m}"`).join(' | ')}.` : '';
     const cage = this._describeCageDistance();
+    if (ev.type === 'arrived' && ev.inPlace) {
+      // bot đã đứng sẵn ở home: server vẫn đếm ngược rồi "dịch chuyển" tại chỗ nên vị trí không đổi — đây là thành công, không phải lỗi
+      this.log('ok', `Server báo ${ev.cmd} thành công sau ${(ev.ms / 1000).toFixed(1)}s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → ${this._fmtXYZ(pos)}.${said}${cage ? ' ' + cage : ''}`);
+      return;
+    }
     if (ev.type === 'arrived') {
       this.log('ok', `Đã dịch chuyển ${ev.dist.toFixed(0)} block sau ${(ev.ms / 1000).toFixed(1)}s (${ev.cmd}) → ${this._fmtXYZ(pos)}.${said}${cage ? ' ' + cage : ''}`);
       return;

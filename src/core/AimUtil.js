@@ -25,6 +25,24 @@ function isFullCube(block) {
   return true; // không biết hình dạng -> coi như khối đặc (an toàn như cách cũ)
 }
 
+// Chiều cao mắt (tính từ chân) theo tư thế. mineflayer thường vẫn báo 1.62 (đứng thẳng) dù server đã ép bot sang tư thế ngồi/bò
+// khi nó đứng trong khe cao 1 block (vd lồng treo sát tầng bedrock): lúc đó "mắt" 1.62 lọt vào khối đặc ngay trên đầu
+// và mọi tia ngắm đều bị chính khối đó che (log: "bị bedrock che" dù click vẫn mở được GUI).
+const EYE_STAND = 1.62, EYE_SNEAK = 1.27, EYE_CRAWL = 0.4;
+// Trả về chiều cao mắt `base` nếu điểm mắt nằm trong ô thoáng; nếu không thì thử lần lượt tư thế thấp hơn (ngồi 1.27, bò 0.4),
+// lấy mức đầu tiên có ô mắt thoáng. Không mức nào thoáng (dữ liệu khối bất thường) -> giữ `base` như cũ.
+//   pos = vị trí CHÂN; getBlock({x,y,z}) -> block | null (null = chunk chưa tải -> coi là thoáng)
+function eyeHeightFor({ pos, base = EYE_STAND, getBlock }) {
+  const free = h => {
+    let b = null;
+    try { b = getBlock({ x: Math.floor(pos.x), y: Math.floor(pos.y + h), z: Math.floor(pos.z) }); } catch { }
+    return !(b && isFullCube(b));
+  };
+  if (free(base)) return base;
+  for (const h of [EYE_SNEAK, EYE_CRAWL]) if (h < base && free(h)) return h;
+  return base;
+}
+
 // Hướng nhìn theo quy ước mineflayer (yaw = atan2(-dx,-dz), pitch = atan2(dy, khoảng cách ngang))
 function viewDir(yaw, pitch) {
   const cp = Math.cos(pitch);
@@ -55,4 +73,4 @@ function aimCheck({ eye, yaw, pitch, target, maxDist = 7, getBlock, step = 0.05 
   return { hit: false, dist: maxDist };
 }
 
-module.exports = { isFullCube, viewDir, anglesTo, aimCheck };
+module.exports = { isFullCube, viewDir, anglesTo, aimCheck, eyeHeightFor, EYE_STAND };

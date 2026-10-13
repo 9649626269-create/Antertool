@@ -142,6 +142,43 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._isBusy, false);
   }
 
+  // 8) LỖI THỰC TẾ: chuột phải lần đầu GUI không mở -> nhắm lại + chuột phải lần 2 mở được => bán xong, KHÔNG phải gõ /home
+  {
+    const { bot, mc, chats, logs, notified } = mkBot({ startFar: false, sellFailMaxHome: 3 });
+    let clicks = 0;
+    const open = mc.activateBlock;
+    mc.activateBlock = async function (...a) { clicks++; if (clicks >= 2) return open.apply(this, a); };
+    const r = await bot._runSellWithRecovery();
+    assert.strictEqual(r.ok, true, 'lần chuột phải thứ 2 mở được GUI thì bán xong');
+    assert.strictEqual(clicks, 2);
+    assert.deepStrictEqual(chats, [], 'không cần gõ /home');
+    assert.strictEqual(notified.length, 0);
+    assert(logs.some(l => l.includes('GUI chưa mở') && l.includes('lần 2/2')), logs.join('\n'));
+  }
+
+  // 9) GUI không bao giờ mở: chuột phải đúng 2 lần mỗi lồng rồi mới báo lỗi (sau đó mới tới chuỗi /home)
+  {
+    const { bot, mc, chats, logs } = mkBot({ startFar: false, sellFailMaxHome: 0 });
+    let clicks = 0;
+    mc.activateBlock = async () => { clicks++; };
+    const r = await bot._runSellSpawnCycle();
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(clicks, 2, 'mỗi lồng chuột phải tối đa 2 lần');
+    assert.strictEqual(chats.length, 0);
+    assert(logs.some(l => /GUI không mở sau \d+s/.test(l)), logs.join('\n'));
+  }
+
+  // 10) bị ngắt (tắt autosell/mất kết nối) giữa 2 lần chuột phải -> không chuột phải thêm, không báo lỗi giả
+  {
+    const { bot, mc, logs } = mkBot({ startFar: false, sellFailMaxHome: 0 });
+    let clicks = 0;
+    mc.activateBlock = async () => { clicks++; bot._sellSpawnAbort = true; };
+    const r = await bot._runSellSpawnCycle();
+    assert.strictEqual(clicks, 1, 'đã bị ngắt thì không chuột phải lần 2');
+    assert.strictEqual(r.aborted, true);
+    assert(!logs.some(l => l.includes('GUI không mở')), 'bị ngắt không được báo lỗi giả');
+  }
+
   console.log('sell-recovery.test OK');
   process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });
