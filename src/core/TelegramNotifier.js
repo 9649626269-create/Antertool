@@ -131,19 +131,54 @@ class TelegramNotifier {
       return r.ok ? r.result.message_id : null;
     });
   }
-  // Gửi 1 file văn bản (vd log_bot-1.txt). Trả về message_id (hoặc null nếu lỗi). opts: { caption (HTML, ≤1000 ký tự), silent }
+  // Các trường chung của sendDocument / gửi lại khi tin cũ mất: chat, chú thích (HTML, ≤1000 ký tự), im lặng, nút bấm
+  _docFields(opts = {}) {
+    const fields = { chat_id: this.chatId };
+    if (opts.caption) { fields.caption = String(opts.caption).substring(0, 1000); fields.parse_mode = 'HTML'; }
+    if (opts.silent) fields.disable_notification = 'true';
+    if (opts.keyboard) fields.reply_markup = JSON.stringify({ inline_keyboard: opts.keyboard });
+    return fields;
+  }
+  // Gửi 1 file văn bản (vd log_all.txt). Trả về message_id (hoặc null nếu lỗi). opts: { caption (HTML, ≤1000 ký tự), silent, keyboard }
   sendDocument(filename, content, opts = {}) {
     if (!this.enabled) return Promise.resolve(null);
     return this._enqueue(async () => {
       const wait = Math.min(30000, this._pauseUntil - Date.now()); // đang bị giới hạn tốc độ -> chờ rồi gửi
       if (wait > 0) await new Promise(res => setTimeout(res, wait));
-      const fields = { chat_id: this.chatId };
-      if (opts.caption) { fields.caption = String(opts.caption).substring(0, 1000); fields.parse_mode = 'HTML'; }
-      if (opts.silent) fields.disable_notification = 'true';
-      const r = await this._call('sendDocument', null, 30000, TelegramNotifier.multipart(fields, 'document', filename, content));
+      const r = await this._call('sendDocument', null, 30000, TelegramNotifier.multipart(this._docFields(opts), 'document', filename, content));
       this.lastError = r.ok ? null : (r.description || 'lỗi');
       return r.ok ? r.result.message_id : null;
     });
+  }
+  // THAY file của 1 tin đã gửi (editMessageMedia) — 1 file duy nhất cập nhật tại chỗ, không đẻ tin mới, không rung điện thoại.
+  // Trả về { ok, id }:
+  //   ok=true  -> đã sửa (hoặc nội dung y hệt), hoặc tin cũ không còn sửa được (bị xoá...) nên đã gửi file mới; id = message_id đang dùng
+  //   ok=false -> lỗi tạm thời (mạng, 429, timeout): id giữ nguyên để lần sau sửa tiếp (caller giữ nguyên dữ liệu chưa gửi)
+  // Không bao giờ throw.
+  editDocument(messageId, filename, content, opts = {}) {
+    const bad = { ok: false, id: messageId || null };
+    if (!this.enabled) return Promise.resolve(bad);
+    if (!messageId) return this.sendDocument(filename, content, opts).then(id => (id && typeof id !== 'object' ? { ok: true, id } : bad));
+    return this._enqueue(async () => {
+      const wait = Math.min(30000, this._pauseUntil - Date.now());
+      if (wait > 0) await new Promise(res => setTimeout(res, wait));
+      const media = { type: 'document', media: 'attach://file' };
+      if (opts.caption) { media.caption = String(opts.caption).substring(0, 1000); media.parse_mode = 'HTML'; }
+      const fields = { chat_id: this.chatId, message_id: messageId, media: JSON.stringify(media) };
+      if (opts.keyboard) fields.reply_markup = JSON.stringify({ inline_keyboard: opts.keyboard });
+      const r = await this._call('editMessageMedia', null, 30000, TelegramNotifier.multipart(fields, 'file', filename, content));
+      if (r.ok) { this.lastError = null; return { ok: true, id: messageId }; }
+      const d = String(r.description || '');
+      if (/not modified/i.test(d)) return { ok: true, id: messageId }; // nội dung y hệt -> coi như xong
+      // Chỉ gửi file mới khi tin cũ thật sự không còn sửa được. Lỗi tạm thời (429, mạng, timeout) -> giữ tin cũ, tránh đẻ file trùng
+      if (!/message to edit not found|message can't be edited|MESSAGE_ID_INVALID|message identifier is not specified/i.test(d)) {
+        this.lastError = d || 'lỗi';
+        return { ok: false, id: messageId };
+      }
+      const r2 = await this._call('sendDocument', null, 30000, TelegramNotifier.multipart(this._docFields({ ...opts, silent: true }), 'document', filename, content));
+      this.lastError = r2.ok ? null : (r2.description || d || 'lỗi');
+      return r2.ok ? { ok: true, id: r2.result.message_id } : { ok: false, id: messageId };
+    }).then(r => (r && typeof r.ok === 'boolean' ? r : bad));
   }
   // Dựng body multipart/form-data: các trường chữ + 1 file văn bản UTF-8
   static multipart(fields, fileField, filename, content) {

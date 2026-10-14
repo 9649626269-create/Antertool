@@ -32,11 +32,12 @@ class BotManager {
     this._tgBusy = new Set();                 // bot đang có lần gửi/sửa bảng chưa xong (nhịp 1s bỏ qua bot này)
     this._tgSig = new Map();                  // botId -> "chữ ký" trạng thái bảng gửi gần nhất (bot offline chỉ sửa khi chữ ký đổi)
     this._tgRR = 0;                           // vòng xoay: mỗi nhịp sửa 1 bảng
-    // Log runtime (log từng bot + log hệ thống) -> Telegram: gom lô, gộp dòng lặp, che mật khẩu/token (xem TelegramLogger.js)
+    // Log runtime (log từng bot + log hệ thống) -> Telegram: 1 FILE chung cho tất cả bot, sửa tại chỗ theo chu kỳ; gộp dòng lặp, che mật khẩu/token (xem TelegramLogger.js)
     this.telegramLogs = new TelegramLogger(this.telegram, {
       tz: () => this._scheduleTz(),
       secrets: () => this.bots.map(b => b?.cfg?.botPassword).filter(Boolean),
-      stats: (id) => this._serverStats(id), // stats server (scoreboard: money, shard, kills...) ghi đầu file log_<bot>.txt
+      botIds: () => this.bots.map(b => b?.cfg?.id).filter(x => x !== undefined && x !== null), // bot hiện có -> ghi stats cả bot chưa có log
+      stats: (id) => this._serverStats(id), // stats server (scoreboard: money, shard, kills...) ghi đầu file log_all.txt, mỗi bot 1 khối
     });
     this.dashboard = null;
     this._config = null;
@@ -490,13 +491,14 @@ class BotManager {
     const c = this._config || {};
     this.telegram.configure(c.telegramToken || process.env.TELEGRAM_BOT_TOKEN || null, c.telegramChatId ?? process.env.TELEGRAM_CHAT_ID ?? null, c.telegramEvents);
     this._tgMsgs = (c.telegramMessages && typeof c.telegramMessages === 'object') ? { ...c.telegramMessages } : {};
+    this.telegramLogs.resetMessage(); // đổi token/chat -> file log tạo lại ở chat mới
     this._applyTelegramLogConfig();
     this._armTelegram();
   }
-  // Log runtime -> Telegram. Config (config.json, gốc):
+  // Log runtime -> Telegram (1 file chứa log của tất cả bot, sửa tại chỗ theo chu kỳ). Config (config.json, gốc):
   //   telegramLogs (true) bật/tắt · telegramLogLevels (mặc định "all" = mọi mức trừ chat; "info"|"warn"|"err"|["warn","err",...])
-  //   telegramLogBots (null = mọi bot | ["bot-1",...]) · telegramLogEverySec (10, tối thiểu 2) · telegramLogSilent (true = không rung)
-  //   telegramLogMaxPerMin (10)
+  //   telegramLogBots (null = mọi bot | ["bot-1",...]) · telegramLogEverySec (10; 2s..24h — chu kỳ cập nhật file) · telegramLogSilent (true = tin đầu không rung)
+  //   telegramLogMaxPerMin (10, tối đa số lần cập nhật/phút) · telegramLogKeepLines (1000; 50..5000 — số dòng mới nhất giữ trong file)
   _applyTelegramLogConfig() {
     const c = this._config || {};
     this.telegramLogs.configure({
@@ -506,6 +508,7 @@ class BotManager {
       intervalSec: c.telegramLogEverySec ?? 10,
       silent: c.telegramLogSilent !== false,
       maxPerMin: c.telegramLogMaxPerMin ?? 10,
+      keepLines: c.telegramLogKeepLines ?? 1000,
     });
   }
   _armTelegram() {
@@ -621,6 +624,11 @@ class BotManager {
     }
   }
   async _onTelegramEvent(ev) {
+    if (ev.type === 'button' && ev.cmd === 'lg') { // nút 🔄 trên file log: cập nhật ngay
+      const r = await this.telegramLogs.refresh();
+      ev.answer(r.ok ? 'Đã cập nhật file log' : r.message);
+      return;
+    }
     if (ev.type === 'button' && ev.cmd === 'r') {
       const bot = ev.arg === '*' ? null : this.bots.find(b => String(b.cfg.id) === ev.arg);
       if (bot) await this.sendTelegramPanel(bot, { editId: ev.messageId });
@@ -660,8 +668,9 @@ class BotManager {
       `Log runtime → Telegram: ${s.enabled ? (s.telegramReady ? 'BẬT' : 'BẬT nhưng Telegram chưa cấu hình (telegram set <token> → telegram chatid)') : 'TẮT'}`,
       `Mức: ${lv}${s.levels.includes('chat') ? '' : '  — chat người chơi: tắt'}`,
       `Bot: ${s.bots ? s.bots.join(', ') : 'tất cả'}  (+ log hệ thống)`,
-      `Gộp mỗi ${s.intervalSec}s · tối đa ${s.maxPerMin} tin/phút · ${s.silent ? 'tin im lặng (không rung)' : 'tin CÓ rung điện thoại'}`,
-      `Đã gửi ${s.messages} tin / ${s.lines} dòng · bỏ ${s.dropped} dòng · gửi lỗi ${s.failed} lần · đang chờ ${s.buffered} dòng`,
+      `1 file ${TelegramLogger.FILE_NAME} chứa log của tất cả bot — cập nhật tại chỗ mỗi ${TelegramLogger.fmtSeconds(s.intervalSec)} · giữ ${s.keepLines} dòng mới nhất · tối đa ${s.maxPerMin} lần/phút`,
+      `Tin đầu tiên: ${s.silent ? 'im lặng (không rung)' : 'CÓ rung điện thoại'} · các lần sửa không rung`,
+      `Đã tạo ${s.created} file · cập nhật ${s.updates} lần · file có ${s.lines} dòng · bỏ ${s.dropped} dòng cũ · gửi lỗi ${s.failed} lần · chờ ${s.buffered} mục mới`,
     ];
   }
   // CLI: "telegram logs ..." -> [[kind, text], ...] (kind: ok | warn | err | muted) để main.js tô màu. Không bao giờ throw.
@@ -674,7 +683,7 @@ class BotManager {
     const onOff = (v) => (v === 'on' || v === 'bat' || v === 'bật' ? true : (v === 'off' || v === 'tat' || v === 'tắt' ? false : null));
     const usage = () => {
       say('muted', 'Usage: telegram logs on|off | level <all|info|warn|err|a,b,c> | chat on|off | bots <all|id1,id2>');
-      say('muted', '       telegram logs every <10s|1m> | silent on|off | send [id] [n] | test');
+      say('muted', '       telegram logs every <10s|30s|1m|1h> | keep <số dòng> | now | silent on|off | send [id] [n] | test');
     };
     try {
       if (sub === 'status') {
@@ -721,9 +730,22 @@ class BotManager {
         }
       } else if (sub === 'every' || sub === 'interval') {
         const sec = TelegramLogger.parseSeconds(args.slice(1).join(''));
-        if (sec === null) say('warn', 'Cú pháp: telegram logs every <10s|1m|90>  (khoảng gom log thành 1 tin, tối thiểu 2s)');
-        else if (sec < 2) say('warn', 'Tối thiểu 2 giây (Telegram chỉ cho ~1 tin/giây/chat)');
-        else { this.setTelegramOption('telegramLogEverySec', sec); say('ok', `✓ Gom log gửi mỗi ${sec} giây (lỗi err vẫn gửi trong ≤2s)`); }
+        if (sec === null) say('warn', 'Cú pháp: telegram logs every <10s|30s|1m|1h|90>  (chu kỳ cập nhật file log, tối thiểu 2s, tối đa 24h)');
+        else if (sec < TelegramLogger.MIN_INTERVAL_SEC) say('warn', 'Tối thiểu 2 giây (Telegram chỉ cho ~1 lần sửa/giây/chat)');
+        else if (sec > TelegramLogger.MAX_INTERVAL_SEC) say('warn', 'Tối đa 24 giờ (24h)');
+        else {
+          this.setTelegramOption('telegramLogEverySec', sec);
+          say('ok', `✓ File log tự cập nhật mỗi ${TelegramLogger.fmtSeconds(sec)} (chỉ sửa khi có log/stats mới; "telegram logs now" để cập nhật ngay)`);
+          if (sec * (this.telegramLogs.maxPerMin) < 60) say('muted', `Lưu ý: đang giới hạn tối đa ${this.telegramLogs.maxPerMin} lần/phút (telegramLogMaxPerMin) nên thực tế không nhanh hơn ${Math.ceil(60 / this.telegramLogs.maxPerMin)}s/lần`);
+        }
+      } else if (sub === 'keep' || sub === 'lines') {
+        const n = /^\d+$/.test(val) ? Number(val) : null;
+        if (n === null) say('muted', `Đang giữ ${L.keepLines} dòng mới nhất trong file  (đổi: telegram logs keep <${TelegramLogger.MIN_KEEP}-${TelegramLogger.MAX_KEEP}>)`);
+        else if (n < TelegramLogger.MIN_KEEP || n > TelegramLogger.MAX_KEEP) say('warn', `Số dòng giữ trong file: ${TelegramLogger.MIN_KEEP}–${TelegramLogger.MAX_KEEP}`);
+        else { this.setTelegramOption('telegramLogKeepLines', n); say('ok', `✓ File log giữ ${n} dòng mới nhất (dòng cũ hơn bị bỏ, có ghi số dòng bỏ ở đầu phần LOG)`); }
+      } else if (sub === 'now' || sub === 'refresh') {
+        const r = await L.refresh();
+        say(r.ok ? 'ok' : 'warn', (r.ok ? '✓ ' : '') + r.message);
       } else if (sub === 'silent') {
         const on = onOff(val);
         if (on === null) say('warn', 'Cú pháp: telegram logs silent on|off  (on = tin log không rung điện thoại)');
@@ -760,6 +782,11 @@ class BotManager {
     }
     if (sub === 'status') {
       ev.reply('📜 <b>Log runtime</b>\n' + this._logsStatusLines().map(l => e(l)).join('\n'));
+      return;
+    }
+    if (sub === 'now' || sub === 'refresh') {
+      const r = await L.refresh();
+      if (!r.ok) ev.reply(`📜 ${e(r.message)}`);
       return;
     }
     const { id, n } = this._parseLogsTarget(parts);
@@ -970,6 +997,7 @@ class BotManager {
     if (this._scheduleInterval) clearInterval(this._scheduleInterval);
     if (this._revSummaryTimer) clearInterval(this._revSummaryTimer);
     if (this._tgTimer) clearInterval(this._tgTimer);
+    try { this.telegramLogs.stop(); } catch { }
     if (this._beatInterval) clearInterval(this._beatInterval);
     try { this.telegram.stopPolling(); } catch { }
     this.sharedPool.reset();

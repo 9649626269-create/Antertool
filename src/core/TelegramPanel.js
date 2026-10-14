@@ -133,12 +133,13 @@ const HELP_TEXT = [
   '🤖 <b>Antertool</b> — lệnh Telegram',
   '/status — trạng thái + thu nhập cả dàn bot',
   '/panel — gửi lại bảng Auto sell spawner (mỗi bot 1 bảng)',
-  '/logs [id bot] [số dòng] — gửi file log runtime gần nhất (vd /logs bot-1 50)',
-  '/logs on|off|status — bật/tắt/xem việc tự gửi log runtime',
+  '/logs now — cập nhật ngay file log chung (hoặc bấm nút 🔄 dưới file)',
+  '/logs [id bot] [số dòng] — gửi thêm 1 file log gần nhất (vd /logs bot-1 50)',
+  '/logs on|off|status — bật/tắt/xem việc tự cập nhật file log runtime',
   '/help — xem lại danh sách này',
   '',
   'Bảng tự cập nhật tại chỗ (không spam). Nút 🔄 để làm mới ngay.',
-  'Log runtime tự gửi theo lô (tin im lặng, không rung) — chỉnh mức/bot trong tool: telegram logs.',
+  'Log runtime: 1 file chung cho mọi bot, tự sửa tại chỗ theo chu kỳ (10s/30s/1m/1h...) — chỉnh trong tool: telegram logs every <thời gian>.',
 ].join('\n');
 
 module.exports = { panelSig, buildPanel, buildStatusList, computeStatus, fmtMoney, fmtDuration, fmtAgo, sparkline, HELP_TEXT };

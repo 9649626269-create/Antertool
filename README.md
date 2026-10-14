@@ -18,7 +18,7 @@ A premium Minecraft bot management dashboard with CLI support. Proxy auto-detect
 - **Order GUI Reader** — Reads the "/order" GUI (paginated order book) into a table: price, quantity, buyer, time
 - **Discord Webhook** — Notifications for disconnects, reconnect status, Money Goal hits, and Spawner Protect alerts
 - **Telegram** — live Auto-sell Spawn income panel (edited in place), alerts with push notification, `/status` & `/panel` commands
-- **Runtime logs → Telegram** — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô rồi gửi **file `log_<bot>.txt`** (đầu file có stats server: money, shard, kills...) im lặng, lọc theo mức/bot, `/logs` xem lại, tự che mật khẩu/token
+- **Runtime logs → Telegram** — log của **tất cả bot** + khởi động/tắt/lỗi chưa bắt được gộp vào **1 file `log_all.txt`** (đầu file có stats server từng bot: money, shard, kills...), tự **cập nhật tại chỗ** (sửa đúng 1 tin, không spam) theo chu kỳ bạn chọn 10s/30s/1m/1h..., lọc theo mức/bot, nút 🔄 / `/logs now` cập nhật ngay, tự che mật khẩu/token
 - **Proxy Auto-Rotate** — Randomized 1-10 min proxy rotation per bot, plus bulk import from a .txt file
 - **Scheduled Out/In** — Daily fleet-wide rest window (e.g., off at 23:00, back on at 06:00)
 - **Auto-Sell** — Fires a user-defined macro once inventory crosses a fullness threshold
@@ -456,43 +456,64 @@ Config tuỳ chọn: `telegramRefreshSec` (1), `telegramMinGapSec` (30), `telegr
 
 ### Telegram — log runtime
 
-Mọi dòng log bạn thấy trên console (log của từng bot: đăng nhập, menu, `/home`, bán, kick, reconnect, lỗi...) cùng với log hệ thống của tool (khởi động, đang tắt, `[UNCAUGHT]`, `[UNHANDLED]`, `[FATAL]`) được gửi lên Telegram **khi đã cấu hình Telegram** (`telegram set` + `telegram chatid`). Mặc định **bật**; tắt: `telegram logs off`.
+Mọi dòng log bạn thấy trên console (log của từng bot: đăng nhập, menu, `/home`, bán, kick, reconnect, lỗi...) cùng với log hệ thống của tool (khởi động, đang tắt, `[UNCAUGHT]`, `[UNHANDLED]`, `[FATAL]`) được đưa lên Telegram **khi đã cấu hình Telegram** (`telegram set` + `telegram chatid`). Mặc định **bật**; tắt: `telegram logs off`.
 
-Mẫu tin (mỗi tin gộp nhiều dòng, giờ theo `timezone`):
+**Tất cả bot nằm chung 1 file** `log_all.txt`, và file đó **tự cập nhật tại chỗ** (tool *sửa* đúng 1 tin trong chat, không gửi tin mới) theo chu kỳ bạn chọn — `telegram logs every 10s` (mặc định) / `30s` / `1m` / `1h` ... (tối thiểu 2s, tối đa 24h). Mở lại file bất kỳ lúc nào là thấy log mới nhất của cả dàn bot.
+
+Nội dung file (giờ theo `timezone`):
 
 ```
-14:05:09 bot-1 ✅ Đã đăng nhập
-14:05:12 bot-1 ⚙️ Click slot 24 trong [MENU]
-14:07:40 bot-2 ⚠️ Mất kết nối (timed out) — thử lại lần 1/10 sau 1.2s (×3)
-14:07:41 system ❌ [UNCAUGHT] Error: ...
+Antertool — log runtime: tất cả bot
+Cập nhật lúc: 14/10/2026, 14:05:20 · tự cập nhật mỗi 10s
+Gồm: system, bot-1, bot-2 · 7 dòng
+
+===== STATS SERVER =====
+[bot-1]
+  Scoreboard: kingmc
+  MONEY 832.5M
+  SHARD 1045
+[bot-2]
+  Trạng thái: RECONNECTING
+
+===== LOG (5 mục) =====
+── 14/10/2026 ──
+14:04:09 [OK    ] system: Antertool khởi động
+14:05:09 [OK    ] bot-1: Đã đăng nhập
+14:05:12 [WARN  ] bot-2: Mất kết nối (timed out) — thử lại lần 1/10 sau 1.2s
+14:05:13 [SYS   ] bot-1: Click slot 24 trong [MENU]
+14:05:15 [WARN  ] bot-2: Mất kết nối (timed out) — thử lại lần 2/10 (×3 · tới 14:09:15)
 ```
 
-Cách gửi (để không spam, không làm chậm bot):
-- **Gom lô** mỗi 10 giây rồi gửi **file văn bản** (đổi: `telegram logs every 30s`, tối thiểu 2s). Mỗi bot 1 file `log_<tên bot>.txt` (log hệ thống: `log_system.txt`); đầu file có phần `STATS SERVER` lấy từ scoreboard của server (tên bảng, MONEY, SHARD, KILLS, DEATHS...; chưa có bảng thì ghi Money/Shard đã đọc) rồi tới phần `LOG` theo giờ. Có dòng lỗi (`err`) thì gửi trong ≤2s. Tin kèm chú thích ngắn: số dòng, số lỗi/cảnh báo.
-- **Tin im lặng** — không rung/không kêu điện thoại (`telegram logs silent off` để có thông báo). Cảnh báo kick/hết reconnect/bán lỗi vẫn là tin riêng có thông báo đẩy như cũ.
-- **Gộp dòng lặp:** cùng 1 bot lặp y hệt dòng liền trước → `(×N)`.
-- **Chống dội:** tối đa 10 tin/phút (`telegramLogMaxPerMin`); Telegram trả 429 hoặc hàng đợi bận thì **giữ log lại gửi sau** (bộ đệm 400 dòng; tràn thì bỏ dòng cũ nhất và ghi "đã bỏ qua N dòng"). Gửi lỗi (mạng) thì thử lại tối đa 3 lần/dòng rồi bỏ — không bao giờ chặn hay làm chết bot.
-- **Tắt tool** (`exit`, Ctrl+C, SIGTERM, `update`): đẩy nốt log còn lại (chờ tối đa 3 giây) rồi mới thoát.
+Cách hoạt động (để không spam, không làm chậm bot):
+- **Chu kỳ = nhịp sửa file.** Tới nhịp mà log + stats không đổi thì bỏ qua (không gọi Telegram). Dòng `err` **cũng chờ đúng chu kỳ** bạn đặt (đặt 1h thì tối đa 1h mới thấy); muốn xem ngay: bấm nút **🔄 Cập nhật ngay** dưới file, hoặc `/logs now` (Telegram) / `telegram logs now` (tool). Cảnh báo kick/hết reconnect/bán lỗi vẫn là tin riêng có thông báo đẩy như cũ.
+- **File giữ N dòng mới nhất** (mặc định 1000; `telegram logs keep 3000`, 50–5000) nên chu kỳ dài (1h) vẫn không mất log ở giữa. Quá số dòng thì bỏ dòng cũ nhất và ghi "đã bỏ qua N dòng cũ hơn" ở đầu phần LOG. Khi log kéo dài nhiều ngày, có dòng ngăn ngày `── dd/mm/yyyy ──`.
+- **Mỗi lần chạy tool tạo 1 file mới** (file của lần chạy trước giữ nguyên trong chat làm lịch sử). Nếu bạn xoá tin file, tool tự gửi lại file mới. Đổi token/chat Telegram thì file được tạo lại ở chat mới.
+- **Tin im lặng** — tin đầu (lúc tạo file) không rung (`telegram logs silent off` để có rung); các lần sửa không bao giờ rung.
+- **Gộp dòng lặp:** cùng 1 bot lặp y hệt dòng liền trước → `(×N)`; lặp kéo dài hơn 1 phút thì ghi thêm giờ lặp gần nhất (`(×3 · tới 14:09:15)`).
+- **Chống dội:** tối đa 10 lần cập nhật/phút (`telegramLogMaxPerMin`); Telegram trả 429 hoặc hàng đợi bận thì **giữ lại, cập nhật sau**. Gửi lỗi (mạng) thì thử lại thưa dần (15s, 30s... tối đa 5 phút) — log nằm sẵn trong bộ nhớ nên **không mất**, có lại mạng là file đủ log của cả lúc mất mạng. Không bao giờ chặn hay làm chết bot.
+- **Tắt tool** (`exit`, Ctrl+C, SIGTERM, `update`): cập nhật nốt file (chờ tối đa 3 giây) rồi mới thoát.
 - **Che thông tin nhạy cảm:** token Telegram, webhook Discord, mật khẩu trong `/dn` `/dk` `/login` `/register`, `user:pass@` của proxy, và mật khẩu bot (nếu xuất hiện nguyên văn, từ 6 ký tự) bị thay bằng `***` trước khi gửi.
 
-Mức log: `sys ok warn err afk shard proxy health chat`. Mẫu dựng sẵn: `all` (mặc định: mọi mức **trừ chat**), `info` (ok, warn, err, proxy, health), `warn` (warn, err, health), `err`.
+Mức log: `sys ok warn err afk shard proxy health chat`. Mẫu dựng sẵn: `all` (mặc định: mọi mức **trừ chat**), `info` (ok, warn, err, proxy, health), `warn` (warn, err, health), `err`. Đổi mức/bot thì file được dựng lại theo bộ lọc mới ở nhịp kế tiếp.
 
 ```
-telegram logs                       # xem trạng thái + số tin đã gửi
-telegram logs on | off              # bật / tắt tự gửi
+telegram logs                       # xem trạng thái (chu kỳ, số dòng, số lần cập nhật)
+telegram logs on | off              # bật / tắt
+telegram logs every 10s|30s|1m|1h   # chu kỳ cập nhật file (2s–24h; vd 90, 1h30m cũng được)
+telegram logs keep 1000             # số dòng mới nhất giữ trong file (50–5000)
+telegram logs now                   # cập nhật file NGAY (không chờ chu kỳ)
 telegram logs level warn            # mẫu: all | info | warn | err   (hoặc liệt kê: warn,err,sys · thêm chat: all,chat)
-telegram logs chat on|off           # gửi cả chat người chơi/server (RẤT nhiều tin — mặc định tắt)
-telegram logs bots bot-1,bot-2      # chỉ log của các bot này (log hệ thống vẫn gửi); bots all = tất cả
-telegram logs every 30s             # khoảng gom log
-telegram logs silent on|off         # on = không rung (mặc định)
-telegram logs send [id] [n]         # gửi NGAY n dòng gần nhất (mặc định 25, tối đa 150)
+telegram logs chat on|off           # gồm cả chat người chơi/server (RẤT nhiều dòng — mặc định tắt)
+telegram logs bots bot-1,bot-2      # chỉ log của các bot này (log hệ thống vẫn có); bots all = tất cả
+telegram logs silent on|off         # on = tin đầu không rung (mặc định)
+telegram logs send [id] [n]         # gửi THÊM 1 file riêng n dòng gần nhất (mặc định 25, tối đa 150; không đụng file chính)
 telegram logs test                  # gửi 1 file log thử qua đúng đường gửi thật
 ```
-Trong Telegram: `/logs` (25 dòng gần nhất, cả dàn) · `/logs bot-1 50` · `/logs system` · `/logs off` · `/logs on` · `/logs status`. Lệnh `/logs` xem lại **mọi mức** (trừ chat) từ 500 dòng gần nhất, không phụ thuộc bộ lọc tự động.
+Trong Telegram: nút **🔄 Cập nhật ngay** dưới file · `/logs now` · `/logs` (gửi thêm file 25 dòng gần nhất, cả dàn) · `/logs bot-1 50` · `/logs system` · `/logs off` · `/logs on` · `/logs status`. `/logs` xem lại **mọi mức** (trừ chat) từ 500 dòng gần nhất, không phụ thuộc bộ lọc tự động.
 
-Config tuỳ chọn (`config.json`, cấp gốc; lệnh CLI tự ghi vào đây): `telegramLogs` (true) · `telegramLogLevels` (`"all"` | `"warn"` | `["warn","err","sys"]`) · `telegramLogBots` (`null` = tất cả | `["bot-1"]`) · `telegramLogEverySec` (10) · `telegramLogSilent` (true) · `telegramLogMaxPerMin` (10).
+Config tuỳ chọn (`config.json`, cấp gốc; lệnh CLI tự ghi vào đây): `telegramLogs` (true) · `telegramLogLevels` (`"all"` | `"warn"` | `["warn","err","sys"]`) · `telegramLogBots` (`null` = tất cả | `["bot-1"]`) · `telegramLogEverySec` (10; 2–86400) · `telegramLogKeepLines` (1000; 50–5000) · `telegramLogSilent` (true) · `telegramLogMaxPerMin` (10).
 
-Giới hạn: chỉ bắt log đi qua hệ thống log của bot + các lỗi chưa bắt được của tool; vài thông báo in thẳng ra console (vd `[Persistence] Save error`, thông báo của thư viện) **không** có trong log Telegram. Mã xác thực Microsoft (acc Premium) in thô ra console cũng không được gửi.
+Giới hạn: chỉ bắt log đi qua hệ thống log của bot + các lỗi chưa bắt được của tool; vài thông báo in thẳng ra console (vd `[Persistence] Save error`, thông báo của thư viện) **không** có trong log Telegram. Mã xác thực Microsoft (acc Premium) in thô ra console cũng không được gửi. Chu kỳ ngắn (vd 2s) bị giới hạn bởi `telegramLogMaxPerMin` (10 lần/phút ⇒ thực tế ≥ 6s/lần; tăng tới 20 nếu cần).
 
 ## CLI Commands
 
@@ -557,7 +578,7 @@ antares/
     │   ├── CommandRegistry.js
     │   ├── WindowRouter.js  Minecraft GUI handling
     │   ├── PacketMonitor.js Packet rate tracking
-    │   ├── TelegramLogger.js Runtime logs → Telegram (batch, filter, redact)
+    │   ├── TelegramLogger.js Runtime logs → Telegram (1 live file, filter, redact)
     │   ├── constants.js     Timing & config constants
     │   └── utils.js         Utility functions
     ├── services/
@@ -591,7 +612,8 @@ Render injects `PORT` env var automatically. The app prioritizes `process.env.PO
 
 ## Changelog (bổ sung gần đây)
 
-- **Mới:** Log runtime gửi lên Telegram (`telegram logs ...`, `/logs`) — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô gửi im lặng, lọc theo mức/bot, gộp dòng lặp, chống 429, tự che mật khẩu/token, đẩy nốt log khi tắt tool. Chi tiết: mục "Telegram — log runtime".
+- **Đổi:** Log runtime Telegram nay là **1 file chung** `log_all.txt` chứa log của tất cả bot (thay vì mỗi bot 1 file mỗi lần gửi) và **tự cập nhật tại chỗ** theo chu kỳ `telegram logs every <10s|30s|1m|1h>` (2s–24h); thêm `telegram logs keep <n>`, `telegram logs now`, nút 🔄 và `/logs now`. Chi tiết: mục "Telegram — log runtime".
+- **Mới (trước đó):** Log runtime gửi lên Telegram (`telegram logs ...`, `/logs`) — log của từng bot + khởi động/tắt/lỗi chưa bắt được, gom lô gửi im lặng, lọc theo mức/bot, gộp dòng lặp, chống 429, tự che mật khẩu/token, đẩy nốt log khi tắt tool. Chi tiết: mục "Telegram — log runtime".
 - **Mới:** Macro lặp `loop` / `until <chữ>` (+ `closewin`) — macro `mualong` mua liên tục tới khi server báo `Bạn cần có…` thì tự dừng (tối đa 500 lượt, `stopmacro` dừng tay). Macro đang có trong `config.json` của bạn: thêm dòng `loop 500` trước `chat /shop`, và thay dòng cuối `stopif Bạn cần có` bằng 3 dòng `delay 1200` / `closewin` / `until Bạn cần có`.
 - **Mới:** Tự về `/home treolong` (`spawnhome`) — phát hiện bot không còn ở gần lồng spawn (sau đăng nhập hoặc đang treo) thì tự gõ lệnh về, có giãn cách/giới hạn số lần, webhook `homeReturn` khi lệch và khi đã về.
 - **Sửa lỗi:** `spawnerprotect`, `autosell_spawn` và `autosell` (macro túi đầy) từng bật ngay lúc spawn, trước khi đăng nhập/vào menu xong và trước khi bot về tới chỗ treo lồng (gây báo nhầm người lạ, "quá xa/chunk chưa tải", macro bán chạy ngoài sảnh). Giờ đi đúng thứ tự: đợi tin `SẢNH ➞ Đăng nhập thành công…` → `/menu` + click ô 24 → chờ đứng cạnh lồng → mới bật cả ba và gửi webhook `featuresReady`.

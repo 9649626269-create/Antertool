@@ -415,7 +415,7 @@ async function shutdown(code = 0) {
               const tgUsage = () => {
                 console.log(colors.muted('  Usage: telegram set <token> [chatId] | chatid | test | panel | off'));
                 console.log(colors.muted('         telegram every <1s|10s|10m|off>  (nhịp cập nhật bảng) | mode edit|new | events [a,b,c] | commands on|off'));
-                console.log(colors.muted('         telegram logs [on|off|level|chat|bots|every|silent|send|test]  (log runtime gửi lên Telegram — gõ: telegram logs)'));
+                console.log(colors.muted('         telegram logs [on|off|level|chat|bots|every|keep|now|silent|send|test]  (log runtime gửi lên Telegram — gõ: telegram logs)'));
               };
               if (sub === 'set' && args[1]) {
                 if (!TelegramNotifier.looksLikeToken(args[1])) { console.log(colors.warn('  Token không đúng dạng — lấy từ @BotFather (vd 123456789:AAH...)')); break; }

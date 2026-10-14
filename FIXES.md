@@ -1,3 +1,30 @@
+# Bản sửa (fixed21) — Log runtime Telegram: 1 file chung cho tất cả bot, tự cập nhật theo chu kỳ
+
+**Yêu cầu:** sửa phần runtime log Telegram thành 1 file chứa log của tất cả bot và cập nhật mỗi 10s / 30s / 1p / 1h ...
+
+**Trước (fixed20):** mỗi lần tới nhịp gom, tool gửi **tin mới** gồm 1 file `log_<bot>.txt` cho TỪNG bot (3 bot = 3 file mỗi nhịp, rất nhanh đầy chat và dễ chạm giới hạn 10 tin/phút).
+
+**Nay:**
+- **1 file duy nhất `log_all.txt`** chứa log của tất cả bot + log hệ thống, xếp theo giờ, mỗi dòng ghi rõ bot (`14:05:12 [WARN  ] bot-2: ...`). Đầu file có `STATS SERVER` của từng bot (khối `[bot-1]`, `[bot-2]`...; gồm cả bot chưa có log nào).
+- **Cập nhật tại chỗ**: lần đầu gửi file (im lặng), các lần sau **sửa đúng tin đó** bằng `editMessageMedia` (không tin mới, không rung). Chu kỳ: `telegram logs every 10s|30s|1m|1h` (2s–24h, nhận cả `90`, `1h30m`). Không có gì mới (log + stats y hệt) thì bỏ qua, không gọi Telegram.
+- File giữ **N dòng mới nhất** (`telegram logs keep <n>`, mặc định 1000, 50–5000) nên chu kỳ dài vẫn không mất log ở giữa; quá thì bỏ dòng cũ và ghi số dòng bỏ. Có dòng ngăn ngày; dòng lặp kéo dài ghi `(×N · tới HH:MM:SS)`.
+- **Cập nhật ngay**: nút 🔄 dưới file, `/logs now` (Telegram), `telegram logs now` (tool).
+- **Không mất log khi lỗi mạng**: log nằm sẵn trong bộ nhớ, lỗi thì thử lại thưa dần (15s → tối đa 5 phút), có lại mạng là file đủ cả đoạn mất mạng (bản cũ bỏ dòng sau 3 lần thất bại). Lỗi tạm thời khi sửa (429/5xx/timeout) giữ nguyên tin cũ, không đẻ tin trùng; tin bị xoá thì tự gửi file mới.
+- `TelegramNotifier`: thêm `editDocument()` (editMessageMedia) và nút bấm cho `sendDocument()`.
+- `/logs [id] [n]` và `telegram logs send` vẫn dùng được: gửi thêm **1 file riêng** (`log_all.txt` hoặc `log_<bot>.txt`), không đụng file đang cập nhật.
+
+**Khác với trước — cần biết:**
+- Dòng `err` **không còn gửi nhanh ≤2s**: mọi thứ theo đúng chu kỳ bạn đặt (đặt 1h thì tối đa 1h mới thấy). Muốn xem ngay: nút 🔄 / `telegram logs now`. Cảnh báo kick/hết reconnect/bán lỗi vẫn là tin riêng có thông báo đẩy như cũ.
+- Mỗi lần chạy tool tạo **1 file mới** (file lần chạy trước giữ nguyên trong chat làm lịch sử), không nối tiếp vào file cũ.
+- `telegramLogMaxPerMin` (10) giờ tính theo **lần cập nhật/phút** — chu kỳ 2s sẽ bị chặn ở ~6s/lần; tăng tới 20 nếu cần.
+- Config mới: `telegramLogKeepLines`. Config cũ (`telegramLogEverySec`, `telegramLogLevels`, `telegramLogBots`, `telegramLogSilent`) vẫn dùng như cũ.
+
+**Test:** viết lại `test/telegram-logs.test.js` (Telegram giả có `editMessageMedia`): 1 file cho nhiều bot, sửa đúng tin cũ (`message_id`), bỏ qua khi không đổi, cập nhật theo chu kỳ khi chỉ stats đổi, tin bị xoá → gửi lại, lỗi tạm thời không đẻ tin trùng, mất mạng không mất log, giữ N dòng, gộp lặp `(×N · tới ...)`, lọc áp dụng lúc dựng file, CLI `every/keep/now`, `/logs now`, nút 🔄. Toàn bộ 16 bộ test qua (`npm test`).
+
+**Chưa test với Telegram thật** (không có mạng): cần thử `telegram logs test`, rồi chờ 1–2 chu kỳ xem file có tự đổi nội dung không. Việc Telegram cho phép `editMessageMedia` thay file văn bản là theo tài liệu Bot API; nếu server Telegram từ chối kiểu sửa này, tool sẽ tự rơi về gửi file mới (log lỗi trong `telegram logs` → "gửi lỗi").
+
+---
+
 # Bản sửa (fixed19) — Auto-sell Spawn: cảnh báo "bị bedrock che" + báo giả "KHÔNG bị dịch chuyển" + chuột phải thử lại
 
 **Yêu cầu:** sửa các lỗi trong log Auto-sell Spawn (tia ngắm "bị bedrock che", "GUI không mở sau 6s" → phải gõ `/home treolong`, rồi cảnh báo "Gõ /home treolong đã 8s mà KHÔNG bị dịch chuyển" dù server đã báo thành công).
