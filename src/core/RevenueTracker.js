@@ -41,6 +41,19 @@ function formatMoneyFixed(n) {
   return (neg ? '-' : '') + String(Math.round(a));
 }
 
+// Kiểu hiển thị trên Discord embed: 41350 -> "$41.35K", 4450000 -> "$4.45M", 950 -> "$950"
+function formatMoneyDollar(n) {
+  const s = formatMoneyFixed(n);
+  return s.startsWith('-') ? '-$' + s.slice(1).toUpperCase() : '$' + s.toUpperCase();
+}
+
+// 33000 -> "00:00:33", 3725000 -> "01:02:05" (giờ có thể quá 99 nếu chạy rất lâu)
+function formatClock(ms) {
+  const t = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const p = v => String(v).padStart(2, '0');
+  return `${p(Math.floor(t / 3600))}:${p(Math.floor((t % 3600) / 60))}:${p(t % 60)}`;
+}
+
 // "1.25k" | "2,5m" | "3b" | "$1,250" -> số. Không hiểu thì trả null.
 function parseMoneyToken(tok) {
   const m = /^\s*\$?\s*(\d+(?:[.,]\d+)*)\s*([kmbt])?\s*$/i.exec(String(tok || ''));
@@ -235,5 +248,7 @@ class RevenueTracker {
 }
 RevenueTracker.formatMoney = formatMoney;
 RevenueTracker.formatMoneyFixed = formatMoneyFixed;
+RevenueTracker.formatMoneyDollar = formatMoneyDollar;
+RevenueTracker.formatClock = formatClock;
 RevenueTracker.parseMoneyToken = parseMoneyToken;
 module.exports = RevenueTracker;

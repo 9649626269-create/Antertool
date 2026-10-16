@@ -276,6 +276,8 @@ Bot định kỳ đi qua từng lồng trong danh sách: **chuột phải vào l
 
 **Khi bật** `autosell_spawn`, bot xoay đầu về lồng trong tầm ngay (chỉnh lại góc nhìn) rồi mới tới vòng bán đầu tiên. Ở mỗi lồng, bot cũng **nhìn thẳng vào lồng + kiểm tra tia ngắm trúng lồng** trước khi chuột phải.
 
+**Tư thế khi xoay về lồng:** bot xác định mình đang **đứng / ngồi (shift) / bò** (theo tư thế server báo, phím shift, và độ cao trần thực tế — khe sát bedrock bị ép ngồi/bò) để tính đúng độ cao mắt (1.62 / 1.27 / 0.4), và **chờ ổn định** (đáp đất, hết trượt, server cập nhật xong tư thế) rồi mới xoay. Log `đã chỉnh góc nhìn về lồng — tư thế …` cho biết bot đang hiểu mình ở tư thế nào và dựa vào nguồn nào.
+
 ```
 cmd s1 autosell_spawn scan              # lưu mọi lồng trong 5 block quanh bot vào danh sách
 cmd s1 autosell_spawn every 30m         # chu kỳ: 30s | 5m | 2h | 1h30m | 1h 2m 3s

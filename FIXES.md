@@ -1,3 +1,51 @@
+# Bản sửa (fixed23) — Xoay về lồng theo TƯ THẾ THẬT của bot (đứng / ngồi / bò) + chờ cơ thể ổn định
+
+**Yêu cầu:** sửa phần tự xoay về lồng: xác định trạng thái người chơi (đang ngồi, đứng...) để quay về lồng đúng hơn.
+
+**Nguyên nhân (đọc từ code, chưa chạy thử với server thật):** góc nhìn tới lồng phụ thuộc **độ cao mắt**, mà bản cũ chỉ lấy `1.62` (đứng) rồi đoán "ngồi/bò" khi mắt lọt vào khối đặc. Thực tế mắt đứng 1.62 / ngồi (shift) 1.27 / bò 0.4 — lệch tới 1.2 block, lồng cách 1–2 block thì pitch sai 30–50° (nhìn trượt lồng). Ngoài ra còn 3 chỗ làm góc tính ra bị lệch:
+1. Tính góc lúc bot **đang nhảy/rơi** (AFK jump) hoặc **đang trượt** sau khi thả phím đi → chân đổi độ cao/vị trí ngay sau đó.
+2. Vừa **đổi shift** (vòng bán tự nhả shift trước khi chuột phải) nhưng server chưa kịp cập nhật tư thế → mắt vẫn ở độ cao cũ.
+3. Shift của AFK (`afkSneak`, tự nhả sau 0.3–0.9s) có thể nhả **giữa lúc đang nhắm** → tư thế đổi, góc lệch.
+
+**Đã sửa:**
+- Module mới `src/core/PoseUtil.js` (thuần, test riêng). Tư thế lấy theo thứ tự tin cậy: **server báo** (`entity.metadata[6]`, MC ≥ 1.14) → cờ `metadata[0]` → `entity.eyeHeight` của mineflayer (nếu khác 1.62) → phím shift bot đang giữ → mặc định đứng. Sau đó **kẹp theo trần thật** (đo chiều cao trống phía trên chân trên 5 cột của hitbox, có tính phiến/bậc thang): khe < 1.8 thì ép ngồi, < 1.5 thì ép bò — đúng luật của server, kể cả khi metadata trễ/thiếu. Cuối cùng vẫn giữ chốt chặn cũ (mắt lọt khối đặc thì hạ thấp).
+- `_bodyState()` trả về tư thế + trạng thái ổn định; `_eyePos()` dùng nó (mọi nơi tính góc/tầm với đều được hưởng: auto-sell, đập lồng, mở ender chest).
+- `_settleBody()`: trước khi tính góc, **chờ** bot đáp đất / hết trượt / server cập nhật xong tư thế ngồi↔đứng (tối đa ~1.2s; tư thế ~0.7s; đã ổn định thì không chờ). Xoay trượt thì chờ ổn định lần nữa rồi tính lại.
+- `_releaseAfkKeys()` giờ cũng **nhả shift của AFK** đang chờ tự nhả (không đụng shift có chủ đích của routine đập lồng).
+- Log chẩn đoán: `Auto-sell Spawn: đã chỉnh góc nhìn về lồng — tư thế ngồi (shift) (mắt +1.27, server báo) (x,y,z)`; khi trượt: `tia ngắm chưa trúng lồng — bị stone (x,y,z) che, tư thế đứng (mắt +1.62)`.
+
+**Cần biết / chưa kiểm chứng:**
+- Môi trường sửa không có mạng và không cài mineflayer → test dùng mineflayer giả. Việc `entity.metadata[6]` của chính bot có tới được code hay không phụ thuộc bản mineflayer + proxy. **Nếu log ghi nguồn là `mặc định`/`phím shift` trong khi bot thật sự đang ngồi/bò** nghĩa là server không gửi metadata của chính bot (hoặc proxy chặn) — lúc đó chỉ còn dựa vào phím shift + hình dạng trần (vẫn đúng cho ca khe thấp). Gửi mình dòng log đó để chỉnh tiếp.
+- Độ cao mắt theo MC 1.14+ (1.62 / 1.27 / 0.4). Server < 1.14 không đọc `metadata[6]` (chỉ dùng cờ + shift).
+- `_faceBlock` có thể chờ thêm tới ~1.2s mỗi lần nếu bot bị đẩy liên tục (dòng nước/băng chuyền) rồi vẫn xoay tiếp — không treo.
+
+**Test:** thêm `test/pose-util.test.js` (nguồn tư thế, đo trần, ca khe bedrock thật từ log, góc lệch khi sai tư thế, trạng thái ổn định) và `test/pose-aim.test.js` (BotSession với mineflayer giả: ngồi/bò/kẹp trần, chờ đáp đất, chờ server cập nhật tư thế, hết giờ chờ, dừng giữa chừng, nhả shift AFK). Đã thử vô hiệu hoá `_settleBody` → test rơi đúng chỗ. Toàn bộ 19 bộ test qua (`npm test`).
+
+---
+
+# Bản sửa (fixed22) — Thông báo Discord: đổi giao diện embed gần giống mẫu "Báo Cáo Tổng Kết Treo Máy"
+
+**Yêu cầu:** chỉnh thông báo Discord cho gần giống ảnh mẫu (embed "Kiểm Tra Kết Nối Webhook" màu xanh + "Báo Cáo Tổng Kết ..." màu cam, field nằm ngang, chân "Tên • Hôm nay lúc HH:mm").
+
+**Nay:**
+- **Test webhook** (`webhook test`, nút test trên web): tiêu đề `Kiểm Tra Kết Nối Webhook`, dòng "Antertool đã kết nối thành công tới Discord!", field `Trạng thái` / `Nguồn`, viền xanh.
+- **Báo cáo doanh thu** (Auto-sell Spawn và Macro) viền cam, bố cục đúng mẫu: `Người chơi | Server | Thời gian treo` / `Tổng thu nhập | Tốc độ trung bình | Số lượt bán` / `Trạng thái`. Tiền ghi kiểu `$41.35K`, `$4.45M/h`; thời gian treo `HH:MM:SS` (cộng dồn, cùng nguồn với bảng Telegram); có ảnh đầu nhân vật làm thumbnail (mc-heads.net). Dòng `Trạng thái` giữ thêm thông tin vòng vừa xong (`+$3.35K (4/5 lồng)`, `⚠️ N lồng lỗi`) và ghi chú khi chưa tính được tốc độ.
+- **Tổng hợp cả dàn bot** (`webhook revenue report` / gửi định kỳ): cùng bố cục, bảng từng bot vẫn nằm ở phần mô tả.
+- **Cảnh báo** (kick, hết reconnect, đủ tiền, túi đầy, bảo vệ lồng, bán lỗi, về home...): bỏ emoji + `<id>:` khỏi tiêu đề (màu viền vẫn thể hiện mức độ), thêm field `Người chơi` / `Server` + ảnh đầu. Dòng tiêu đề phía trên có tag người nhận (`❌ BOT BỊ KICK @ai-đó`) **giữ nguyên**.
+- **Lịch nghỉ**: `Bắt Đầu Giờ Nghỉ` / `Hết Giờ Nghỉ` có field giờ nghỉ, giờ vô lại, số bot.
+- Mọi embed đều có chân `Antertool` + timestamp (Discord tự hiện "Antertool • Hôm nay lúc 00:13").
+
+**Khác với trước — cần biết:**
+- Báo cáo doanh thu **gọn hơn**: bỏ bảng "6 giờ gần nhất", "7 ngày" và các mục hôm nay / hôm qua / ước tính ngày (vẫn xem được bằng `autosell_spawn revenue`, web và bảng Telegram). Bản tổng hợp cả dàn cũng bỏ 2 bảng đó.
+- "Số lượt bán" = số vòng bán đã ghi nhận; "Tốc độ trung bình" = trung bình 24h như trước (chỉ tính thời gian bot thực sự chạy).
+- Telegram không đổi.
+
+**Test:** thêm `test/discord-embed.test.js` (webhook giả trên localhost): định dạng tiền/giờ, payload test, thứ tự + `inline` các field, trạng thái lồng lỗi, tên người chơi lạ, macro, cảnh báo giữ nguyên tag, tổng hợp cả dàn, lịch nghỉ, và kiểm tra giới hạn embed của Discord. Toàn bộ 17 bộ test qua (`npm test`).
+
+**Chưa xem trên Discord thật** (không có mạng): cần chạy `webhook test` và `webhook revenue report` để xem ngoài đời. Ảnh đầu nhân vật phụ thuộc mc-heads.net; nếu trang đó lỗi thì embed vẫn gửi bình thường, chỉ thiếu ảnh.
+
+---
+
 # Bản sửa (fixed21) — Log runtime Telegram: 1 file chung cho tất cả bot, tự cập nhật theo chu kỳ
 
 **Yêu cầu:** sửa phần runtime log Telegram thành 1 file chứa log của tất cả bot và cập nhật mỗi 10s / 30s / 1p / 1h ...

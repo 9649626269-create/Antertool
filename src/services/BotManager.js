@@ -820,8 +820,10 @@ class BotManager {
       daily: list[0].daily.map((d, i) => ({ label: d.label, amount: sum(s => s.daily[i]?.amount) })),
     };
   }
+  // Tổng hợp cả dàn bot — cùng bố cục với báo cáo từng bot (bảng chi tiết từng bot nằm ở phần mô tả)
   buildRevenueSummaryEmbed(now = Date.now()) {
     const fmt = RevenueTracker.formatMoney;
+    const money = RevenueTracker.formatMoneyDollar;
     const rows = [];
     for (const b of this.bots) {
       const list = [this.revenue.stats(b.cfg.id, now), this.revenue.stats(b.cfg.id + '#macro', now)].filter(Boolean);
@@ -841,24 +843,25 @@ class BotManager {
       lines.push(`${cut(r.id, idW)} ${pad(fmt(r.s.last1h), 7)} ${pad(fmt(r.s.today), 8)} ${pad(r.s.avgPerHour == null ? '—' : fmt(r.s.avgPerHour), 7)}`);
     }
     if (rows.length > MAX) lines.push(`… và ${rows.length - MAX} bot khác`);
-    const hourly = rows[0].s.hourly.map((h, i) => ({ label: h.label, amount: rows.reduce((t, r) => t + (r.s.hourly[i]?.amount || 0), 0) }));
-    const daily = rows[0].s.daily.map((d, i) => ({ label: d.label, amount: rows.reduce((t, r) => t + (r.s.daily[i]?.amount || 0), 0) }));
-    const hrs = hourly.slice(-6).map(h => `${h.label} ${pad(fmt(h.amount), 8)}`).join('\n');
-    const dys = daily.map(d => `${d.label} ${pad(fmt(d.amount), 8)}`).join('\n');
-    const est = avgH == null ? '\n_(cần ≥2 vòng bán liên tiếp để tính tốc độ)_' : '';
+    const hosts = [...new Set(this.bots.map(b => String(b.cfg.host || '').trim()).filter(Boolean))];
+    const server = hosts.length === 1 ? hosts[0] : (hosts.length ? `${hosts.length} server` : '—');
+    const upMs = Math.max(0, ...this.bots.map(b => this.revenue.uptime(b.cfg.id, now).totalMs));
+    const online = this.bots.filter(b => b.isOnline).length;
+    const status = [`${online}/${this.bots.length} bot đang hoạt động`];
+    if (avgH == null) status.push('Cần ≥2 vòng bán liên tiếp để tính tốc độ');
     return {
-      title: `📊 Tổng hợp doanh thu Auto-sell (${rows.length} bot)`,
+      title: `Báo Cáo Tổng Kết Doanh Thu (${rows.length} Bot)`,
       description: '```\n' + lines.join('\n') + '\n```',
-      color: 0x22c55e,
+      color: Notifier.COLOR.report,
       fields: [
-        { name: '💰 Hôm nay', value: `**${fmt(sum(s => s.today))}**\nHôm qua: ${fmt(sum(s => s.yesterday))}`, inline: true },
-        { name: '⏱ 1 giờ qua', value: `**${fmt(sum(s => s.last1h))}**\nTB/giờ: ${avgH == null ? '—' : fmt(avgH)}${est}`, inline: true },
-        { name: '📅 24 giờ qua', value: `**${fmt(sum(s => s.last24h))}**\n~/ngày: ${avgH == null ? '—' : '~' + fmt(avgH * 24)}`, inline: true },
-        { name: '🕒 6 giờ gần nhất (cả dàn)', value: '```\n' + hrs + '\n```', inline: true },
-        { name: '🗓 7 ngày gần nhất (cả dàn)', value: '```\n' + dys + '\n```', inline: true },
-        { name: '📊 Tổng cộng', value: `${fmt(sum(s => s.total))} trong ${sum(s => s.cycles)} vòng`, inline: false },
+        { name: 'Số bot', value: String(this.bots.length), inline: true },
+        { name: 'Server', value: server, inline: true },
+        { name: 'Thời gian treo', value: RevenueTracker.formatClock(upMs), inline: true },
+        { name: 'Tổng thu nhập', value: money(sum(s => s.total)), inline: true },
+        { name: 'Tốc độ trung bình', value: avgH == null ? '—' : `${money(avgH)}/h`, inline: true },
+        { name: 'Số lượt bán', value: String(sum(s => s.cycles)), inline: true },
+        { name: 'Trạng thái', value: status.join('\n'), inline: false },
       ],
-      footer: { text: 'Tổng hợp tất cả bot (auto-sell macro + auto-sell spawn)' },
       timestamp: new Date(now).toISOString(),
     };
   }
@@ -965,9 +968,14 @@ class BotManager {
   }
   _notifyRest(sched, count) {
     this.notifier?.send('schedule', {
-      title: `😴 Lịch nghỉ (${sched.outTime})`,
+      title: 'Bắt Đầu Giờ Nghỉ',
       description: `Đã out ${count} bot. Sẽ tự vô lại lúc ${sched.inTime}.`,
       color: 0xfacc15,
+      fields: [
+        { name: 'Giờ nghỉ', value: String(sched.outTime), inline: true },
+        { name: 'Vô lại lúc', value: String(sched.inTime), inline: true },
+        { name: 'Số bot', value: String(count), inline: true },
+      ],
       timestamp: new Date().toISOString(),
     });
   }
@@ -983,9 +991,13 @@ class BotManager {
       }
     }
     this.notifier?.send('schedule', {
-      title: `⏰ Hết giờ nghỉ (${sched.inTime})`,
+      title: 'Hết Giờ Nghỉ',
       description: `Đang vô lại ${count} bot.`,
       color: 0x4ade80,
+      fields: [
+        { name: 'Vô lại lúc', value: String(sched.inTime), inline: true },
+        { name: 'Số bot', value: String(count), inline: true },
+      ],
       timestamp: new Date().toISOString(),
     });
   }

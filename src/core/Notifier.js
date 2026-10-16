@@ -29,6 +29,10 @@ const NEW_EVENTS = ['featuresReady', 'homeReturn', 'sellFailed'];
 const DEFAULT_EVENTS = Object.keys(EVENT_LABELS);
 // Các sự kiện "báo động" có dòng tiêu đề + tag người nhận (kiểu: ❌ BOT BỊ KICK @ai-đó)
 const DEFAULT_MENTION_EVENTS = ['disconnect', 'reconnectFailed', 'spawnerThreat'];
+// Phong cách embed: tiêu đề Viết Hoa Từng Chữ, field nằm ngang (inline), chân embed "Antertool • Hôm nay lúc HH:mm"
+// (Discord tự ghép timestamp vào cạnh footer.text). Màu lấy theo mẫu: xanh = kết nối/ổn, cam = báo cáo tổng kết.
+const BRAND = 'Antertool';
+const COLOR = { ok: 0x6ef16f, report: 0xcf8338 };
 
 class Notifier {
   constructor(cfg = {}) {
@@ -69,6 +73,15 @@ class Notifier {
   }
   static get EVENT_LABELS() { return EVENT_LABELS; }
   static get NEW_EVENTS() { return NEW_EVENTS; }
+  static get BRAND() { return BRAND; }
+  static get COLOR() { return COLOR; }
+  // Mọi embed đều có chân "Antertool" + timestamp (Discord hiện "Antertool • Hôm nay lúc 00:13"); không ghi đè nếu embed đã tự đặt.
+  static finish(embed) {
+    const e = { ...embed };
+    if (!e.footer || !e.footer.text) e.footer = { ...(e.footer || {}), text: BRAND };
+    if (!e.timestamp) e.timestamp = new Date().toISOString();
+    return e;
+  }
   // headline (tuỳ chọn): dòng chữ nằm TRÊN embed, ví dụ "❌ BOT BỊ KICK"; sự kiện nằm trong mentionEvents thì thêm tag phía sau.
   send(eventKey, embed, headline) {
     if (!this.isEventOn(eventKey)) return Promise.resolve(false);
@@ -79,16 +92,20 @@ class Notifier {
   }
   testMention() {
     return this._post({
-      title: '🟠 test: bị kick', description: 'Đây là tin thử — xem dòng tiêu đề phía trên có tag đúng người chưa.',
-      color: 0xf97316, timestamp: new Date().toISOString(),
+      title: 'Bot Bị Kick (Tin Thử)', description: 'Đây là tin thử — xem dòng tiêu đề phía trên có tag đúng người chưa.',
+      color: 0xf97316,
+      fields: [{ name: 'Trạng thái', value: 'Tin thử, không phải sự cố thật', inline: true }, { name: 'Nguồn', value: BRAND, inline: true }],
     }, ['❌ BOT BỊ KICK (test)', this.mention].filter(Boolean).join(' '));
   }
   test(embed) {
     return this._post(embed || {
-      title: '✅ Test webhook thành công',
-      description: 'Anter đã kết nối được tới webhook này.',
-      color: 0x22d3ee,
-      timestamp: new Date().toISOString(),
+      title: 'Kiểm Tra Kết Nối Webhook',
+      description: `${BRAND} đã kết nối thành công tới Discord!`,
+      color: COLOR.ok,
+      fields: [
+        { name: 'Trạng thái', value: 'Hoạt động bình thường', inline: true },
+        { name: 'Nguồn', value: `Minecraft ${BRAND}`, inline: true },
+      ],
     });
   }
   _post(embed, content = '') {
@@ -97,7 +114,7 @@ class Notifier {
       try {
         const u = new URL(this.url);
         const lib = u.protocol === 'http:' ? http : https;
-        const body = { embeds: [embed] };
+        const body = { embeds: [Notifier.finish(embed)] };
         if (content) { body.content = content.substring(0, 1900); body.allowed_mentions = this._allowedMentions(body.content); }
         const data = JSON.stringify(body);
         const req = lib.request(u, {

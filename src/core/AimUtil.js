@@ -73,4 +73,4 @@ function aimCheck({ eye, yaw, pitch, target, maxDist = 7, getBlock, step = 0.05 
   return { hit: false, dist: maxDist };
 }
 
-module.exports = { isFullCube, viewDir, anglesTo, aimCheck, eyeHeightFor, EYE_STAND };
+module.exports = { isFullCube, viewDir, anglesTo, aimCheck, eyeHeightFor, EYE_STAND, EYE_SNEAK, EYE_CRAWL };

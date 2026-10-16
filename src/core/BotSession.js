@@ -15,7 +15,8 @@ const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const MacroEngine = require('./MacroEngine');
 const Notifier = require('./Notifier');
-const { anglesTo, aimCheck, eyeHeightFor, EYE_STAND } = require('./AimUtil');
+const { anglesTo, aimCheck, EYE_STAND } = require('./AimUtil');
+const { resolvePlayerPose, describePose, supportsPoseMeta } = require('./PoseUtil');
 const SG = require('./SpawnerGuard');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
@@ -161,6 +162,7 @@ class BotSession extends EventEmitter {
     this._sellWhy = '';
     this._viewLockUntil = 0;       // đang nhắm lồng/rương: AFK không được xoay đầu/đi/nhảy cho tới mốc này
     this._lastAim = null;
+    this._lastBody = null;         // trạng thái cơ thể lần tính gần nhất (tư thế đứng/ngồi/bò, độ cao mắt) — xem _bodyState
     // Doanh thu: server báo số tiền bán được (vd 1.25k / 2.4m / 1.1b) vào chat của chính bot.
     // Trong lúc chạy vòng bán (+ vài giây sau) bot đọc các tin đó, cộng lại, ghi vào RevenueTracker
     // rồi gửi báo cáo (doanh thu/giờ, /ngày) qua webhook.
@@ -264,11 +266,41 @@ class BotSession extends EventEmitter {
     try { this._manager?.telegramAlert?.(this, eventKey, title, description, headline); } catch { /* Telegram lỗi không được làm hỏng bot */ }
     const n = this._manager?.notifier;
     if (!n?.isEventOn(eventKey)) return;
-    n.send(eventKey, {
-      title, description, color,
-      footer: { text: this.cfg.id },
+    n.send(eventKey, this._alertEmbed(title, description, color), headline);
+  }
+  // ----- Phong cách embed Discord (người chơi / server / ảnh đầu / chân "Antertool • giờ") -----
+  _playerLabel() {
+    const id = String(this.cfg.id), name = String(this.cfg.username || id);
+    return name.toLowerCase() === id.toLowerCase() ? name : `${name} (${id})`;
+  }
+  _serverLabel() {
+    const port = Number(this.cfg.port);
+    return `${this.cfg.host || '—'}${port && port !== 25565 ? ':' + port : ''}`;
+  }
+  // Ảnh đầu nhân vật làm thumbnail; tên không hợp lệ (vd. có dấu cách) thì bỏ qua cho khỏi lỗi
+  _headThumb() {
+    const name = String(this.cfg.username || '');
+    return /^\w{1,16}$/.test(name) ? { url: `https://mc-heads.net/avatar/${name}/100` } : undefined;
+  }
+  // Tiêu đề call-site dạng "🟠 bot-1: bị kick" -> "Bị kick" (emoji + id đã có trong màu / field "Người chơi")
+  _alertTitle(title) {
+    let t = String(title || '').replace(/^[^\p{L}\p{N}]+/u, '');
+    const pre = `${this.cfg.id}: `;
+    if (t.startsWith(pre)) t = t.slice(pre.length);
+    return t ? t.charAt(0).toLocaleUpperCase('vi') + t.slice(1) : String(title || '');
+  }
+  _alertEmbed(title, description, color) {
+    return Notifier.finish({
+      title: this._alertTitle(title),
+      description,
+      color,
+      fields: [
+        { name: 'Người chơi', value: this._playerLabel(), inline: true },
+        { name: 'Server', value: this._serverLabel(), inline: true },
+      ],
+      thumbnail: this._headThumb(),
       timestamp: new Date().toISOString(),
-    }, headline);
+    });
   }
   // Thông báo kick kiểu: "❌ BOT BỊ KICK @tag" + lý do + ⏰ giờ + 🔄 sắp reconnect sau bao lâu (lần mấy).
   // Chờ tối đa 2.5s để biết thời gian reconnect (do scheduleReconnect tính) rồi mới gửi 1 tin duy nhất.
@@ -1174,58 +1206,42 @@ class BotSession extends EventEmitter {
     const est = s.avgPerHour == null ? ' (cần ≥2 vòng liên tiếp để tính tốc độ)' : (s.observedMs < 3600000 ? ' (ước tính — mới đo ' + this._fmtDuration(s.observedMs) + ')' : '');
     return `1h qua: ${fmt(s.last1h)} | TB/giờ: ${s.avgPerHour == null ? '—' : fmt(s.avgPerHour)} | ~/ngày: ${s.perDayEst == null ? '—' : fmt(s.perDayEst)}${est} | hôm nay: ${fmt(s.today)} | 24h: ${fmt(s.last24h)} | tổng: ${fmt(s.total)} (${s.cycles} vòng)`;
   }
+  // Embed báo cáo doanh thu — bố cục: [Người chơi | Server | Thời gian treo] / [Tổng thu nhập | Tốc độ trung bình | Số lượt bán] / Trạng thái
   _buildRevenueEmbed(cap, kind = 'spawn') {
     const macro = kind === 'macro';
-    const fmt = RevenueTracker.formatMoneyFixed; // luôn 2 số lẻ: 2.01m, 31.20m
+    const money = RevenueTracker.formatMoneyDollar; // $41.35K, $4.45M
     const s = macro ? this.getMacroRevenueStats() : this.getRevenueStats();
-    const id = this.cfg.id;
     const noRate = !s || s.avgPerHour == null;
-    const est = s && !noRate && s.observedMs < 3600000;
-    const estNote = noRate ? '\n_(cần ≥2 vòng bán liên tiếp để tính tốc độ — vòng đầu là hàng dồn nên không tính)_' : (est ? '\n_(ước tính — mới đo ' + this._fmtDuration(s.observedMs) + ')_' : '');
-    const pend = macro ? this._macroRevPending : this._revPending;
-    const fields = [];
-    // 1) Vòng vừa xong: tiền + tỉ lệ lồng bán thành công / lỗi
+    const up = this._rev.uptime(this.cfg.id); // thời gian online cộng dồn (cùng nguồn với bảng Telegram)
+    // Trạng thái: dòng đầu = bot đang chạy hay không; các dòng sau = vòng vừa xong (giữ cảnh báo lồng lỗi) / ghi chú
+    const status = [this.isOnline ? 'Đang hoạt động' : 'Ngoại tuyến'];
     if (cap) {
-      let v;
       if (macro) {
-        v = `**+${fmt(cap.sum)}**\n${cap.viaBalance ? 'đo theo số dư tăng' : cap.hits + ' tin bán'} · macro "${cap.macro}"`;
+        status.push(`Lần bán vừa xong: +${money(cap.sum)} · macro "${cap.macro}"${cap.viaBalance ? ' (đo theo số dư)' : ''}`);
       } else {
         const total = cap.total || cap.done;
         const fail = Math.max(0, total - cap.done);
-        v = `**+${fmt(cap.sum)}**\n${cap.done}/${total} lồng bán thành công`;
-        if (fail) v += `\n⚠️ ${fail} lồng lỗi`;
-        if (cap.hits !== cap.done) v += `\n_(đọc được ${cap.hits} tin báo tiền)_`;
+        status.push(`Vòng vừa xong: +${money(cap.sum)} (${cap.done}/${total} lồng)`);
+        if (fail) status.push(`⚠️ ${fail} lồng lỗi`);
       }
-      fields.push({ name: macro ? '💰 LẦN BÁN VỪA XONG' : '💰 VÒNG VỪA XONG', value: v, inline: true });
     }
-    if (pend.cycles > 1) fields.push({ name: '🧾 TỪ BÁO CÁO TRƯỚC', value: `**+${fmt(pend.amount)}**\n${pend.cycles} vòng`, inline: true });
-    if (s) {
-      // 2) Hiệu suất: ghi rõ trung bình là của 24h, tách khỏi giờ vừa qua
-      fields.push({ name: '⏱️ HIỆU SUẤT', value: `Trung bình 24h: **${noRate ? '—' : fmt(s.avgPerHour) + '/giờ'}**\nGiờ vừa qua: **${fmt(s.last1h)}**${estNote}`, inline: true });
-      // 3) Doanh thu: số thật trước, ước tính để cuối
-      fields.push({ name: '📅 DOANH THU', value: [
-        `Hôm nay: ${fmt(s.today)}`,
-        `24 giờ qua: ${fmt(s.last24h)}`,
-        `Hôm qua: ${fmt(s.yesterday)}`,
-        `Ước tính/ngày: ${noRate ? '—' : '~' + fmt(s.perDayEst)}`,
-      ].join('\n'), inline: true });
-      const pad = (str, n) => String(str).padStart(n, ' ');
-      const hours = s.hourly.slice(-6).map(h => `${h.label} → ${pad(fmt(h.amount), 6)}`).join('\n');
-      const days = s.daily.map(d => `${d.label} → ${pad(fmt(d.amount), 6)}`).join('\n');
-      fields.push({ name: '🕐 6 GIỜ GẦN NHẤT', value: '```\n' + hours + '\n```', inline: true });
-      fields.push({ name: '📅 7 NGÀY', value: '```\n' + days + '\n```', inline: true });
-      // 4) Tổng cộng + thời gian chạy (tính từ vòng đầu tiên được ghi nhận)
-      const runMin = s.since ? Math.max(0, Math.floor((Date.now() - s.since) / 60000)) : 0;
-      const run = runMin >= 60 ? `${Math.floor(runMin / 60)}h ${String(runMin % 60).padStart(2, '0')}m` : `${runMin}m`;
-      fields.push({ name: '📊 TỔNG CỘNG', value: `**${fmt(s.total)}** • ${s.cycles} vòng${s.since ? `\n⏱️ Thời gian chạy: ${run}` : ''}`, inline: false });
-    }
-    return {
-      title: macro ? '💸 BÁO CÁO AUTO-SELL (MACRO)' : '💸 BÁO CÁO AUTO-SELL SPAWN',
-      description: `Acc: **${id}**`,
-      color: 0x22c55e,
-      fields,
-      footer: { text: `🕐 Cập nhật: ${this._rev.clock(Date.now())}` },
-    };
+    if (noRate) status.push('Cần ≥2 vòng bán liên tiếp để tính tốc độ');
+    else if (s.observedMs < 3600000) status.push(`Tốc độ là ước tính — mới đo ${this._fmtDuration(s.observedMs)}`);
+    return Notifier.finish({
+      title: macro ? 'Báo Cáo Tổng Kết Auto-Sell (Macro)' : 'Báo Cáo Tổng Kết Auto-Sell Spawn',
+      color: Notifier.COLOR.report,
+      fields: [
+        { name: 'Người chơi', value: this._playerLabel(), inline: true },
+        { name: 'Server', value: this._serverLabel(), inline: true },
+        { name: 'Thời gian treo', value: RevenueTracker.formatClock(up.totalMs), inline: true },
+        { name: 'Tổng thu nhập', value: money(s ? s.total : 0), inline: true },
+        { name: 'Tốc độ trung bình', value: noRate ? '—' : `${money(s.avgPerHour)}/h`, inline: true },
+        { name: 'Số lượt bán', value: String(s ? s.cycles : 0), inline: true },
+        { name: 'Trạng thái', value: status.join('\n'), inline: false },
+      ],
+      thumbnail: this._headThumb(),
+      timestamp: new Date().toISOString(),
+    });
   }
   // Gửi qua webhook RIÊNG nếu có, không thì qua webhook chung (sự kiện "revenue")
   _sendRevenueReport(cap, kind = 'spawn') {
@@ -1504,15 +1520,43 @@ class BotSession extends EventEmitter {
     this._runSellWithRecovery().catch(e => this.log('err', 'Auto-sell Spawn lỗi: ' + e.message));
     return true;
   }
-  // Mắt bot (toạ độ thế giới)
-  // Chiều cao mắt có kiểm tra thực tế: bot đứng trong khe cao 1 block (lồng treo sát bedrock) bị server ép tư thế ngồi/bò nhưng
-  // mineflayer vẫn báo 1.62 -> mắt lọt vào khối đặc trên đầu, tia ngắm luôn "bị bedrock che". Xem eyeHeightFor (AimUtil).
+  // Trạng thái cơ thể của bot: tư thế (đứng / ngồi=shift / bò / bơi...), đang nhảy-rơi, đang trượt, server đã cập nhật tư thế chưa.
+  // Tư thế lấy từ SERVER (metadata) rồi mới tới phím shift / hình dạng khe quanh đầu — xem PoseUtil. null = chưa có vị trí.
+  _bodyState(mc) {
+    const e = mc?.entity;
+    if (!e?.position) return null;
+    let sneak = false;
+    try { sneak = !!mc.getControlState?.('sneak'); } catch { }
+    let st = null;
+    try {
+      const ver = mc.version || mc.registry?.version?.minecraftVersion || this.cfg.version;
+      st = resolvePlayerPose({ entity: e, sneak, hasPoseMeta: supportsPoseMeta(ver), getBlock: q => mc.blockAt(this._vec(q)) });
+    } catch { }
+    if (!st) st = { key: 'standing', label: 'đứng', eye: typeof e.eyeHeight === 'number' ? e.eyeHeight : EYE_STAND, source: 'assumed', headroom: null, settled: true, why: null };
+    this._lastBody = st;
+    return st;
+  }
+  // Mắt bot (toạ độ thế giới) — độ cao mắt theo TƯ THẾ THẬT của bot (đứng 1.62 / ngồi 1.27 / bò 0.4). Lồng treo sát bedrock: server ép bot
+  // ngồi/bò nhưng mineflayer vẫn có thể báo 1.62 -> mắt lọt vào khối đặc trên đầu, tia ngắm luôn "bị bedrock che".
   _eyePos(mc) {
     const p = mc.entity.position;
-    const base = typeof mc.entity.eyeHeight === 'number' ? mc.entity.eyeHeight : EYE_STAND;
-    let h = base;
-    try { h = eyeHeightFor({ pos: p, base, getBlock: q => mc.blockAt(this._vec(q)) }); } catch { }
-    return { x: p.x, y: p.y + h, z: p.z };
+    const st = this._bodyState(mc);
+    return { x: p.x, y: p.y + (st ? st.eye : EYE_STAND), z: p.z };
+  }
+  // Chờ cơ thể ổn định trước khi tính góc nhìn: đang nhảy/rơi (chân sắp đổi độ cao), đang trượt sau khi thả phím đi,
+  // hoặc vừa đổi shift mà server chưa cập nhật tư thế (đứng <-> ngồi) — tính lúc đó là lệch, về tới lồng thì nhìn trượt.
+  // Chờ tối đa ~1.2s (tư thế: ~0.7s) rồi tính tiếp bằng trạng thái hiện có. Đã ổn định thì trả về ngay, không sleep.
+  async _settleBody(mc, { stop = null } = {}) {
+    const t0 = nowMs();
+    let st = this._bodyState(mc);
+    while (st && !st.settled) {
+      const limit = st.why === 'pose' ? 700 : 1200;
+      if (nowMs() - t0 >= limit) break;
+      if ((stop && stop()) || !this.isOnline || this.mc !== mc || !mc.entity?.position) break;
+      await sleep(80);
+      st = this._bodyState(mc);
+    }
+    return st;
   }
   // Tia ngắm HIỆN TẠI (yaw/pitch của bot) có tới được block p không? Chỉ khối đặc nguyên khối mới che tia —
   // block nửa khối/nhỏ (chồi thạch anh tím, nến, thảm, rào, bậc thang...) tia đi xuyên qua (xem AimUtil.js).
@@ -1523,7 +1567,11 @@ class BotSession extends EventEmitter {
   }
   _aimWhy() {
     const b = this._lastAim?.blocker;
-    return b ? ` — bị ${b.name} (${b.x},${b.y},${b.z}) che` : '';
+    const st = this._lastAim?.pose;
+    const parts = [];
+    if (b) parts.push(`bị ${b.name} (${b.x},${b.y},${b.z}) che`);
+    if (st) parts.push(`tư thế ${describePose(st)}`);
+    return parts.length ? ` — ${parts.join(', ')}` : '';
   }
   // Giữ nguyên góc nhìn: AFK không được xoay đầu/đi/nhảy trong `ms` tới. (Lỗi cũ: AFK walk/jump gọi look() ngẫu nhiên mỗi ~0.5–5s,
   // đè lên góc nhìn vừa chỉnh về lồng ngay trước lúc chuột phải/đào nên "góc nhìn không đổi".)
@@ -1535,6 +1583,12 @@ class BotSession extends EventEmitter {
   _releaseAfkKeys() {
     for (const k of ['afkJumpOff', 'wafkKey', 'wafkJump']) this._clearTimer(k);
     try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) this.mc?.setControlState(k, false); } catch { }
+    // AFK đang giữ shift (nhả sau 0.3-0.9s): nhả luôn — để nó tự nhả GIỮA lúc nhắm thì tư thế đổi, mắt đổi độ cao, góc nhìn lệch.
+    // Không đụng tới shift có chủ đích của routine đập lồng (_spawnerBusy).
+    if (this._timers.has('afkSneak')) {
+      this._clearTimer('afkSneak');
+      if (!this._spawnerBusy) { try { this.mc?.setControlState('sneak', false); } catch { } }
+    }
   }
   // Xoay đầu nhìn thẳng vào tâm block p rồi KIỂM TRA tia ngắm tới được block đó (bỏ qua block nửa khối); lệch/bị đè thì xoay lại, tối đa `tries` lần.
   // true = tia ngắm tới block. false = đã xoay nhưng bị khối đặc che / ngoài tầm (người gọi vẫn quyết định có làm tiếp hay không).
@@ -1542,14 +1596,17 @@ class BotSession extends EventEmitter {
     this._holdView(holdMs + 2000);
     this._releaseAfkKeys();
     this._lastAim = null;
+    await this._settleBody(mc, { stop }); // đứng yên + biết đúng tư thế (đứng/ngồi/bò) rồi mới tính góc
     for (let i = 0; i < tries; i++) {
       if ((stop && stop()) || !this.isOnline || this.mc !== mc || !mc.entity?.position) return false;
       const a = anglesTo(this._eyePos(mc), { x: p.x + 0.5, y: p.y + 0.5, z: p.z + 0.5 });
       try { await this._withTimeout(mc.look(a.yaw, a.pitch, true), 1500); } catch { } // có timeout: look() chỉ xong khi gói xoay đã gửi
       await sleep(jit(250, 80)); // chờ gói xoay đầu tới server trước khi click/đào
       const r = this._aimCheckBlock(mc, p, reach);
+      r.pose = this._lastBody || null; // tư thế lúc kiểm tra (để log chẩn đoán khi trượt)
       this._lastAim = r;
       if (r.hit) { this._holdView(holdMs); return true; }
+      if (i < tries - 1) await this._settleBody(mc, { stop }); // trượt: có thể tư thế vừa đổi giữa chừng -> chờ ổn định rồi tính lại
     }
     return false;
   }
@@ -1563,11 +1620,12 @@ class BotSession extends EventEmitter {
     }
     if (this._tp.frozen(nowMs())) { this.log('warn', 'Auto-sell Spawn: bot vẫn đang chờ teleport — chưa chỉnh được góc nhìn (vòng bán sẽ tự nhìn lồng trước khi chuột phải)'); return false; }
     if (this._isBusy) { this.log('sys', 'Auto-sell Spawn: bot đang bận việc khác — vòng bán sẽ tự nhìn lồng trước khi chuột phải'); return false; }
+    await this._settleBody(mc); // đang nhảy/trượt/vừa đổi shift: chờ ổn định để độ cao mắt đúng
     const eye = this._eyePos(mc);
     const p = this.sellSpawnList.find(q => Math.hypot(eye.x - (q.x + 0.5), eye.y - (q.y + 0.5), eye.z - (q.z + 0.5)) <= SELL_SPAWN_REACH);
-    if (!p) { this.log('warn', 'Auto-sell Spawn: chưa có lồng nào trong tầm để chỉnh góc nhìn'); return false; }
+    if (!p) { this.log('warn', `Auto-sell Spawn: chưa có lồng nào trong tầm để chỉnh góc nhìn — ${describePose(this._lastBody)}`); return false; }
     const ok = await this._faceBlock(mc, p);
-    this.log(ok ? 'sys' : 'warn', `Auto-sell Spawn: ${ok ? 'đã chỉnh góc nhìn về lồng' : `đã xoay về lồng nhưng tia ngắm chưa tới${this._aimWhy()}`} (${p.x},${p.y},${p.z})`);
+    this.log(ok ? 'sys' : 'warn', `Auto-sell Spawn: ${ok ? `đã chỉnh góc nhìn về lồng — tư thế ${describePose(this._lastBody)}` : `đã xoay về lồng nhưng tia ngắm chưa tới${this._aimWhy()}`} (${p.x},${p.y},${p.z})`);
     return ok;
   }
   _withTimeout(p, ms) {
