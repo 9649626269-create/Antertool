@@ -1,5 +1,6 @@
 'use strict';
 const EventEmitter = require('events');
+const { dbg } = require('./debug');
 /**
  * MacroEngine — chạy các kịch bản (macro) gồm nhiều bước tuần tự:
  *   chat <lệnh MC>             gửi chat/lệnh
@@ -160,7 +161,7 @@ class MacroEngine {
         this.bot.log('sys', 'Macro: còn GUI mở sau khi kết thúc — chuyển cho WindowRouter xử lý');
         WindowRouter.route(this.bot, win);
       }
-    } catch { }
+    } catch (e) { dbg('MacroEngine', e); }
     if (!ok || aborted || this._stopRequested) return false;
     if (macro.next) {
       return this.run(macro.next, depth + 1);
@@ -296,7 +297,7 @@ class MacroEngine {
         pc = loopStart; // vòng for tự +1 => chạy tiếp từ dòng ngay sau "loop"
         continue;
       } else if (op === 'closewin') {
-        try { const w = this.bot.mc?.currentWindow; if (w) this.bot.mc.closeWindow(w); } catch { }
+        try { const w = this.bot.mc?.currentWindow; if (w) this.bot.mc.closeWindow(w); } catch (e) { dbg('MacroEngine', e); }
       } else if (op === 'stopif') {
         const text = line.slice(line.indexOf(' ') + 1).trim();
         if (!text) {

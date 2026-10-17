@@ -1,5 +1,6 @@
 'use strict';
 const net = require('net');
+const { dbg } = require('./debug');
 const tls = require('tls');
 const http = require('http');
 const fs = require('fs');
@@ -161,8 +162,7 @@ class ProxyManager {
         this.markDead(idx, 'die');
       }
       this._persist();
-    } catch {
-    }
+    } catch (e) { dbg('ProxyManager', e); }
   }
   _initEntry(p) {
     return {
@@ -279,11 +279,11 @@ class ProxyManager {
     try {
       sock = await this.connect(p, '1.1.1.1', 80);
       const ping = nowMs() - start;
-      try { sock.destroy(); } catch {}
+      try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); }
       this.markLive(idx, ping);
       return { ok: true, ping, type: p.type, quality: ProxyManager.gradeQuality(ping) };
     } catch (e) {
-      if (sock) { try { sock.destroy(); } catch {} }
+      if (sock) { try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); } }
       const status = e.message.includes('auth') ? 'auth_fail' :
                      e.message.includes('timeout') ? 'timeout' : 'die';
       this.markDead(idx, status);
@@ -312,7 +312,7 @@ class ProxyManager {
         ? tls.connect(proxy.port, proxy.host, { rejectUnauthorized: false })
         : net.connect(proxy.port, proxy.host);
       const timer = setTimeout(() => {
-        try { sock.destroy(); } catch { }
+        try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); }
         settle(new Error('HTTP proxy timeout'));
       }, timeout);
       const settle = (err, res) => {
@@ -364,7 +364,7 @@ class ProxyManager {
       let settled = false;
       const sock = net.connect(proxy.port, proxy.host);
       const timer = setTimeout(() => {
-        try { sock.destroy(); } catch { }
+        try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); }
         settle(new Error('SOCKS4 timeout'));
       }, timeout);
       const settle = (err, res) => {
@@ -402,7 +402,7 @@ class ProxyManager {
       let step = 0;
       const sock = net.connect(proxy.port, proxy.host);
       const timer = setTimeout(() => {
-        try { sock.destroy(); } catch { }
+        try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); }
         settle(new Error('SOCKS5 timeout'));
       }, timeout);
       const settle = (err, res) => {
@@ -470,11 +470,11 @@ class ProxyManager {
       try {
         sock = await this.connect(p, '1.1.1.1', 80);
         const ping = nowMs() - start;
-        try { sock.destroy(); } catch {}
+        try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); }
         results.push({ type, ping, ok: true });
         break;
       } catch (e) {
-        if (sock) { try { sock.destroy(); } catch {} }
+        if (sock) { try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); } }
         results.push({ type, error: e.message, ok: false });
       }
     }
@@ -564,13 +564,13 @@ class ProxyManager {
     try {
       sock = await this.connect(p, '1.1.1.1', 80);
       const ping = nowMs() - start;
-      try { sock.destroy(); } catch {}
+      try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); }
       result.ping = ping;
       result.status = 'live';
       result.quality = ProxyManager.gradeQuality(ping);
       this.markLive(idx, ping);
     } catch (e) {
-      if (sock) { try { sock.destroy(); } catch {} }
+      if (sock) { try { sock.destroy(); } catch (e) { dbg('ProxyManager', e); } }
       result.status = e.message.includes('auth') ? 'auth_fail' :
                       e.message.includes('timeout') ? 'timeout' : 'die';
       this.markDead(idx, result.status);
@@ -589,7 +589,7 @@ class ProxyManager {
     try {
       p.geo = await this._fetchGeo(p.host);
       result.geo = p.geo;
-    } catch {}
+    } catch (e) { dbg('ProxyManager', e); }
     if (result.quality === 'unknown' && result.ping >= 0) {
       result.quality = ProxyManager.gradeQuality(result.ping);
     }

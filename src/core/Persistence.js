@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const { dbg } = require('./debug');
 const path = require('path');
 class Persistence {
   constructor(configPath = path.join(process.cwd(), 'config.json')) {
@@ -48,8 +49,7 @@ class Persistence {
         if (fs.existsSync(this._configPath)) {
           fs.copyFileSync(this._configPath, bakPath);
         }
-      } catch {
-      }
+      } catch (e) { dbg('Persistence', e); }
       fs.writeFileSync(tmpPath, content, 'utf8');
       fs.renameSync(tmpPath, this._configPath);
       this._dirty = false;

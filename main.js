@@ -1,5 +1,6 @@
 'use strict';
 const { resolveVersion } = require('./src/core/constants');
+const { dbg } = require('./src/core/debug');
 const http = require('http');
 const path = require('path');
 const chalk = require('chalk');
@@ -239,7 +240,7 @@ function cliAddBot(args) {
   const owner = ownerArg || tpl.ownerUsername || root.ownerUsername || '';
   if (!host) { console.log(colors.err('  ✗ Chưa biết IP server — thêm vào cuối lệnh, vd: addbot ' + username + ' mk ' + password + ' play.abc.vn')); return null; }
   const bot = manager.createBot({ id, host, port, version, username, password, ownerUsername: owner });
-  try { if (manager.io) manager.io.emit('botAdded', bot.getSummary()); } catch { }
+  try { if (manager.io) manager.io.emit('botAdded', bot.getSummary()); } catch (e) { dbg('main', e); }
   console.log(colors.ok(`  ✓ Đã thêm bot "${id}"`));
   console.log(colors.muted(`    server ${host}:${port}  |  ver ${version || '(mặc định)'}  |  owner ${owner || '(chưa đặt)'}`));
   console.log(colors.muted(`    Chạy bot: start ${id}   (lần đầu bot tự gửi /dk rồi /dn)`));
@@ -249,7 +250,7 @@ function cliDelBot(args) {
   if (!args[0]) { console.log(colors.muted('  Usage: delbot <id>')); return; }
   const bot = manager.removeBot(args[0]);
   if (!bot) { console.log(colors.err('  Bot not found: ' + args[0])); return; }
-  try { if (manager.io) manager.io.emit('botRemoved', { id: bot.cfg.id }); } catch { }
+  try { if (manager.io) manager.io.emit('botRemoved', { id: bot.cfg.id }); } catch (e) { dbg('main', e); }
   console.log(colors.ok('  ✓ Đã xoá bot: ' + bot.cfg.id));
 }
 async function webCommand(sub) {
@@ -282,11 +283,11 @@ async function shutdown(code = 0) {
   console.log(chalk.cyan('\n  Shutting down...'));
   const watchdog = setTimeout(() => process.exit(code), 5000); // không để treo nếu đóng cổng chậm
   if (watchdog.unref) watchdog.unref();
-  try { manager.runtimeLog('sys', code === 42 ? 'Antertool đang tắt để cập nhật bản mới...' : 'Antertool đang tắt...'); } catch { }
-  try { if (dashboard) dashboard.shutdown(); } catch { }
-  try { if (manager) manager.shutdown(); } catch { }
-  try { if (dashboard) await dashboard.stop(); } catch { }
-  try { await manager.flushTelegramLogs(3000); } catch { } // đẩy nốt log runtime lên Telegram trước khi thoát
+  try { manager.runtimeLog('sys', code === 42 ? 'Antertool đang tắt để cập nhật bản mới...' : 'Antertool đang tắt...'); } catch (e) { dbg('main', e); }
+  try { if (dashboard) dashboard.shutdown(); } catch (e) { dbg('main', e); }
+  try { if (manager) manager.shutdown(); } catch (e) { dbg('main', e); }
+  try { if (dashboard) await dashboard.stop(); } catch (e) { dbg('main', e); }
+  try { await manager.flushTelegramLogs(3000); } catch (e) { dbg('main', e); } // đẩy nốt log runtime lên Telegram trước khi thoát
   process.exit(code);
 }
 (async () => {
@@ -609,7 +610,7 @@ async function shutdown(code = 0) {
   } catch (e) {
     console.error(colors.err('[FATAL]'), e.message);
     console.error(e.stack);
-    try { manager.runtimeLog('err', '[FATAL] ' + (e && e.stack ? e.stack : e)); await manager.flushTelegramLogs(2500); } catch { }
+    try { manager.runtimeLog('err', '[FATAL] ' + (e && e.stack ? e.stack : e)); await manager.flushTelegramLogs(2500); } catch (e) { dbg('main', e); }
     process.exit(1);
   }
 })();
@@ -617,9 +618,9 @@ process.on('SIGINT', () => shutdown());
 process.on('SIGTERM', () => shutdown());
 process.on('uncaughtException', err => {
   console.error(colors.err('[UNCAUGHT]'), err.message || err);
-  try { manager.runtimeLog('err', '[UNCAUGHT] ' + ((err && err.stack) || err)); } catch { }
+  try { manager.runtimeLog('err', '[UNCAUGHT] ' + ((err && err.stack) || err)); } catch (e) { dbg('main', e); }
 });
 process.on('unhandledRejection', (reason) => {
   console.error(colors.err('[UNHANDLED]'), reason?.message || reason);
-  try { manager.runtimeLog('err', '[UNHANDLED] ' + ((reason && reason.stack) || reason)); } catch { }
+  try { manager.runtimeLog('err', '[UNHANDLED] ' + ((reason && reason.stack) || reason)); } catch (e) { dbg('main', e); }
 });

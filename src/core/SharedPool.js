@@ -1,5 +1,6 @@
 'use strict';
 const dns = require('dns');
+const { dbg } = require('./debug');
 const net = require('net');
 const { nowMs } = require('./utils');
 class SharedPool {
@@ -44,7 +45,7 @@ class SharedPool {
     try {
       socket.setNoDelay(true); 
       socket.setKeepAlive(true, opts.keepAliveMs || 30000); 
-    } catch {  }
+    } catch (e) { dbg('SharedPool', e); }
   }
   getStats() {
     return {

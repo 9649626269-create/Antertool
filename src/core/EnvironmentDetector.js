@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const { dbg } = require('./debug');
 const os = require('os');
 class EnvironmentDetector {
   constructor(autoExe = false) {
@@ -26,7 +27,7 @@ class EnvironmentDetector {
       if (fs.existsSync('/.dockerenv')) env.isDocker = true;
       const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
       if (cgroup.includes('docker') || cgroup.includes('containerd') || cgroup.includes('lxc')) env.isDocker = true;
-    } catch {  }
+    } catch (e) { dbg('EnvironmentDetector', e); }
     if (process.env.TERMUX_VERSION ||
         process.env.PREFIX?.includes('com.termux') ||
         fs.existsSync('/data/data/com.termux')) {

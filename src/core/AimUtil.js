@@ -1,4 +1,5 @@
 'use strict';
+const { dbg } = require('./debug');
 // Kiểm tra "tia ngắm có tới được block đích không" — KHÔNG phụ thuộc mineflayer/vec3 nên test được riêng.
 //
 // Quy tắc: chỉ block đặc nguyên khối (1x1x1) mới tính là vật cản. Mọi block nửa khối / nhỏ / không đặc —
@@ -35,7 +36,7 @@ const EYE_STAND = 1.62, EYE_SNEAK = 1.27, EYE_CRAWL = 0.4;
 function eyeHeightFor({ pos, base = EYE_STAND, getBlock }) {
   const free = h => {
     let b = null;
-    try { b = getBlock({ x: Math.floor(pos.x), y: Math.floor(pos.y + h), z: Math.floor(pos.z) }); } catch { }
+    try { b = getBlock({ x: Math.floor(pos.x), y: Math.floor(pos.y + h), z: Math.floor(pos.z) }); } catch (e) { dbg('AimUtil', e); }
     return !(b && isFullCube(b));
   };
   if (free(base)) return base;
@@ -67,7 +68,7 @@ function aimCheck({ eye, yaw, pitch, target, maxDist = 7, getBlock, step = 0.05 
     if (bx === lx && by === ly && bz === lz) continue; // vẫn trong block vừa kiểm tra
     lx = bx; ly = by; lz = bz;
     let b = null;
-    try { b = getBlock({ x: bx, y: by, z: bz }); } catch { }
+    try { b = getBlock({ x: bx, y: by, z: bz }); } catch (e) { dbg('AimUtil', e); }
     if (b && isFullCube(b)) return { hit: false, dist: t, blocker: { name: String(b.name || '?'), x: bx, y: by, z: bz } };
   }
   return { hit: false, dist: maxDist };

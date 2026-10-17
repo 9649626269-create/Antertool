@@ -48,7 +48,7 @@ let sha = SHA1;
 let calls = [];
 const bundles = {
   [SHA1]: { 'o-r-aaaaaaa/main.js': 'const fs = require("fs"); if (!fs.existsSync("restart.flag")) { fs.writeFileSync("restart.flag", "1"); process.exit(42); } console.log("V1 cwd=" + process.cwd() + " loader=" + !!process.env.ANTER_LOADER);', 'o-r-aaaaaaa/package.json': '{"dependencies":{}}', 'o-r-aaaaaaa/old.js': '//' },
-  [SHA2]: { 'o-r-bbbbbbb/main.js': 'console.log("V2");', 'o-r-bbbbbbb/package.json': '{"dependencies":{}}', 'o-r-bbbbbbb/../../evil.txt': 'x' },
+  [SHA2]: { 'o-r-bbbbbbb/main.js': 'console.log("V2");', 'o-r-bbbbbbb/package.json': '{"name":"x","version":"1.0.0","dependencies":{}}', 'o-r-bbbbbbb/package-lock.json': '{"name":"x","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"x","version":"1.0.0"}}}', 'o-r-bbbbbbb/../../evil.txt': 'x' },
 };
 const server = http.createServer((req, res) => {
   calls.push(req.url);
@@ -91,6 +91,7 @@ server.listen(0, '127.0.0.1', () => {
     sha = SHA2;
     r = await run();
     assert.ok(r.out.includes('V2') && r.out.includes('Có bản mới: msg b'), r.out);
+    assert.ok(r.out.includes('npm ci'), 'có package-lock.json thì phải dùng npm ci: ' + r.out);
     assert.ok(!fs.existsSync(path.join(dir, '.anter', 'code', 'old.js')), 'file cũ phải biến mất');
     assert.ok(!fs.existsSync(path.join(dir, '..', 'evil.txt')) && !fs.existsSync(path.join(dir, 'evil.txt')), 'chặn ../');
     assert.ok(fs.readFileSync(path.join(dir, 'config.json'), 'utf8').includes('giu-lai'), 'config phải còn nguyên');
@@ -99,6 +100,14 @@ server.listen(0, '127.0.0.1', () => {
     await new Promise(res => server.close(res));
     r = await run();
     assert.ok(r.out.includes('V2') && r.out.includes('chạy bản đã tải'), r.out);
+
+    // ANTER_AUTO_UPDATE=0: đã có code thì không hỏi GitHub (server tắt cũng không báo lỗi kết nối)
+    {
+      const saved = env.ANTER_AUTO_UPDATE; env.ANTER_AUTO_UPDATE = '0';
+      r = await run();
+      assert.ok(r.out.includes('Tự cập nhật đang TẮT') && r.out.includes('V2') && !r.out.includes('Không kết nối'), r.out);
+      if (saved === undefined) delete env.ANTER_AUTO_UPDATE; else env.ANTER_AUTO_UPDATE = saved;
+    }
 
     // máy mới chưa có config.json -> load.js tạo file trống
     fs.rmSync(path.join(dir, 'config.json'));

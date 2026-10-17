@@ -1,5 +1,6 @@
 'use strict';
 const { escapeHtml } = require('./TelegramNotifier');
+const { dbg } = require('./debug');
 const RingBuffer = require('./RingBuffer');
 
 /**
@@ -249,7 +250,7 @@ class TelegramLogger {
   _redact(s) {
     for (const [re, rep] of REDACTIONS) s = s.replace(re, rep);
     let secrets = [];
-    try { secrets = this._secrets() || []; } catch { }
+    try { secrets = this._secrets() || []; } catch (e) { dbg('TelegramLogger', e); }
     for (const sec of secrets) {
       const v = String(sec ?? '');
       if (v.length >= 6) s = s.replace(new RegExp(`(?<![\\w])${escRe(v)}(?![\\w])`, 'g'), '***'); // chỉ che khi đứng riêng (không cắt giữa từ/số)
@@ -349,19 +350,19 @@ class TelegramLogger {
   async flushNow(timeoutMs = 3000) {
     let t;
     const work = (async () => {
-      if (this._flushPromise) { try { await this._flushPromise; } catch { } } // đang gửi dở thì đợi xong rồi cập nhật phần còn lại
+      if (this._flushPromise) { try { await this._flushPromise; } catch (e) { dbg('TelegramLogger', e); } } // đang gửi dở thì đợi xong rồi cập nhật phần còn lại
       await this.flush(true);
     })();
     try {
       await Promise.race([work, new Promise(r => { t = setTimeout(r, timeoutMs); if (t.unref) t.unref(); })]);
-    } catch { } finally { clearTimeout(t); }
+    } catch (e) { dbg('TelegramLogger', e); } finally { clearTimeout(t); }
   }
   // Làm mới file NGAY (nút 🔄, "telegram logs now", "/logs now") -> { ok, message }
   async refresh() {
     if (!this.tg || !this.tg.enabled) return { ok: false, message: 'Telegram chưa cấu hình (telegram set <token> → telegram chatid)' };
     if (!this.enabled) return { ok: false, message: 'Log runtime đang TẮT (telegram logs on)' };
     if (!this._feed.length) return { ok: false, message: 'Chưa có log nào để cập nhật' };
-    if (this._flushPromise) { try { await this._flushPromise; } catch { } }
+    if (this._flushPromise) { try { await this._flushPromise; } catch (e) { dbg('TelegramLogger', e); } }
     const failed0 = this.stats.failed;
     await this.flush(true, true);
     if (this.stats.failed > failed0) return { ok: false, message: `Cập nhật thất bại: ${this.tg.lastError || 'không rõ lý do'}` };
@@ -373,7 +374,7 @@ class TelegramLogger {
     if (!this.tg || !this.tg.enabled) return { ok: false, message: 'Telegram chưa cấu hình (telegram set <token> → telegram chatid)' };
     const rec = { t: Date.now(), last: Date.now(), bot: SYSTEM, level: 'ok', msg: 'Kiểm tra log runtime — thấy file này nghĩa là log đã gửi được lên Telegram', n: 1 };
     let id = null;
-    try { const f = this._build([rec], [], 0, { live: false }); id = await this.tg.sendDocument(f.name, f.text, { caption: f.caption, silent: this.silent }); } catch { }
+    try { const f = this._build([rec], [], 0, { live: false }); id = await this.tg.sendDocument(f.name, f.text, { caption: f.caption, silent: this.silent }); } catch (e) { dbg('TelegramLogger', e); }
     return validId(id) ? { ok: true, message: 'Đã gửi file log thử' } : { ok: false, message: `Gửi thất bại: ${this.tg.lastError || 'không rõ lý do'}` };
   }
 
@@ -395,7 +396,7 @@ class TelegramLogger {
   // ===== dựng file =====
   _timeFmt() {
     let tz = 'Asia/Ho_Chi_Minh';
-    try { tz = this._tz() || tz; } catch { }
+    try { tz = this._tz() || tz; } catch (e) { dbg('TelegramLogger', e); }
     let f = this._fmtCache.get(tz);
     if (!f) {
       try { f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }); }
@@ -406,7 +407,7 @@ class TelegramLogger {
   }
   _dateFmt() {
     let tz = 'Asia/Ho_Chi_Minh';
-    try { tz = this._tz() || tz; } catch { }
+    try { tz = this._tz() || tz; } catch (e) { dbg('TelegramLogger', e); }
     const key = 'd|' + tz;
     let f = this._fmtCache.get(key);
     if (!f) {
@@ -457,7 +458,7 @@ class TelegramLogger {
     const now = new Date();
     let nowText, clock = '';
     try { nowText = now.toLocaleString('en-GB', { timeZone: this._tz() || 'Asia/Ho_Chi_Minh', hour12: false }); } catch { nowText = now.toISOString(); }
-    try { clock = fmt.format(now); } catch { }
+    try { clock = fmt.format(now); } catch (e) { dbg('TelegramLogger', e); }
     const sources = [...new Set(recs.map(r => r.bot))];
     const nBots = sources.filter(s => s !== SYSTEM).length;
     const hasSys = sources.includes(SYSTEM);
@@ -474,7 +475,7 @@ class TelegramLogger {
     let day = null;
     for (const r of recs) {
       let d = '';
-      try { d = dfmt.format(new Date(r.t)); } catch { }
+      try { d = dfmt.format(new Date(r.t)); } catch (e) { dbg('TelegramLogger', e); }
       if (d && d !== day) { day = d; out.push(`── ${d} ──`); }
       out.push(this._line(r, fmt));
     }

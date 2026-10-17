@@ -17,8 +17,15 @@
  *   .anter/                 code + node_modules tải từ GitHub (xoá đi cũng được, lần sau tự tải lại)
  *
  * Cấu hình repo (ưu tiên từ trên xuống): biến môi trường GH_OWNER / GH_REPO / GH_BRANCH / GITHUB_TOKEN
- *   -> file update.json cạnh load.js ({"owner","repo","branch","token"}) -> mặc định bên dưới.
+ *   -> file update.json cạnh load.js ({"owner","repo","branch","token","autoUpdate"}) -> mặc định bên dưới.
  *   GITHUB_TOKEN chỉ cần khi repo private.
+ *
+ * An toàn chuỗi cung ứng (code tải về được CHẠY trên máy bạn nên hãy tin repo):
+ *   - GH_BRANCH (hoặc "branch") nhận cả tag/commit SHA: đặt GH_BRANCH=v1.2.0 hoặc một SHA 40 ký tự để GHIM phiên bản,
+ *     không tự nhảy theo commit mới.
+ *   - ANTER_AUTO_UPDATE=0 (hoặc "autoUpdate": false trong update.json): không hỏi GitHub nữa, chỉ chạy bản đã tải
+ *     (lần đầu chưa có code vẫn tải một lần). Lệnh "update" trong tool vẫn cập nhật khi bạn chủ động gọi.
+ *   - Repo có package-lock.json -> cài thư viện bằng `npm ci` (đúng phiên bản đã khoá).
  * Lệnh "update" trong tool thoát với mã 42 -> load.js tự tải bản mới & chạy lại.
  */
 const fs = require('fs');
@@ -47,6 +54,7 @@ function settings() {
     repo: process.env.GH_REPO || f.repo || DEFAULTS.repo,
     branch: process.env.GH_BRANCH || f.branch || DEFAULTS.branch,
     token: process.env.GITHUB_TOKEN || f.token || '',
+    autoUpdate: !/^(0|false|off|no)$/i.test(String(process.env.ANTER_AUTO_UPDATE ?? (f.autoUpdate === false ? '0' : '1'))),
   };
 }
 
@@ -159,17 +167,24 @@ async function checkForUpdate() {
 
 // node_modules nằm ở .anter/node_modules (thư mục cha của .anter/code) nên Node tự tìm thấy,
 // và không bị mất khi thư mục code bị thay.
-function ensureDeps(pkg) {
+function ensureDeps(pkg, lock) {
   const deps = (pkg && pkg.dependencies) || {};
-  const hash = crypto.createHash('sha1').update(JSON.stringify(deps)).digest('hex');
+  const hash = crypto.createHash('sha1').update(JSON.stringify(deps)).update(lock || '').digest('hex');
   if (readState().depsHash === hash && fs.existsSync(path.join(HOME, 'node_modules'))) return;
-  log('Đang cài thư viện (npm install)...');
   fs.mkdirSync(HOME, { recursive: true });
-  fs.writeFileSync(path.join(HOME, 'package.json'), JSON.stringify({ name: 'anter-runtime', private: true, dependencies: deps }, null, 2));
-  const r = spawnSync('npm', ['install', '--omit=dev', '--no-fund', '--no-audit'], {
+  const lockFile = path.join(HOME, 'package-lock.json');
+  const useCi = !!lock;
+  log(useCi ? 'Đang cài thư viện (npm ci, theo package-lock.json)...' : 'Đang cài thư viện (npm install — repo chưa có package-lock.json)...');
+  // npm ci cần package.json khớp lockfile -> giữ name/version của repo; không có lock thì dùng bản tối giản
+  fs.writeFileSync(path.join(HOME, 'package.json'), JSON.stringify(useCi
+    ? { name: pkg.name, version: pkg.version, private: true, dependencies: deps }
+    : { name: 'anter-runtime', private: true, dependencies: deps }, null, 2));
+  if (useCi) fs.writeFileSync(lockFile, lock); else rmrf(lockFile);
+  if (useCi) rmrf(path.join(HOME, 'node_modules')); // npm ci tự xoá, làm sẵn để chắc chắn sạch
+  const r = spawnSync('npm', [useCi ? 'ci' : 'install', '--omit=dev', '--no-fund', '--no-audit'], {
     cwd: HOME, stdio: 'inherit', shell: process.platform === 'win32', // Windows: npm là npm.cmd
   });
-  if (r.status !== 0) throw new Error('npm install thất bại' + (r.error ? ': ' + r.error.message : ''));
+  if (r.status !== 0) throw new Error((useCi ? 'npm ci' : 'npm install') + ' thất bại' + (r.error ? ': ' + r.error.message : ''));
   writeState({ depsHash: hash });
 }
 
@@ -196,7 +211,9 @@ async function install(info) {
 
   let pkg = null;
   try { pkg = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8')); } catch {}
-  ensureDeps(pkg); // lỗi ở đây -> giữ nguyên bản cũ
+  let lock = '';
+  try { lock = fs.readFileSync(path.join(stage, 'package-lock.json'), 'utf8'); } catch {}
+  ensureDeps(pkg, lock); // lỗi ở đây -> giữ nguyên bản cũ
 
   // Thay nguyên thư mục code (file cũ không còn trong bản mới tự biến mất)
   rmrf(CODE + '.old');
@@ -207,8 +224,14 @@ async function install(info) {
   log(`Đã cập nhật xong (${n} file).`);
 }
 
+let forceUpdate = false; // true khi người dùng gõ "update" trong tool (thoát mã 42) -> bỏ qua ANTER_AUTO_UPDATE=0
 async function sync() {
   let info;
+  const forced = forceUpdate; forceUpdate = false;
+  if (hasCode() && !settings().autoUpdate && !forced) {
+    log('Tự cập nhật đang TẮT (ANTER_AUTO_UPDATE=0) → chạy bản đã tải. Gõ "update" trong tool để cập nhật thủ công.');
+    return;
+  }
   try {
     info = await checkForUpdate();
   } catch (e) {
@@ -238,7 +261,7 @@ function launch() {
   child.on('error', e => { console.error('[load] Không chạy được main.js: ' + e.message); process.exit(1); });
   child.on('exit', code => {
     child = null;
-    if (code === 42) return start(); // yêu cầu cập nhật + khởi động lại
+    if (code === 42) { forceUpdate = true; return start(); } // yêu cầu cập nhật + khởi động lại
     process.exit(code || 0);
   });
 }

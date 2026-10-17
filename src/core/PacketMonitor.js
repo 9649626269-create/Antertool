@@ -1,5 +1,6 @@
 'use strict';
 const EventEmitter = require('events');
+const { dbg } = require('./debug');
 const { nowMs } = require('./utils');
 class PacketMonitor extends EventEmitter {
   constructor(botId) {
@@ -53,7 +54,7 @@ class PacketMonitor extends EventEmitter {
           this._lastOut.push({ at: nowMs(), name: String(name), d });
           if (this._lastOut.length > 12) this._lastOut.shift();
         }
-      } catch { }
+      } catch (e) { dbg('PacketMonitor', e); }
       return this._origWrite(...args);
     };
     this._interval = setInterval(() => {
@@ -76,7 +77,7 @@ class PacketMonitor extends EventEmitter {
         this._origWrite = null;
       }
       if (this._boundIn) {
-        try { this._mc._client.removeListener('packet', this._boundIn); } catch { }
+        try { this._mc._client.removeListener('packet', this._boundIn); } catch (e) { dbg('PacketMonitor', e); }
       }
     }
     this._mc = null;

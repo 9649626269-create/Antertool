@@ -4,13 +4,17 @@ services:
     env: node
     region: singapore
     plan: starter
-    buildCommand: npm install --production --no-fund --no-audit
+    buildCommand: if [ -f package-lock.json ]; then npm ci --omit=dev --no-fund --no-audit; else npm install --omit=dev --no-fund --no-audit; fi
     startCommand: node main.js
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      # Mật khẩu dashboard: Render tự sinh giá trị ngẫu nhiên (xem ở tab Environment). Đăng nhập: tên bất kỳ + mật khẩu này.
+      - key: DASHBOARD_TOKEN
+        generateValue: true
+      # Mật khẩu từng bot: tạo biến BOT_PASSWORD_<ID> (vd BOT_PASSWORD_BOT_1) trên Render, đừng ghi vào config.json
       - key: AUTO_EXE
         value: "1"
       - key: SILENT_CONFIG

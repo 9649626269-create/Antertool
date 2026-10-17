@@ -1,0 +1,13 @@
+node_modules
+.git
+.anter
+auth_cache
+logs
+backups
+config.json
+config.json.bak
+revenue.json
+proxies.txt
+.env
+test
+*.md

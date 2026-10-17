@@ -1,5 +1,6 @@
 'use strict';
 const EventEmitter = require('events');
+const { dbg } = require('./debug');
 const path = require('path');
 const mineflayer = require('mineflayer');
 const { CS, TIMING, IGNORED_ERRORS, DEFAULTS } = require('./constants');
@@ -317,7 +318,7 @@ class BotSession extends EventEmitter {
     this._kickPending = null;
     clearTimeout(pend.timer);
     let tz = 'Asia/Ho_Chi_Minh';
-    try { tz = this._manager?._scheduleTz?.() || tz; } catch { }
+    try { tz = this._manager?._scheduleTz?.() || tz; } catch (e) { dbg('BotSession', e); }
     let when;
     try { when = new Date(pend.at).toLocaleTimeString('en-US', { timeZone: tz }); } catch { when = new Date(pend.at).toLocaleTimeString('en-US'); }
     const lines = [String(pend.kickMsg).replace(/§[0-9a-fk-orx#]/gi, ''), `⏰ ${when}`]; // bỏ mã màu Minecraft (§c, §7...) cho dễ đọc
@@ -444,8 +445,8 @@ class BotSession extends EventEmitter {
     }
   }
   _cleanupOnDisconnect() {
-    if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch { } }
-    if (this._sellCap) { try { this._finalizeSellRevenue(true); } catch { } } // còn doanh thu đang gom dở -> ghi nốt trước khi mất kết nối
+    if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch (e) { dbg('BotSession', e); } }
+    if (this._sellCap) { try { this._finalizeSellRevenue(true); } catch (e) { dbg('BotSession', e); } } // còn doanh thu đang gom dở -> ghi nốt trước khi mất kết nối
     this._clearAllTimers();
     this._featuresActive = false;
     this._autoSellArmed = false;
@@ -470,17 +471,17 @@ class BotSession extends EventEmitter {
     const mc = this.mc;
     this.mc = null;
     const c = mc._client;
-    try { this._tp.cancel(); this._clearTimer('tpSend'); } catch { } // bỏ theo dõi teleport dở dang (reconnect)
-    try { this.packetMgr.detach(); } catch { }
-    try { this.protocolGuard.detach(); } catch { }
+    try { this._tp.cancel(); this._clearTimer('tpSend'); } catch (e) { dbg('BotSession', e); } // bỏ theo dõi teleport dở dang (reconnect)
+    try { this.packetMgr.detach(); } catch (e) { dbg('BotSession', e); }
+    try { this.protocolGuard.detach(); } catch (e) { dbg('BotSession', e); }
     // Gỡ listener để 'end'/'error' đến muộn không kích hoạt reconnect; giữ 1 handler 'error' rỗng để không văng uncaught.
-    try { mc.removeAllListeners(); mc.on('error', () => { }); } catch { }
-    try { if (c) { c.removeAllListeners(); c.on('error', () => { }); } } catch { }
+    try { mc.removeAllListeners(); mc.on('error', () => { }); } catch (e) { dbg('BotSession', e); }
+    try { if (c) { c.removeAllListeners(); c.on('error', () => { }); } } catch (e) { dbg('BotSession', e); }
     // PHẢI đóng socket thật. Bản cũ gán c.end = () => {} rồi mới gọi mc.end() nên socket cũ bị bỏ lại mở:
     // rò rỉ kết nối, server vẫn thấy bot online -> lần reconnect sau dễ bị "already logged in"/kick.
-    try { if (c && !c.ended) c.end('cleanup'); } catch { }
-    try { c?.socket?.destroy(); } catch { }
-    try { c?.stream?.destroy?.(); } catch { }
+    try { if (c && !c.ended) c.end('cleanup'); } catch (e) { dbg('BotSession', e); }
+    try { c?.socket?.destroy(); } catch (e) { dbg('BotSession', e); }
+    try { c?.stream?.destroy?.(); } catch (e) { dbg('BotSession', e); }
     this._isCleanedUp = true;
   }
   scheduleReconnect(reason) {
@@ -644,14 +645,14 @@ class BotSession extends EventEmitter {
       } catch (e) {
         this._consecutiveProxyFails++;
         this.log('err', `Proxy lỗi: ${e.message} (fail ${this._consecutiveProxyFails}/${TIMING.PROXY_FAIL_THRESHOLD}) — thử kết nối thẳng`);
-        if (proxySocket) { try { proxySocket.destroy(); } catch {} proxySocket = null; }
+        if (proxySocket) { try { proxySocket.destroy(); } catch (e) { dbg('BotSession', e); } proxySocket = null; }
         if (this._consecutiveProxyFails >= TIMING.PROXY_FAIL_THRESHOLD) {
           this._disableProxyFallback();
         }
       }
     }
     if (this._shouldNotRun) {
-      if (proxySocket) { try { proxySocket.destroy(); } catch {} }
+      if (proxySocket) { try { proxySocket.destroy(); } catch (e) { dbg('BotSession', e); } }
       this._onConnectComplete();
       this._setState(CS.DISCONNECTED);
       return;
@@ -685,7 +686,7 @@ class BotSession extends EventEmitter {
       mc = mineflayer.createBot(botOpts);
     } catch (e) {
       this.log('err', 'Không tạo được bot: ' + e.message);
-      if (proxySocket) { try { proxySocket.destroy(); } catch {} }
+      if (proxySocket) { try { proxySocket.destroy(); } catch (e) { dbg('BotSession', e); } }
       this._onConnectComplete();
       this._setState(CS.DISCONNECTED);
       this.scheduleReconnect('createBot failed');
@@ -696,7 +697,7 @@ class BotSession extends EventEmitter {
     this.protocolGuard.attach(mc);
     this._bindEvents(mc, proxy);
     this._bindSpawnerEvents(mc);
-    try { mc.once('login', () => this._logVersionInfo(mc)); } catch { }
+    try { mc.once('login', () => this._logVersionInfo(mc)); } catch (e) { dbg('BotSession', e); }
   }
   _onConnectComplete() {
     if (this._connectCompleted) return;
@@ -789,7 +790,7 @@ class BotSession extends EventEmitter {
       const d = rand(2500, 8000);
       this.log('warn', `Chết — respawn sau ${d}ms`);
       this._setTimer('respawn', () => {
-        if (this.isOnline) try { mc.respawn(); } catch { }
+        if (this.isOnline) try { mc.respawn(); } catch (e) { dbg('BotSession', e); }
       }, d);
     });
     mc.on('ping', p => {
@@ -836,14 +837,14 @@ class BotSession extends EventEmitter {
       }
     });
     mc.on('messagestr', (msg, pos) => {
-      try { if (pos === 'gameInfo') this.tryChatShard(msg); } catch { }
+      try { if (pos === 'gameInfo') this.tryChatShard(msg); } catch (e) { dbg('BotSession', e); }
     });
     // Title / subtitle: nhiều server báo "Teleport bị hủy / Đừng di chuyển" bằng title chứ không phải chat
     mc.on('title', (text, type) => {
       try {
         const t = typeof text === 'string' ? text : resolveText(text?.json ?? text);
         this._logHud(t, type === 'subtitle' ? 'Subtitle' : 'Title');
-      } catch { }
+      } catch (e) { dbg('BotSession', e); }
     });
     mc.on('scoreboardUpdated', () => {
       try {
@@ -851,7 +852,7 @@ class BotSession extends EventEmitter {
         const board = this.readBoard();
         const money = this._extractBoardStat(board, ['MONEY', 'TIỀN', 'TIEN', 'XU', 'COIN']);
         if (money !== null) this._updateMoney(money);
-      } catch { }
+      } catch (e) { dbg('BotSession', e); }
     });
     mc.on('windowOpen', win => {
       if (this._spawnerBusy || this._sellSpawnBusy) return; // routine bảo vệ lồng / auto-sell spawn đang tự điều khiển GUI
@@ -1148,10 +1149,10 @@ class BotSession extends EventEmitter {
         mc._client.write('tab_complete', legacy
           ? { text: '/', assumeCommand: false, lookedAtBlock: undefined }
           : { transactionId: rand(1, 65535), text: '/' });
-      } catch { }
+      } catch (e) { dbg('BotSession', e); }
     }
     if (Math.random() < 0.03) {
-      try { mc.setQuickBarSlot(rand(0, 8)); } catch { }
+      try { mc.setQuickBarSlot(rand(0, 8)); } catch (e) { dbg('BotSession', e); }
     }
   }
   _captureRevenueInto(cap, text, pos, { pattern, keyword, ignoreChat, label, keepLines }) {
@@ -1269,7 +1270,7 @@ class BotSession extends EventEmitter {
   // Sau khi người dùng BẬT autosell / autosell_spawn bằng lệnh: hỏi 1 lần xem có muốn liên kết webhook Discord
   // để nhận báo cáo doanh thu không. Không trả lời gì / Enter = bỏ qua, bot vẫn chạy bình thường.
   _askRevenueWebhook() {
-    try { this._manager?.askRevenueWebhook?.(this.cfg.id); } catch { }
+    try { this._manager?.askRevenueWebhook?.(this.cfg.id); } catch (e) { dbg('BotSession', e); }
   }
   // ===== Doanh thu AUTO-SELL MACRO (autosell <%đầy> <macro>) =====
   get _macroRevKey() { return `${this.cfg.id}#macro`; }
@@ -1471,7 +1472,7 @@ class BotSession extends EventEmitter {
     if (!this._sellSpawnOn || !this._sellSpawnBusy) return;
     this._sellKickStrikes = (this._sellKickStrikes || 0) + 1;
     this.log('warn', `Bị kick khi đang chạy vòng auto-sell spawn (lần ${this._sellKickStrikes}/2): "${String(kickMsg).substring(0, 80)}"`);
-    try { this.log('sys', 'Gói bot gửi ngay trước khi bị kick: ' + this.packetMgr.recentOut(8).join(' | ')); } catch { }
+    try { this.log('sys', 'Gói bot gửi ngay trước khi bị kick: ' + this.packetMgr.recentOut(8).join(' | ')); } catch (e) { dbg('BotSession', e); }
     if (this._sellKickStrikes >= 2) {
       this._sellKickStrikes = 0;
       this._stopSellSpawn();
@@ -1482,15 +1483,15 @@ class BotSession extends EventEmitter {
   _logVersionInfo(mc) {
     try {
       let mfv = '?', mpv = '?';
-      try { mfv = require('mineflayer/package.json').version; } catch { }
-      try { mpv = require('minecraft-protocol/package.json').version; } catch { }
+      try { mfv = require('mineflayer/package.json').version; } catch (e) { dbg('BotSession', e); }
+      try { mpv = require('minecraft-protocol/package.json').version; } catch (e) { dbg('BotSession', e); }
       let bp = null;
       try {
         const t = mc.registry?.protocol?.play?.toServer?.types?.packet_block_place;
         if (Array.isArray(t) && t[0] === 'container') bp = t[1].map(f => f.name).join(',');
-      } catch { }
+      } catch (e) { dbg('BotSession', e); }
       this.log('sys', `Giao thức: bot dùng MC ${mc.version || '?'} (protocol ${mc.protocolVersion ?? mc.registry?.version?.version ?? '?'}), config version=${this.cfg.version ? `"${this.cfg.version}"` : 'tự dò'} | mineflayer ${mfv}, minecraft-protocol ${mpv}${bp ? ` | block_place: ${bp}` : ''}`);
-    } catch { }
+    } catch (e) { dbg('BotSession', e); }
     if (this._pingLogged || this.proxy) return;
     if (!(this.cfg.pingServerInfo === true || (!this.cfg.version && this.cfg.pingServerInfo !== false))) return; // mặc định chỉ ping khi version để tự dò
     this._pingLogged = true;
@@ -1501,7 +1502,7 @@ class BotSession extends EventEmitter {
         const v = r.version || {};
         this.log('sys', `Server tự báo: "${String(v.name || '?').substring(0, 60)}" (protocol ${v.protocol ?? '?'}) — nếu protocol này khác protocol bot đang dùng thì server đang dịch phiên bản (ViaVersion/proxy); khi đó nên đặt "version" của bot đúng bản server gốc hoặc cập nhật thư viện`);
       });
-    } catch { }
+    } catch (e) { dbg('BotSession', e); }
   }
   async _sellSpawnTick() {
     if (!this._sellSpawnOn || !this.isOnline) return;
@@ -1526,12 +1527,12 @@ class BotSession extends EventEmitter {
     const e = mc?.entity;
     if (!e?.position) return null;
     let sneak = false;
-    try { sneak = !!mc.getControlState?.('sneak'); } catch { }
+    try { sneak = !!mc.getControlState?.('sneak'); } catch (e) { dbg('BotSession', e); }
     let st = null;
     try {
       const ver = mc.version || mc.registry?.version?.minecraftVersion || this.cfg.version;
       st = resolvePlayerPose({ entity: e, sneak, hasPoseMeta: supportsPoseMeta(ver), getBlock: q => mc.blockAt(this._vec(q)) });
-    } catch { }
+    } catch (e) { dbg('BotSession', e); }
     if (!st) st = { key: 'standing', label: 'đứng', eye: typeof e.eyeHeight === 'number' ? e.eyeHeight : EYE_STAND, source: 'assumed', headroom: null, settled: true, why: null };
     this._lastBody = st;
     return st;
@@ -1582,12 +1583,12 @@ class BotSession extends EventEmitter {
   // Thả các phím AFK đang giữ (đi/nhảy) để bot đứng im khi cần nhắm
   _releaseAfkKeys() {
     for (const k of ['afkJumpOff', 'wafkKey', 'wafkJump']) this._clearTimer(k);
-    try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) this.mc?.setControlState(k, false); } catch { }
+    try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) this.mc?.setControlState(k, false); } catch (e) { dbg('BotSession', e); }
     // AFK đang giữ shift (nhả sau 0.3-0.9s): nhả luôn — để nó tự nhả GIỮA lúc nhắm thì tư thế đổi, mắt đổi độ cao, góc nhìn lệch.
     // Không đụng tới shift có chủ đích của routine đập lồng (_spawnerBusy).
     if (this._timers.has('afkSneak')) {
       this._clearTimer('afkSneak');
-      if (!this._spawnerBusy) { try { this.mc?.setControlState('sneak', false); } catch { } }
+      if (!this._spawnerBusy) { try { this.mc?.setControlState('sneak', false); } catch (e) { dbg('BotSession', e); } }
     }
   }
   // Xoay đầu nhìn thẳng vào tâm block p rồi KIỂM TRA tia ngắm tới được block đó (bỏ qua block nửa khối); lệch/bị đè thì xoay lại, tối đa `tries` lần.
@@ -1600,7 +1601,7 @@ class BotSession extends EventEmitter {
     for (let i = 0; i < tries; i++) {
       if ((stop && stop()) || !this.isOnline || this.mc !== mc || !mc.entity?.position) return false;
       const a = anglesTo(this._eyePos(mc), { x: p.x + 0.5, y: p.y + 0.5, z: p.z + 0.5 });
-      try { await this._withTimeout(mc.look(a.yaw, a.pitch, true), 1500); } catch { } // có timeout: look() chỉ xong khi gói xoay đã gửi
+      try { await this._withTimeout(mc.look(a.yaw, a.pitch, true), 1500); } catch (e) { dbg('BotSession', e); } // có timeout: look() chỉ xong khi gói xoay đã gửi
       await sleep(jit(250, 80)); // chờ gói xoay đầu tới server trước khi click/đào
       const r = this._aimCheckBlock(mc, p, reach);
       r.pose = this._lastBody || null; // tư thế lúc kiểm tra (để log chẩn đoán khi trượt)
@@ -1654,7 +1655,7 @@ class BotSession extends EventEmitter {
     if (this.autoSellSpawnRevenue) this._beginSellCapture(list.length);
     const stop = () => this._sellSpawnAbort || !this.isOnline || this.mc !== mc;
     let wasSneak = false;
-    try { wasSneak = !!mc.getControlState?.('sneak'); if (wasSneak) mc.setControlState('sneak', false); } catch { } // đang shift thì chuột phải không mở được GUI
+    try { wasSneak = !!mc.getControlState?.('sneak'); if (wasSneak) mc.setControlState('sneak', false); } catch (e) { dbg('BotSession', e); } // đang shift thì chuột phải không mở được GUI
     let done = 0, aborted = false;
     const reasons = [];
     this.log('sys', `Auto-sell Spawn: bắt đầu vòng bán (${list.length} lồng)`);
@@ -1671,8 +1672,8 @@ class BotSession extends EventEmitter {
       }
       aborted = stop();
     } finally {
-      try { if (this.mc === mc && mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
-      try { if (wasSneak && this.mc === mc) mc.setControlState('sneak', true); } catch { }
+      try { if (this.mc === mc && mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch (e) { dbg('BotSession', e); }
+      try { if (wasSneak && this.mc === mc) mc.setControlState('sneak', true); } catch (e) { dbg('BotSession', e); }
       this._sellSpawnBusy = false;
     }
     this.log(done === list.length ? 'ok' : 'warn', `Auto-sell Spawn: xong ${done}/${list.length} lồng${this._sellSpawnOn ? ` — vòng kế tiếp sau ~${this._fmtDuration(this._sellSpawnIntervalMs())}` : ''}`);
@@ -1693,7 +1694,7 @@ class BotSession extends EventEmitter {
     const eye = this._eyePos(mc);
     const dist = Math.hypot(eye.x - (p.x + 0.5), eye.y - (p.y + 0.5), eye.z - (p.z + 0.5));
     if (dist > SELL_SPAWN_REACH) return this._sellFail(tag, at, `quá xa (${dist.toFixed(1)} block) — bot không tự di chuyển, bỏ qua`);
-    if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch { } await sleep(300); }
+    if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch (e) { dbg('BotSession', e); } await sleep(300); }
     // nhìn thẳng vào lồng + kiểm tra tia ngắm tới lồng (bỏ qua block nửa khối) rồi MỚI chuột phải
     let aimed = await this._faceBlock(mc, p, { stop });
     if (stop()) return false;
@@ -1741,7 +1742,7 @@ class BotSession extends EventEmitter {
       this._sellKickStrikes = 0; // click xong mà không bị kick => cơ chế chuột phải ổn
       return true;
     } finally {
-      try { const cur = this.mc === mc ? mc.currentWindow : null; if (cur) mc.closeWindow(cur); } catch { }
+      try { const cur = this.mc === mc ? mc.currentWindow : null; if (cur) mc.closeWindow(cur); } catch (e) { dbg('BotSession', e); }
       await sleep(jit(350, 100));
     }
   }
@@ -1780,7 +1781,7 @@ class BotSession extends EventEmitter {
     const cmd = this._sellHomeCmd();
     const minGap = TP_PRESEND_MS + this._tp.deadlineMs + this._tp.settleMs + 1000; // không gõ dồn khi lần trước chưa xong (server còn đếm ngược/cooldown)
     while (nowMs() < (this._lastSellHomeAt || 0) + minGap) { if (stop()) return false; await sleep(500); }
-    try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
+    try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch (e) { dbg('BotSession', e); }
     this._tpHoldStill(nowMs());
     await sleep(TP_PRESEND_MS);
     if (stop()) return false;
@@ -1801,7 +1802,7 @@ class BotSession extends EventEmitter {
     const chunkUntil = nowMs() + this.sellHomeChunkWaitMs;
     while (first && nowMs() < chunkUntil) { // chờ chunk chỗ lồng tải xong sau teleport
       let b = null;
-      try { b = mc.blockAt(this._vec(first)); } catch { }
+      try { b = mc.blockAt(this._vec(first)); } catch (e) { dbg('BotSession', e); }
       if (b && this._isSpawnerBlock(b)) break;
       await sleep(250);
       if (stop()) return false;
@@ -2041,7 +2042,7 @@ class BotSession extends EventEmitter {
     for (const p of this.protectedSpawners) {
       if (me.distanceTo(makeVec3(p.x + .5, p.y + .5, p.z + .5)) > this.spawnerArmRange) continue;
       let b = null;
-      try { b = mc.blockAt(this._vec(p)); } catch { }
+      try { b = mc.blockAt(this._vec(p)); } catch (e) { dbg('BotSession', e); }
       if (this._isSpawnerBlock(b)) out.push(p);
     }
     return out;
@@ -2075,7 +2076,7 @@ class BotSession extends EventEmitter {
       .catch(e => this.log('err', 'Bảo vệ Lồng Spawn lỗi: ' + e.message))
       .finally(() => {
         this._spawnerBusy = false;
-        try { this.mc?.setControlState('sneak', false); this.mc?.setControlState('forward', false); } catch { }
+        try { this.mc?.setControlState('sneak', false); this.mc?.setControlState('forward', false); } catch (e) { dbg('BotSession', e); }
       });
     return true;
   }
@@ -2118,7 +2119,7 @@ class BotSession extends EventEmitter {
     mc.on('blockUpdate', safe((o, n) => this._spOnBlockUpdate(o, n)));
     mc.on('entitySpawn', safe(e => this._spOnEntity(e)));
     mc.on('explode', safe((pos, power) => this._spOnExplode(pos, power)));
-    try { mc._client?.on?.('block_break_animation', safe(p => this._spOnBreakAnim(p))); } catch { }
+    try { mc._client?.on?.('block_break_animation', safe(p => this._spOnBreakAnim(p))); } catch (e) { dbg('BotSession', e); }
   }
   // Đào bề mặt (heuristic của mod gốc): block đặc ở trong bán kính ngang bị mất, N lần liên tiếp xuống dưới trong 1 cột / 5s
   _spOnBlockUpdate(oldB, newB) {
@@ -2158,7 +2159,7 @@ class BotSession extends EventEmitter {
     const d = this._spNearestDist({ x: loc.x + .5, y: loc.y + .5, z: loc.z + .5 }, this._sp.fullHeight);
     if (!SG.insideRange(d, this._sp.threatRadius)) return;
     let bn = 'block';
-    try { bn = this.mc.blockAt(this._vec(loc))?.name || bn; } catch { }
+    try { bn = this.mc.blockAt(this._vec(loc))?.name || bn; } catch (e) { dbg('BotSession', e); }
     this._spawnerDispatch([{ name: uname, dist: d, kind: 'player_break', label: `${uname} đang đập ${bn} cách lồng ${d.toFixed(1)}m` }]);
   }
   // Gửi webhook có giới hạn tần suất theo từng loại cảnh báo
@@ -2170,7 +2171,7 @@ class BotSession extends EventEmitter {
     return true;
   }
   _itemHasSilk(item) {
-    try { if (Array.isArray(item.enchants) && item.enchants.some(e => /silk_touch/i.test(e?.name || ''))) return true; } catch { }
+    try { if (Array.isArray(item.enchants) && item.enchants.some(e => /silk_touch/i.test(e?.name || ''))) return true; } catch (e) { dbg('BotSession', e); }
     try { return /silk_touch/i.test(`${safeJsonStringify(item.nbt, '')}${safeJsonStringify(item.components, '')}`); } catch { return false; }
   }
   // entries: [{ item, slot }] -> cúp tốt nhất (Silk Touch trước, rồi tới chất liệu)
@@ -2189,7 +2190,7 @@ class BotSession extends EventEmitter {
   // Ender chest: ưu tiên rương thật trong tầm với, không có thì gõ lệnh (mặc định /ec)
   async _openEnderChest() {
     const mc = this.mc;
-    if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch { } await sleep(250); }
+    if (mc.currentWindow) { try { mc.closeWindow(mc.currentWindow); } catch (e) { dbg('BotSession', e); } await sleep(250); }
     const ecId = mc.registry?.blocksByName?.ender_chest?.id;
     if (ecId !== undefined) {
       const blk = mc.findBlock({ matching: ecId, maxDistance: 4.5 });
@@ -2226,7 +2227,7 @@ class BotSession extends EventEmitter {
       await mc.clickWindow(best.slot, 0, 1); // shift-click -> chuyển sang túi đồ
       await sleep(500);
     } finally {
-      try { mc.closeWindow(win); } catch { }
+      try { mc.closeWindow(win); } catch (e) { dbg('BotSession', e); }
     }
     for (let i = 0; i < 3; i++) { // server gửi lại túi đồ sau khi đóng rương
       await sleep(600);
@@ -2240,7 +2241,7 @@ class BotSession extends EventEmitter {
     if (!item) return false;
     if (String(item.name || '').toLowerCase().includes('spawn')) return true; // spawner, *_spawn_egg
     let lore = '';
-    try { lore = (item.customLore || []).map(l => resolveText(l)).join(' '); } catch { }
+    try { lore = (item.customLore || []).map(l => resolveText(l)).join(' '); } catch (e) { dbg('BotSession', e); }
     const txt = normalizeSmallCaps(`${resolveText(item.customName || '')} ${item.displayName || ''} ${lore}`)
       .normalize('NFC').toLowerCase();
     return txt.includes('lồng') || txt.includes('spawn');
@@ -2280,7 +2281,7 @@ class BotSession extends EventEmitter {
         if (++clicks % rate === 0) await sleep(50); // depositPerTick thao tác mỗi tick (50ms)
       }
     } finally {
-      try { mc.closeWindow(win); } catch { }
+      try { mc.closeWindow(win); } catch (e) { dbg('BotSession', e); }
     }
     await sleep(900);
     const leftItems = has();
@@ -2298,7 +2299,7 @@ class BotSession extends EventEmitter {
           expectedChest: chestBefore + moved,
           playerCount: this._spCountIn(win2.slots, start2, win2.slots.length),
         }) && leftCount === 0;
-      } finally { try { mc.closeWindow(win2); } catch { } }
+      } finally { try { mc.closeWindow(win2); } catch (e) { dbg('BotSession', e); } }
     }
     agg.found += before.length; agg.moved += moved; agg.left = leftItems.length;
     if (!verified) agg.unverified = true;
@@ -2385,7 +2386,7 @@ class BotSession extends EventEmitter {
           if (this._spEmptySlots() < this._sp.reserveSlots) {
             if (!this._countSpawnerItems()) throw new Error('túi đầy item khác (không phải lồng) — cần dọn chỗ trống');
             this.log('sys', `Bảo vệ Lồng Spawn: túi còn < ${this._sp.reserveSlots} ô trống — cất vào ender chest rồi đào tiếp`);
-            try { mc.setControlState('sneak', false); } catch { }
+            try { mc.setControlState('sneak', false); } catch (e) { dbg('BotSession', e); }
             const mid = await this._stashSpawnerItems();
             if (mid.failed) throw new Error('không mở được ender chest để cất giữa chừng');
             await mc.equip(pick, 'hand');
@@ -2394,7 +2395,7 @@ class BotSession extends EventEmitter {
             await this._faceBlock(mc, p, { reach: 6, stop: () => !this._spawnerProtectOn });
           }
           const before = this._countSpawnerItems();
-          try { mc.stopDigging(); } catch { }
+          try { mc.stopDigging(); } catch (e) { dbg('BotSession', e); }
           try { await mc.dig(block, true); }
           catch (e) { this.log('warn', `Đào lỗi (${p.x},${p.y},${p.z}): ${e.message}`); await sleep(300); }
           const got = await this._waitSpawnerDelivery(before);
@@ -2402,7 +2403,7 @@ class BotSession extends EventEmitter {
           if (after && this._isSpawnerBlock(after)) {
             // còn dư stack: nhả shift, nghỉ, shift lại rồi mới đợt kế (giống mod gốc)
             if (!got) this.log('warn', 'Bảo vệ Lồng Spawn: chưa thấy item vào túi sau đợt đào — nghỉ rồi thử tiếp');
-            try { mc.setControlState('sneak', false); } catch { }
+            try { mc.setControlState('sneak', false); } catch (e) { dbg('BotSession', e); }
             await sleep(150 + pauseMs);
             mc.setControlState('sneak', true);
             await sleep(100);
@@ -2419,7 +2420,7 @@ class BotSession extends EventEmitter {
         if (timedOut) break;
       }
     } finally {
-      try { mc.setControlState('sneak', false); } catch { }
+      try { mc.setControlState('sneak', false); } catch (e) { dbg('BotSession', e); }
       this._persistSpawnerState();
     }
     return { broken, timedOut };
@@ -2641,7 +2642,7 @@ class BotSession extends EventEmitter {
       let total = 0, near = 0, gone = 0;
       for (const p of list) {
         let b = null;
-        try { b = mc.blockAt(this._vec(p)); } catch { }
+        try { b = mc.blockAt(this._vec(p)); } catch (e) { dbg('BotSession', e); }
         const d = base.distanceTo(makeVec3(p.x + .5, p.y + .5, p.z + .5));
         if (b && !this._isSpawnerBlock(b) && d <= 16) { gone++; continue; }
         total++;
@@ -2670,7 +2671,7 @@ class BotSession extends EventEmitter {
   _tpHoldStill(now = nowMs()) {
     this._tp.hold(now, TP_PRESEND_MS + 400);
     for (const k of ['afkJumpOff', 'afkSneak', 'wafkKey', 'wafkJump']) this._clearTimer(k);
-    try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) this.mc?.setControlState(k, false); } catch { }
+    try { for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) this.mc?.setControlState(k, false); } catch (e) { dbg('BotSession', e); }
   }
   // Lồng gần nhất + trạng thái block đó: phân biệt "chunk chưa tải" / "toạ độ lồng lưu sai" / "bot đứng quá xa".
   _describeCageDistance() {
@@ -2690,7 +2691,7 @@ class BotSession extends EventEmitter {
     try {
       const b = mc.blockAt(this._vec(best.p));
       if (b) st = this._isSpawnerBlock(b) ? 'spawner OK' : `không phải spawner, đang là ${b.name}`;
-    } catch { }
+    } catch (e) { dbg('BotSession', e); }
     return `lồng gần nhất ${this._fmtXYZ(best.p)} cách ${best.d.toFixed(1)} block (${st})`;
   }
   _onTeleportEvent(ev) {
@@ -2859,7 +2860,7 @@ class BotSession extends EventEmitter {
     const minGap = TP_PRESEND_MS + this._tp.deadlineMs + this._tp.settleMs + 1000; // không bao giờ gõ lại khi lần trước chưa kết thúc
     this._homeNextAt = now + Math.max(minGap, slow ? this.spawnHomeSlowMs : this.spawnHomeCooldownMs);
     const cmd = this.spawnHomeCommand.startsWith('/') ? this.spawnHomeCommand : `/${this.spawnHomeCommand}`;
-    try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch { }
+    try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch (e) { dbg('BotSession', e); }
     // 1) đứng yên hoàn toàn  2) sau TP_PRESEND_MS mới gõ lệnh  3) giữ yên suốt thời gian đếm ngược (AFK nhảy/đi bị chặn bởi _tp.frozen)
     this._tpHoldStill(now);
     this._setTimer('tpSend', () => {
@@ -3016,7 +3017,7 @@ class BotSession extends EventEmitter {
       const text = typeof raw === 'string' ? raw : resolveText(raw);
       const n = parseShardNum(text);
       if (n !== null) this._updateShard(n);
-    } catch { }
+    } catch (e) { dbg('BotSession', e); }
   }
   afkJump() {
     this._clearTimer('afk');
@@ -3030,7 +3031,7 @@ class BotSession extends EventEmitter {
       try {
         mc.setControlState('jump', true);
         this._setTimer('afkJumpOff', () => {
-          try { if (this.isOnline) mc.setControlState('jump', false); } catch { }
+          try { if (this.isOnline) mc.setControlState('jump', false); } catch (e) { dbg('BotSession', e); }
         }, rand(100, 450));
         if (Math.random() < 0.30) {
           const yaw = (mc.entity?.yaw || 0) + (Math.random() - 0.5) * 1.0;
@@ -3041,7 +3042,7 @@ class BotSession extends EventEmitter {
         if (Math.random() < 0.03) {
           mc.setControlState('sneak', true);
           this._setTimer('afkSneak', () => {
-            try { if (this.isOnline) mc.setControlState('sneak', false); } catch { }
+            try { if (this.isOnline) mc.setControlState('sneak', false); } catch (e) { dbg('BotSession', e); }
           }, rand(300, 900));
         }
         this._afkNoise(mc);
@@ -3079,13 +3080,13 @@ class BotSession extends EventEmitter {
           const k = keys[rand(0, 3)];
           mc.setControlState(k, true);
           this._setTimer('wafkKey', () => {
-            try { if (this.isOnline) mc.setControlState(k, false); } catch { }
+            try { if (this.isOnline) mc.setControlState(k, false); } catch (e) { dbg('BotSession', e); }
           }, rand(200, 950));
         }
         if (Math.random() < 0.04) {
           mc.setControlState('jump', true);
           this._setTimer('wafkJump', () => {
-            try { if (this.isOnline) mc.setControlState('jump', false); } catch { }
+            try { if (this.isOnline) mc.setControlState('jump', false); } catch (e) { dbg('BotSession', e); }
           }, rand(100, 300));
         }
         if (Math.random() < 0.05) mc.swingArm();
@@ -3129,7 +3130,7 @@ class BotSession extends EventEmitter {
           this.mc.setControlState(k, false);
         }
       }
-    } catch { }
+    } catch (e) { dbg('BotSession', e); }
     this.state.afk = null;
     this.state.intendedAfk = null;
     this.log('sys', 'AFK đã dừng');
@@ -3199,7 +3200,7 @@ class BotSession extends EventEmitter {
     this._setState(CS.STOPPING);
     this._cleanupOnDisconnect();
     this._onConnectComplete();
-    try { this.afkStop(); } catch { }
+    try { this.afkStop(); } catch (e) { dbg('BotSession', e); }
     this._destroyMc();
     this._setState(CS.DISCONNECTED);
     this.log('sys', 'Bot đã tắt');
@@ -3304,7 +3305,7 @@ class BotSession extends EventEmitter {
           try {
             if (!win.slots || win.slots.length <= TPA_CONFIRM_SLOT) {
               this.log('warn', `GUI TPA không đủ slot (có ${win.slots?.length ?? 0}, cần >${TPA_CONFIRM_SLOT})`);
-              try { this.mc.closeWindow(win); } catch { }
+              try { this.mc.closeWindow(win); } catch (e) { dbg('BotSession', e); }
               return;
             }
             const sl = win.slots[TPA_CONFIRM_SLOT];

@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const { dbg } = require('../core/debug');
 const path = require('path');
 const security = require('./security');
 const SpawnerGuard = require('../core/SpawnerGuard');
@@ -35,14 +36,14 @@ class WebDashboard {
     this._running = false;
     this._stopTimers();
     const srv = this.expressServer;
-    try { this.io.disconnectSockets(true); } catch { }
+    try { this.io.disconnectSockets(true); } catch (e) { dbg('WebDashboard', e); }
     await new Promise(resolve => {
       let done = false;
       const fin = () => { if (!done) { done = true; resolve(); } };
       const t = setTimeout(fin, 3000);
       if (t.unref) t.unref();
       try { srv.close(fin); } catch { fin(); return; }
-      try { if (typeof srv.closeAllConnections === 'function') srv.closeAllConnections(); } catch { }
+      try { if (typeof srv.closeAllConnections === 'function') srv.closeAllConnections(); } catch (e) { dbg('WebDashboard', e); }
     });
     return true;
   }
@@ -65,7 +66,8 @@ class WebDashboard {
       };
       const onListening = () => {
         srv.removeListener('error', onError);
-        const url = `http://localhost:${this.port}`;
+        const urlHost = (!this._host || this._host === '0.0.0.0' || this._host === '::') ? 'localhost' : this._host;
+        const url = `http://${urlHost}:${this.port}`;
         if (this.autoExe) {
           console.log(`\x1b[36m╔══════════════════════════════════════╗\x1b[0m`);
           console.log(`\x1b[36m║  ⬡   Bot Manager — Antares       ║\x1b[0m`);
@@ -81,18 +83,20 @@ class WebDashboard {
       srv.once('error', onError);
       srv.once('listening', onListening);
       this._running = true;
-      srv.listen(this.port);
+      srv.listen(this.port, this._host || '127.0.0.1');
     });
   }
   _setup() {
     const publicDir = path.join(__dirname, 'public');
     try {
       fs.mkdirSync(path.join(publicDir, 'assets'), { recursive: true });
-    } catch { }
+    } catch (e) { dbg('WebDashboard', e); }
     // Health-check cho Render/Docker: luôn mở (không lộ dữ liệu), đặt TRƯỚC middleware xác thực
     this.expressApp.get('/healthz', (req, res) => res.status(200).send('ok'));
     // ---- Bảo mật: token (tuỳ chọn) + chặn truy cập chéo nguồn ----
-    const token = String(process.env.DASHBOARD_TOKEN || this.manager._config?.dashboardToken || '');
+    const bind = security.resolveBind(process.env, this.manager._config || {});
+    this._host = bind.host;
+    const token = bind.token;
     if (token) {
       this.expressApp.use((req, res, next) => {
         if (security.isAuthorized(token, req.headers.authorization)) return next();
@@ -105,10 +109,15 @@ class WebDashboard {
         if (security.tokenEquals(token, given)) return next();
         next(new Error('unauthorized'));
       });
-      console.log('\x1b[32m[Dashboard] Đã bật xác thực (tên đăng nhập tuỳ ý, mật khẩu = DASHBOARD_TOKEN)\x1b[0m');
+      if (bind.generated) {
+        console.log('\x1b[33m[Dashboard] Dashboard mở ra ngoài (' + bind.host + ') mà chưa đặt DASHBOARD_TOKEN → đã tự sinh token cho lần chạy này.\x1b[0m');
+        console.log('\x1b[33m[Dashboard] Đăng nhập: tên đăng nhập tuỳ ý, mật khẩu = ' + token + '   (đặt DASHBOARD_TOKEN để dùng token cố định)\x1b[0m');
+      } else {
+        console.log('\x1b[32m[Dashboard] Đã bật xác thực (tên đăng nhập tuỳ ý, mật khẩu = DASHBOARD_TOKEN)\x1b[0m');
+      }
     } else {
-      console.log('\x1b[33m[Dashboard] ⚠ Chưa đặt DASHBOARD_TOKEN: ai truy cập được cổng ' + this.port +
-        ' đều điều khiển được bot (kể cả khi deploy lên Render/Docker). Đặt biến môi trường DASHBOARD_TOKEN hoặc "dashboardToken" trong config.json.\x1b[0m');
+      console.log('\x1b[33m[Dashboard] Chưa đặt DASHBOARD_TOKEN — dashboard chỉ nghe trên ' + bind.host +
+        ' (chỉ máy này truy cập được). Muốn mở ra ngoài: đặt DASHBOARD_TOKEN rồi DASHBOARD_HOST=0.0.0.0.\x1b[0m');
     }
     // Yêu cầu ghi (POST/PATCH/DELETE) từ trang web khác nguồn -> từ chối
     this.expressApp.use((req, res, next) => {
@@ -362,8 +371,7 @@ class WebDashboard {
             sock.emit('inventory', { id, items: b.state.inventory });
             sock.emit('customCmds', { id, cmds: b.cmdRegistry.getCustomCmds() });
           }
-        } catch (e) {
-        }
+        } catch (e) { dbg('WebDashboard', e); }
       });
       sock.on('unsubscribe', id => sock.leave(`bot:${id}`));
       sock.on('cmd', ({ id, cmd }) => {

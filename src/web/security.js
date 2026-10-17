@@ -41,4 +41,21 @@ function isAuthorized(token, headerValue, authToken) {
   return tokenEquals(token, tokenFromHeader(headerValue) || authToken || '');
 }
 
-module.exports = { tokenEquals, tokenFromHeader, isSameOrigin, allowSocketRequest, isAuthorized, allowedOrigins };
+const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
+const isLoopbackHost = h => LOOPBACK.has(String(h || '').toLowerCase()) || /^127\./.test(String(h || ''));
+
+// Quyết định địa chỉ bind + token cho dashboard.
+//  - host: DASHBOARD_HOST | config.dashboardHost; mặc định 127.0.0.1 (chỉ máy này).
+//          Khi NODE_ENV=production (Docker/Render) mặc định 0.0.0.0 vì phải nhận kết nối từ ngoài container.
+//  - token: DASHBOARD_TOKEN | config.dashboardToken. Nếu bind ra ngoài mà chưa có token -> tự sinh token ngẫu nhiên
+//          (generated=true) để không bao giờ mở dashboard không mật khẩu ra mạng.
+function resolveBind(env = process.env, config = {}) {
+  const prod = env.NODE_ENV === 'production';
+  const host = String(env.DASHBOARD_HOST || (config && config.dashboardHost) || (prod ? '0.0.0.0' : '127.0.0.1')).trim();
+  let token = String(env.DASHBOARD_TOKEN || (config && config.dashboardToken) || '');
+  let generated = false;
+  if (!token && !isLoopbackHost(host)) { token = crypto.randomBytes(18).toString('base64url'); generated = true; }
+  return { host, token, generated, exposed: !isLoopbackHost(host) };
+}
+
+module.exports = { resolveBind, isLoopbackHost, tokenEquals, tokenFromHeader, isSameOrigin, allowSocketRequest, isAuthorized, allowedOrigins };

@@ -1,5 +1,6 @@
 'use strict';
 const { DEFAULTS } = require('./constants');
+const { dbg } = require('./debug');
 const { resolveText, parseShardNum, safeJsonStringify, jit, nowMs, normalizeSmallCaps } = require('./utils');
 const WindowRouter = {
   _routes: [],
@@ -13,7 +14,7 @@ const WindowRouter = {
     bot._setTimer('windowTimeout', () => {
       if (!bot.isOnline) return;
       bot.log('warn', `GUI timeout sau ${this._guiTimeout / 1000}s ở window: [${title.substring(0, 40)}] — đóng GUI`);
-      try { bot.mc.closeWindow(win); } catch {}
+      try { bot.mc.closeWindow(win); } catch (e) { dbg('WindowRouter', e); }
     }, this._guiTimeout);
     let handled = false;
     for (const route of this._routes) {
@@ -41,7 +42,7 @@ const WindowRouter = {
         bot.log('sys', 'WindowRouter: GUI rỗng (đang menu retry) — fall-through xử lý');
       } else {
         bot.log('sys', 'WindowRouter: GUI rỗng — đóng ngay');
-        try { bot.mc.closeWindow(win) } catch {}
+        try { bot.mc.closeWindow(win) } catch (e) { dbg('WindowRouter', e); }
         return;
       }
     }
@@ -64,10 +65,10 @@ const WindowRouter = {
         bot.log('sys', `Click slot ${slot} trong [${title}]`);
         if (first) bot._onMenuDone(`click ô ${slot}`); // xong bước menu -> mới bật spawnerprotect/autosell (qua cổng vị trí)
       } else {
-        try { bot.mc.closeWindow(win); } catch {}
+        try { bot.mc.closeWindow(win); } catch (e) { dbg('WindowRouter', e); }
       }
     } else {
-      try { bot.mc.closeWindow(win); } catch {}
+      try { bot.mc.closeWindow(win); } catch (e) { dbg('WindowRouter', e); }
     }
   },
 };
@@ -86,14 +87,14 @@ const StatsParser = {
         const m2 = s.match(/(\d{3,})/); if (m2) { const n = parseInt(m2[1], 10); if (n > 0) return n; }
         const m3 = s.match(/"text"\s*:\s*"([^"]*)"/);
         if (m3) { const p = parseShardNum(m3[1]); if (p !== null && p > 0) return p; }
-      } catch { }
+      } catch (e) { dbg('WindowRouter', e); }
     }
     if (sl.nbt) {
       try {
         const s = safeJsonStringify(sl.nbt);
         const m = s.match(/(\d{4,})/);
         if (m) { const n = parseInt(m[1], 10); if (n > 0) return n; }
-      } catch { }
+      } catch (e) { dbg('WindowRouter', e); }
     }
     const nameText = resolveText(sl.customName || sl.displayName || '');
     const p = parseShardNum(nameText);
@@ -152,8 +153,8 @@ const AfkGuiHandler = {
   },
   _isFull(sl) {
     const pieces = [resolveText(sl.customName || sl.displayName || '')];
-    if (sl.customLore) try { pieces.push(safeJsonStringify(sl.customLore)); } catch { }
-    if (sl.nbt) try { pieces.push(safeJsonStringify(sl.nbt)); } catch { }
+    if (sl.customLore) try { pieces.push(safeJsonStringify(sl.customLore)); } catch (e) { dbg('WindowRouter', e); }
+    if (sl.nbt) try { pieces.push(safeJsonStringify(sl.nbt)); } catch (e) { dbg('WindowRouter', e); }
     const text = pieces.join(' ');
     if (/ĐẦY|HẾT\s*CHỖ|FULL|MAX(?:IMUM)?|KHÓA|KHÔNG\s*THỂ|ĐANG\s*ĐẦY|ĐÃ\s*ĐẦY|QUÁ\s*TẢI/i.test(text)) return true;
     const m = text.match(/(\d+)\s*\/\s*(\d+)/);
@@ -258,7 +259,7 @@ const OrderParser = {
       }
       bot._lastOrderEntries = entries;
       bot._lastOrderTitle = resolveText(win.title || '');
-      try { bot.mc.closeWindow(win); } catch { }
+      try { bot.mc.closeWindow(win); } catch (e) { dbg('WindowRouter', e); }
       if (!entries.length) {
         bot.log('warn', `ĐƠN HÀNG: không thấy mục nào trong trang này (${bot._lastOrderTitle})`);
         return;

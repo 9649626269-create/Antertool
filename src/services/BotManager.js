@@ -1,5 +1,6 @@
 'use strict';
 const BotSession = require('../core/BotSession');
+const { dbg } = require('../core/debug');
 const ProxyManager = require('../core/ProxyManager');
 const EnvironmentDetector = require('../core/EnvironmentDetector');
 const Persistence = require('../core/Persistence');
@@ -9,6 +10,8 @@ const RevenueTracker = require('../core/RevenueTracker');
 const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
 const TelegramLogger = require('../core/TelegramLogger');
+const FileLogger = require('../core/FileLogger');
+const { resolveBotPassword } = require('../core/secrets');
 const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
 class BotManager {
   constructor(options = {}) {
@@ -39,6 +42,12 @@ class BotManager {
       botIds: () => this.bots.map(b => b?.cfg?.id).filter(x => x !== undefined && x !== null), // bot hiện có -> ghi stats cả bot chưa có log
       stats: (id) => this._serverStats(id), // stats server (scoreboard: money, shard, kills...) ghi đầu file log_all.txt, mỗi bot 1 khối
     });
+    // Log runtime -> FILE trên máy (logs/runtime-YYYY-MM-DD.log): còn đọc được sau khi tool sập. Cấu hình: xem _applyFileLogConfig
+    this.fileLogs = new FileLogger({
+      dir: process.env.ANTER_LOG_DIR || require('path').join(require('path').dirname(this.configPath), 'logs'),
+      tz: () => this._scheduleTz(),
+      redact: s => this.telegramLogs._redact(s), // dùng chung bộ che mật khẩu/token với log Telegram
+    });
     this.dashboard = null;
     this._config = null;
     this._poolPruneInterval = setInterval(() => this.sharedPool.pruneCache(), 10 * 60 * 1000);
@@ -50,6 +59,7 @@ class BotManager {
   async init() {
     this._config = this.persistence.load();
     this._migrateWebhookEvents();
+    this._applyFileLogConfig();
     this.notifier.configure(this._config.webhookUrl, this._config.webhookEvents);
     this.notifier.setMention(this._config.webhookMention, this._config.webhookMentionEvents);
     this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
@@ -99,17 +109,28 @@ class BotManager {
       this.persistence.set('webhookEvents', c.webhookEvents);
     }
   }
+  // Log ra file (config.json, gốc): fileLogs (true) · fileLogLevels ("all" | ["warn","err",...]) · fileLogChat (false: có ghi chat người chơi không)
+  //   fileLogKeepDays (7) · fileLogMaxMB (10: quá thì sang file .1, .2) · fileLogFormat ("text" | "json") · fileLogDir (mặc định logs/ cạnh config.json; hoặc biến ANTER_LOG_DIR)
+  _applyFileLogConfig() {
+    const c = this._config || {};
+    const fl = { enabled: c.fileLogs !== false, levels: c.fileLogLevels ?? 'all', includeChat: c.fileLogChat === true,
+      keepDays: c.fileLogKeepDays ?? 7, maxMB: c.fileLogMaxMB ?? 10, format: c.fileLogFormat ?? 'text' };
+    if (!process.env.ANTER_LOG_DIR && c.fileLogDir) fl.dir = require('path').resolve(require('path').dirname(this.configPath), String(c.fileLogDir));
+    this.fileLogs.configure(fl);
+  }
   _wireBotLog(bot) {
     bot.on('log', ev => {
-      try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch { } // log runtime -> Telegram (không bao giờ làm hỏng bot)
+      try { this.fileLogs.write(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); }
+      try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); } // log runtime -> Telegram (không bao giờ làm hỏng bot)
       if (this.onBotLog) {
-        try { this.onBotLog(bot.cfg.id, ev); } catch { }
+        try { this.onBotLog(bot.cfg.id, ev); } catch (e) { dbg('BotManager', e); }
       }
     });
   }
   // Log hệ thống không thuộc bot nào (khởi động, tắt, lỗi chưa bắt được...) -> cùng đường gửi Telegram với log bot
   runtimeLog(level, msg) {
-    try { this.telegramLogs.push(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); } catch { }
+    try { this.fileLogs.write(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); if (level === 'err') this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); } // lỗi nặng: ghi ngay (tool có thể sắp chết)
+    try { this.telegramLogs.push(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); } catch (e) { dbg('BotManager', e); }
   }
   // Stats server của 1 bot cho đầu file log: tên scoreboard + từng dòng (MONEY, SHARD, KILLS...). Không có bảng thì dùng số đã đọc.
   _serverStats(id) {
@@ -134,7 +155,7 @@ class BotManager {
       username: cfg.username,
       ownerUsername: cfg.ownerUsername || this._config.ownerUsername,
       registered: cfg.registered !== undefined ? cfg.registered : false,
-      botPassword: cfg.botPassword || this._config.botPassword,
+      botPassword: resolveBotPassword(cfg, this._config),
       respawn: cfg.respawn !== undefined ? cfg.respawn : (this._config.respawn !== undefined ? this._config.respawn : true),
       useProxy: cfg.useProxy !== undefined ? cfg.useProxy : (this._config.useProxy !== undefined ? this._config.useProxy : false),
       autoMenu: cfg.autoMenu !== undefined ? cfg.autoMenu : (this._config.autoMenu !== undefined ? this._config.autoMenu : true),
@@ -519,7 +540,7 @@ class BotManager {
     else this.telegram.stopPolling();
     const sec = c.telegramRefreshSec === undefined ? 1 : Math.max(0, Number(c.telegramRefreshSec) || 0);
     if (sec > 0 && c.telegramMode !== 'new') { // mode 'new' mà sửa liên tục thì thành spam tin mới -> chỉ chạy ở mode 'edit'
-      this._tgTimer = setInterval(() => { try { this._tgTick(); } catch { } }, Math.max(1, sec) * 1000);
+      this._tgTimer = setInterval(() => { try { this._tgTick(); } catch (e) { dbg('BotManager', e); } }, Math.max(1, sec) * 1000);
       if (this._tgTimer.unref) this._tgTimer.unref();
     }
   }
@@ -620,7 +641,7 @@ class BotManager {
     const text = [headline ? h(headline) : null, `<b>${h(title)}</b>`, description ? h(description) : null].filter(Boolean).join('\n');
     this.telegram.send(text); // tin mới -> có thông báo đẩy trên điện thoại
     if (['disconnect', 'reconnectFailed', 'reconnectRecovered', 'sellFailed'].includes(eventKey) && this._panelRelevant(bot)) {
-      setTimeout(() => { try { this.sendTelegramPanel(bot); } catch { } }, 1500); // trạng thái đổi -> sửa bảng cho khớp
+      setTimeout(() => { try { this.sendTelegramPanel(bot); } catch (e) { dbg('BotManager', e); } }, 1500); // trạng thái đổi -> sửa bảng cho khớp
     }
   }
   async _onTelegramEvent(ev) {
@@ -883,7 +904,7 @@ class BotManager {
       try {
         if (this._revenueTotalCycles() === this._revSummaryLastCycles) return;
         this.sendRevenueSummary();
-      } catch { }
+      } catch (e) { dbg('BotManager', e); }
     }, Math.max(1, min) * 60000);
     if (this._revSummaryTimer.unref) this._revSummaryTimer.unref();
   }
@@ -1003,15 +1024,16 @@ class BotManager {
   }
   shutdown() {
     for (const bot of this.bots) bot.shutdown();
-    try { this.revenue.flush(); } catch { }
+    try { this.revenue.flush(); } catch (e) { dbg('BotManager', e); }
     this.persistence.shutdown();
     if (this._poolPruneInterval) clearInterval(this._poolPruneInterval);
     if (this._scheduleInterval) clearInterval(this._scheduleInterval);
     if (this._revSummaryTimer) clearInterval(this._revSummaryTimer);
     if (this._tgTimer) clearInterval(this._tgTimer);
-    try { this.telegramLogs.stop(); } catch { }
+    try { this.telegramLogs.stop(); } catch (e) { dbg('BotManager', e); }
+    try { this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); }
     if (this._beatInterval) clearInterval(this._beatInterval);
-    try { this.telegram.stopPolling(); } catch { }
+    try { this.telegram.stopPolling(); } catch (e) { dbg('BotManager', e); }
     this.sharedPool.reset();
     this.bots = [];
   }

@@ -1,5 +1,5 @@
 {
-  "name": "bot-kingsmp",
+  "name": "antares-manager",
   "version": "1.0.0",
   "engines": {
     "node": ">=18.0.0",
@@ -11,7 +11,9 @@
     "docker:build": "docker build -t antares-manager .",
     "docker:run": "docker run -p 3000:3000 --env-file .env antares-manager",
     "start:nolauncher": "node main.js",
-    "test": "node test/protocol-guard.test.js && node test/settings-packet.test.js && node test/menu-click.test.js && node test/view-order.test.js && node test/aim-util.test.js && node test/pose-util.test.js && node test/pose-aim.test.js && node test/sell-recovery.test.js && node test/utils.test.js && node test/teleport-watch.test.js && node test/security.test.js && node test/loader.test.js && node test/telegram.test.js && node test/telegram-logs.test.js && node test/proxy-http.test.js && node test/connect-slots.test.js && node test/dashboard-restart.test.js && node test/spawner-guard.test.js && node test/discord-embed.test.js"
+    "test": "node test/run-all.js",
+    "lint": "node scripts/check-syntax.js",
+    "start:production": "NODE_ENV=production node main.js"
   },
   "dependencies": {
     "boxen": "^6.2.1",
@@ -22,5 +24,6 @@
     "socket.io": "^4.8.3",
     "strip-ansi": "^7.2.0",
     "vec3": "^0.1.8"
-  }
+  },
+  "private": true
 }

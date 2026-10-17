@@ -1,5 +1,6 @@
 'use strict';
 const https = require('https');
+const { dbg } = require('./debug');
 const http = require('http');
 
 /**
@@ -247,7 +248,7 @@ class TelegramNotifier {
   }
   stopPolling() {
     this._polling = false;
-    try { this._pollReq?.destroy(); } catch { }
+    try { this._pollReq?.destroy(); } catch (e) { dbg('TelegramNotifier', e); }
     this._pollReq = null;
   }
   async _pollLoop() {

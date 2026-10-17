@@ -12,6 +12,7 @@
 //   3) nếu lỗi dồn dập (lệch phiên bản giao thức) thì nói rõ cách xử lý,
 //   4) lưới an toàn: nếu luồng đọc vẫn bị huỷ thì báo ngay + gọi onDead (reconnect) thay vì chờ 30s.
 const fs = require('fs');
+const { dbg } = require('./debug');
 const path = require('path');
 
 const PARSE_RE = /parse error for|deserialization error|array size is abnormally large|read error for|chunk size is/i;
@@ -46,6 +47,7 @@ const FLOOD_COUNT = 20;               // >= 20 lỗi / 60s => coi là lệch phi
 const FLOOD_WINDOW_MS = 60000;
 const REPEAT_LOG_MS = 60000;
 
+let _writeChain = Promise.resolve();
 class ProtocolGuard {
   constructor({ botId = '?', log = () => {}, logDir = path.join(process.cwd(), 'logs'), skipBadPackets = true, onDead = null } = {}) {
     this.botId = botId;
@@ -74,12 +76,12 @@ class ProtocolGuard {
     this._deadNotified = false;
     // deserializer được tạo lại mỗi lần đổi state (login -> configuration -> play) nên phải hook lại
     this._onState = () => this._hook(client);
-    try { client.on('state', this._onState); } catch { }
+    try { client.on('state', this._onState); } catch (e) { dbg('ProtocolGuard', e); }
     this._hook(client);
   }
 
   detach() {
-    try { if (this._client && this._onState) this._client.removeListener('state', this._onState); } catch { }
+    try { if (this._client && this._onState) this._client.removeListener('state', this._onState); } catch (e) { dbg('ProtocolGuard', e); }
     this._client = null;
     this._mc = null;
     this._onState = null;
@@ -98,12 +100,12 @@ class ProtocolGuard {
         } catch (e) {
           // PartialReadError do protodef tự nuốt (chờ thêm dữ liệu) — không đụng vào
           if (e && e.partialReadError) throw e;
-          try { self._remember(client, buf); } catch { }
+          try { self._remember(client, buf); } catch (e) { dbg('ProtocolGuard', e); }
           if (!self.skipBadPackets) throw e;   // chế độ cũ: ném lỗi lên (nguy cơ làm chết luồng đọc)
           // Chế độ mới: bỏ riêng gói này, trả về gói giả để luồng giải mã KHÔNG bị huỷ.
           const id = self._last?.id ?? null;
           self.skipped++;
-          try { self.handleError(e, { skipped: true }); } catch { }
+          try { self.handleError(e, { skipped: true }); } catch (e) { dbg('ProtocolGuard', e); }
           return {
             data: { name: 'unparsed_packet', params: { id, error: String(e?.message || e).slice(0, 200) } },
             metadata: { name: 'unparsed_packet', size: buf ? buf.length : 0 },
@@ -185,7 +187,7 @@ class ProtocolGuard {
         this._deadNotified = true;
         this._log('err', 'Luồng đọc gói tin đã bị huỷ sau lỗi parse — bot không nhận được gì từ server nữa, reconnect ngay.');
         if (this._onDead) this._onDead();
-      } catch { }
+      } catch (e) { dbg('ProtocolGuard', e); }
     });
   }
 
@@ -210,7 +212,8 @@ class ProtocolGuard {
         error: this._short(msg),
         hexHead: rec?.head ? rec.head.toString('hex') : null,
       }) + '\n';
-      fs.appendFile(file, line, () => { });
+      // Ghi tuần tự (nhiều appendFile song song có thể đảo thứ tự dòng trong file)
+      _writeChain = _writeChain.then(() => fs.promises.appendFile(file, line)).catch(e => { dbg('ProtocolGuard', e); });
     } catch { /* ghi log lỗi không được làm hỏng bot */ }
   }
 }
