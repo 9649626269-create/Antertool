@@ -50,7 +50,11 @@
       "sendClientSettings": true,
       "skipValidation": false,
       "viewDistance": null,
-      "theme": "teal"
+      "theme": "teal",
+      "spawnerEspOn": false,
+      "spawnerEspRadiusChunks": 4,
+      "spawnerEspScanTicks": 20,
+      "spawnerEspFilter": "BOTH"
     }
   ],
   "macros": {

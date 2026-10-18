@@ -19,6 +19,7 @@ const Notifier = require('./Notifier');
 const { anglesTo, aimCheck, EYE_STAND } = require('./AimUtil');
 const { resolvePlayerPose, describePose, supportsPoseMeta } = require('./PoseUtil');
 const SG = require('./SpawnerGuard');
+const { SpawnerTracker } = require('./SpawnerTracker');
 const vec3lib = require('vec3');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
 const SELL_SPAWN_REACH = 6; // block — tầm chuột phải vào lồng của auto-sell spawn (từ mắt bot); cũng là ngưỡng "đang đứng đúng chỗ treo lồng"
@@ -38,6 +39,7 @@ class BotSession extends EventEmitter {
     this.socketRooms = socketRooms;
     this.proxy = null;
     this.mc = null;
+    this._spawnerTracker = null;
     this.packetMgr = new PacketMonitor(cfg.id);
     this.protocolGuard = new ProtocolGuard({
       botId: cfg.id,
@@ -129,6 +131,11 @@ class BotSession extends EventEmitter {
     this.spawnerAlertIntervalMs = cfg.spawnerAlertIntervalMs || 5000;
     this.spawnerWhitelist = (cfg.spawnerWhitelist || []).map(n => String(n).toLowerCase());
     this.protectedSpawners = (cfg.protectedSpawners || []).map(p => ({ x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z) }));
+    // SpawnerESP: quét lồng đang được tải, phân loại NATURAL/SMP.
+    this.spawnerEspOn = cfg.spawnerEspOn ?? false;
+    this.spawnerEspRadiusChunks = Math.max(1, Math.min(8, Number(cfg.spawnerEspRadiusChunks) || 4));
+    this.spawnerEspScanTicks = Math.max(5, Math.min(200, Number(cfg.spawnerEspScanTicks) || 20));
+    this.spawnerEspFilter = ['BOTH', 'NATURAL', 'SMP'].includes(String(cfg.spawnerEspFilter || 'BOTH').toUpperCase()) ? String(cfg.spawnerEspFilter || 'BOTH').toUpperCase() : 'BOTH';
     this._spawnerProtectOn = !!cfg.spawnerProtectOn; // ý định bật — thực sự khởi động ở _resumeIntendedStates() khi online
     this._spawnerAlertedAt = new Map();
     this._spawnerBusy = false;
@@ -444,7 +451,70 @@ class BotSession extends EventEmitter {
       this._autoSellFired = false;
     }
   }
+  _startSpawnerEsp() {
+    if (!this.mc || !this.spawnerEspOn) return false;
+    if (this._spawnerTracker && this._spawnerTracker.bot === this.mc) return true;
+    this._stopSpawnerEsp();
+    const tracker = new SpawnerTracker(this.mc, {
+      scanRadiusChunks: this.spawnerEspRadiusChunks,
+      scanTickInterval: this.spawnerEspScanTicks,
+      filter: this.spawnerEspFilter,
+      mergeEnabled: true,
+    });
+    tracker.on('spawner_found', ({ spawner }) => {
+      const p = spawner.pos;
+      this.log('ok', `SpawnerESP: ${spawner.isSMP ? 'SMP' : 'NATURAL/không xác định'} ${spawner.mobLabel} tại ${p.x} ${p.y} ${p.z} — cách ${spawner.distanceBlocks.toFixed(1)} block`);
+      this.emit('spawnerEspFound', { botId: this.cfg.id, spawner });
+    });
+    tracker.on('scan_error', e => this.log('warn', `SpawnerESP: quét lỗi: ${e.message}`));
+    tracker.start();
+    this._spawnerTracker = tracker;
+    this.log('sys', `SpawnerESP đã bật (bán kính ${this.spawnerEspRadiusChunks * 16} block, bộ lọc ${this.spawnerEspFilter}).`);
+    return true;
+  }
+  _stopSpawnerEsp() {
+    if (!this._spawnerTracker) return;
+    try { this._spawnerTracker.stop(); } catch (e) { dbg('SpawnerTracker', e); }
+    this._spawnerTracker.removeAllListeners();
+    this._spawnerTracker = null;
+  }
+  _spawnerEspCommand(args = []) {
+    const sub = String(args[0] || 'status').toLowerCase();
+    if (sub === 'on' || sub === 'bật' || sub === 'bat') {
+      this.spawnerEspOn = true; this.cfg.spawnerEspOn = true;
+      this._persistSpawnerEsp();
+      if (!this.isOnline || !this.mc) { this.log('warn', 'SpawnerESP đã lưu BẬT; sẽ chạy khi bot online.'); return; }
+      this._startSpawnerEsp(); return;
+    }
+    if (sub === 'off' || sub === 'tắt' || sub === 'tat') {
+      this.spawnerEspOn = false; this.cfg.spawnerEspOn = false; this._stopSpawnerEsp(); this._persistSpawnerEsp();
+      this.log('sys', 'SpawnerESP đã TẮT.'); return;
+    }
+    if (sub === 'filter') {
+      const f = String(args[1] || '').toUpperCase();
+      if (!['BOTH', 'NATURAL', 'SMP'].includes(f)) { this.log('warn', 'Dùng: spawneresp filter BOTH|NATURAL|SMP'); return; }
+      this.spawnerEspFilter = f; this.cfg.spawnerEspFilter = f; this._persistSpawnerEsp();
+      if (this._spawnerTracker) { this._stopSpawnerEsp(); this._startSpawnerEsp(); }
+      this.log('sys', `SpawnerESP bộ lọc: ${f}`); return;
+    }
+    if (sub === 'list') {
+      const list = this._spawnerTracker?.getSpawners();
+      if (!list?.size) { this.log('sys', 'SpawnerESP: chưa phát hiện lồng nào trong vùng đang tải.'); return; }
+      for (const sp of list.values()) this.log('sys', `${sp.isSMP ? 'SMP' : 'NATURAL/không xác định'} ${sp.mobLabel} @ ${sp.pos.x} ${sp.pos.y} ${sp.pos.z} (${sp.distanceBlocks.toFixed(1)} block)`);
+      return;
+    }
+    this.log('sys', `SpawnerESP: ${this.spawnerEspOn ? 'BẬT' : 'TẮT'}; tracker ${this._spawnerTracker ? 'đang chạy' : 'đang dừng'}; bán kính ${this.spawnerEspRadiusChunks * 16} block; filter ${this.spawnerEspFilter}.`);
+    this.log('sys', 'Lệnh: spawneresp on|off|status|list|filter BOTH|NATURAL|SMP');
+  }
+  _persistSpawnerEsp() {
+    const mgr = this._manager;
+    const list = mgr?._config?.bots;
+    const c = list?.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
+    if (c) { c.spawnerEspOn = this.spawnerEspOn; c.spawnerEspFilter = this.spawnerEspFilter; }
+    if (mgr?.persistence) mgr.persistence.markDirty();
+  }
   _cleanupOnDisconnect() {
+    this._stopSpawnerEsp();
     if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch (e) { dbg('BotSession', e); } }
     if (this._sellCap) { try { this._finalizeSellRevenue(true); } catch (e) { dbg('BotSession', e); } } // còn doanh thu đang gom dở -> ghi nốt trước khi mất kết nối
     this._clearAllTimers();
@@ -756,6 +826,7 @@ class BotSession extends EventEmitter {
     });
     let _usedProxy = !!proxy;
     mc.on('spawn', () => {
+      if (this.spawnerEspOn) this._startSpawnerEsp();
       this._spawnerZone = 'unknown'; // vào/đổi khu vực -> tính lại việc có lồng cạnh bot không
       this._spawnerArmedSince = 0;
       if (this._firstSpawn) {
@@ -3524,6 +3595,7 @@ class BotSession extends EventEmitter {
       inv.forEach(item => this.log('sys', `[${item.slot}] ${item.name} x${item.count}`));
     });
     r.register('status', 'Hiện trạng thái', () => this.emit('status'));
+    r.register('spawneresp', 'SpawnerESP: quét/phân loại lồng spawn — spawneresp on|off|status|list|filter BOTH|NATURAL|SMP', args => this._spawnerEspCommand(args));
     r.register('reconnect', 'Force reconnect', () => this.forceReconnect());
     r.register('menu', 'Gửi menu command thủ công', () => {
       if (!this.requireOnline('menu')) return;
