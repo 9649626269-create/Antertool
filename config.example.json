@@ -54,7 +54,9 @@
       "spawnerEspOn": false,
       "spawnerEspRadiusChunks": 4,
       "spawnerEspScanTicks": 20,
-      "spawnerEspFilter": "BOTH"
+      "spawnerEspFilter": "BOTH",
+      "sellFailMention": "",
+      "sellFailMaxHome": 10
     }
   ],
   "macros": {

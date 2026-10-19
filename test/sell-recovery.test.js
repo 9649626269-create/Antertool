@@ -75,9 +75,9 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._sellRecovering, false);
   }
 
-  // 2) lỗi hoài: gõ /home đúng N lần (N=3 ở test) rồi báo webhook, tag đúng người
+  // 2) lỗi hoài: gõ /home đúng N lần (N=3 ở test) rồi báo webhook, tag đúng người (khi có cấu hình)
   {
-    const { bot, chats, notified } = mkBot({ sellFailMaxHome: 3 });
+    const { bot, chats, notified } = mkBot({ sellFailMaxHome: 3, sellFailMention: '1413104059333873764' });
     const r = await bot._runSellWithRecovery();
     assert.strictEqual(r.ok, false);
     assert.strictEqual(chats.length, 3, `phải gõ /home đúng 3 lần, thực tế ${chats.length}`);
@@ -90,11 +90,11 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._sellRecovering, false);
   }
 
-  // 3) mặc định tối đa 10 lần
+  // 3) mặc định tối đa 10 lần, sellFailMention rỗng (không còn hardcoded Discord ID)
   {
     const { bot } = mkBot();
     assert.strictEqual(bot.sellFailMaxHome, 10);
-    assert.strictEqual(bot.sellFailMention, '1413104059333873764');
+    assert.strictEqual(bot.sellFailMention, '');
   }
 
   // 4) báo thất bại có giãn cách (không spam mỗi chu kỳ) + đổi/tắt tag bằng cấu hình

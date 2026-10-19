@@ -71,6 +71,7 @@ const SECTIONS = [
       { name: 'stopmacro', usage: 'stopmacro', desc: 'dừng macro đang chạy' },
       { name: 'listmacro', usage: 'listmacro', desc: 'xem danh sách macro (config.json > macros)' },
       { name: 'answer', usage: 'answer <nội dung>', desc: 'trả lời câu hỏi macro đang chờ (ask/askmap/confirm)' },
+      { name: 'autoorder', usage: 'autoorder <item> | autoorder off | autoorder status', desc: 'tự /order → chọn đơn giá cao nhất → giao hàng, đếm stack/tiền theo xác nhận của server' },
       { name: 'autosell', usage: 'autosell <%đầy> <macro> | autosell off', desc: 'tự chạy macro khi túi đồ đầy (không có đối số = xem)' },
       { name: 'autosell', usage: 'autosell revenue [report|reset|on|off|every <30m>|keyword <chữ>|ignorechat on|off]', desc: 'doanh thu của auto-sell macro: xem/gửi báo cáo webhook, lọc tin bán' },
       { name: 'goal', usage: 'goal <số> <macro> | goal off', desc: 'tự chạy macro khi tiền đạt mục tiêu (không có đối số = xem)' },

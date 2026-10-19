@@ -1,6 +1,6 @@
 'use strict';
 // SpawnerTracker — port của SpawnerESP + TrackedSpawner từ ClowingAddon (Meteor mod).
-// Quét lồng trong chunk đã load, phân loại NATURAL / SMP, tích hợp với SpawnerGuard.js.
+// Quét lồng trong chunk đã load, phân loại NATURAL / SMP, tích hợp với SpawnMonitor.js.
 //
 // Mineflayer types sử dụng:
 //   bot.entity        → { position: {x,y,z} }

@@ -29,7 +29,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SPAWNER = { x: 3, y: 64, z: 0 };
 const CHEST = { x: 3, y: 64, z: 2 };
 const FULL = [[0, 0, 0, 1, 1, 1]];
-const { anglesTo } = require('../src/core/AimUtil');
+const { anglesTo } = require('../src/core/VectorUtil');
 const key = p => `${p.x},${p.y},${p.z}`;
 
 function mkBot(cfg = {}) {

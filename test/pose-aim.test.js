@@ -22,7 +22,7 @@ Module._load = function (request, ...rest) {
 };
 const BotSession = require('../src/core/BotSession');
 const { CS } = require('../src/core/constants');
-const { anglesTo } = require('../src/core/AimUtil');
+const { anglesTo } = require('../src/core/VectorUtil');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const key = p => `${p.x},${p.y},${p.z}`;
 const FULL = [[0, 0, 0, 1, 1, 1]];

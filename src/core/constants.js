@@ -83,3 +83,16 @@ exports.resolveVersion = (...candidates) => {
   }
   return exports.DEFAULT_MC_VERSION;
 };
+
+// Auto-sell spawn & teleport constants (chuyển từ BotSession.js để loại bỏ magic number)
+exports.SELL = Object.freeze({
+  SPAWN_REACH: 6,                 // block — tầm chuột phải vào lồng
+  GUI_CLICKS: 2,                  // số lần chuột phải trước khi coi GUI không mở
+  GUI_FIRST_WAIT_MS: 3500,        // chờ GUI sau lần chuột phải đầu
+  GUI_LAST_WAIT_MS: 5000,         // chờ GUI lần cuối
+});
+exports.TP = Object.freeze({
+  PRESEND_MS: 600,                // thả phím + chờ vận tốc về 0 trước khi gõ lệnh teleport
+  HUD_RE: /teleport|dịch chuyển|dich chuyen|home|hủy|huy bo|cancel|di chuyển|đứng yên|dung yen|cooldown|hồi chiêu|chờ|please wait|don't move|do not move|moved/i,
+});
+// Không còn hardcoded Discord ID. Dùng cfg.sellFailMention hoặc để trống.

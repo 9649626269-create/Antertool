@@ -1,8 +1,8 @@
 'use strict';
-// PoseUtil: nhận diện tư thế (đứng/ngồi/bò...) + trạng thái cơ thể (đang nhảy/trượt/server chưa cập nhật tư thế) để tính đúng độ cao mắt.
+// MotionUtil: nhận diện tư thế (đứng/ngồi/bò...) + trạng thái cơ thể (đang nhảy/trượt/server chưa cập nhật tư thế) để tính đúng độ cao mắt.
 const assert = require('assert');
-const { normalizePose, supportsPoseMeta, readReportedPose, headroomAbove, maxPoseForHeadroom, poseFromEyeHeight, resolvePlayerPose, describePose } = require('../src/core/PoseUtil');
-const { anglesTo, aimCheck } = require('../src/core/AimUtil');
+const { normalizePose, supportsPoseMeta, readReportedPose, headroomAbove, maxPoseForHeadroom, poseFromEyeHeight, resolvePlayerPose, describePose } = require('../src/core/MotionUtil');
+const { anglesTo, aimCheck } = require('../src/core/VectorUtil');
 
 const FULL = [[0, 0, 0, 1, 1, 1]];
 const blk = (name, shapes = FULL) => ({ name, shapes });

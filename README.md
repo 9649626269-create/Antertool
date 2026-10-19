@@ -2,6 +2,27 @@
 
 Bộ quản lý nhiều bot Minecraft (mineflayer) kèm web dashboard, macro, proxy, Telegram/Discord.
 
+## Changelog cải thiện (2026-10-19)
+- Thêm `package-lock.json` — khóa dependency, Dockerfile dùng `npm ci`.
+- Chuyển magic number sell/teleport vào `constants.js` (`SELL`, `TP`).
+- Xóa hardcoded Discord ID `SELL_FAIL_MENTION_ID`. Dùng `sellFailMention` trong config bot (mặc định rỗng).
+- `SessionVerifier.solveMath` viết lại bằng recursive descent parser (không còn `Function`/`eval`).
+- Thêm `ConfigValidator.js` — kiểm tra schema cơ bản khi load `config.json` (log lỗi, không chặn startup).
+- Dockerfile: thêm `wget`, bắt buộc lockfile.
+- `config.example.json`: thêm `sellFailMention`, `sellFailMaxHome`.
+- **Tách BotSession**:
+  - `ReconnectHandler.js` — toàn bộ scheduleReconnect / cancel / force / proxy-fallback đã chuyển body.
+  - `AutoSellHandler.js`, `TeleportHandler.js`, `LoginHandler.js` — skeleton + composition (delegate). Body method sẽ chuyển tiếp ở bước sau.
+  - BotSession giảm ~120 dòng.
+
+## Tích hợp logic premium (2026-10-19)
+Port từ gói `premium` (Java/Fabric) những phần chạy được ở bot headless:
+- `src/core/PremiumLogic.js` — logic thuần: parse lore đơn hàng (còn thiếu / giá K-M-B), chọn đơn giá cao nhất, parse tin "Bạn đã giao…", đếm stack theo xác nhận server (`ConfirmedTransfer`, `PendingAccounting`), phát hiện hết hàng / hết tiền, whitelist/blacklist, NameProtect, độ trễ theo ping.
+- `src/core/AutoOrder.js` + lệnh `autoorder <item> | off | status` — tự `/order`, lật trang, giao hàng, xác nhận, cộng tiền; báo cáo định kỳ qua webhook sự kiện `autoOrder` (config `autoOrderReportMin`, `autoOrderCauldron`).
+- `"nameProtect": {"TênThật": "BíDanh"}` trong config bot → che tên trong mọi log/webhook.
+- Test: `test/premium-logic.test.js`.
+Không port: KillAura/CrystalAura/AutoTotem... (cần vật lý + render của client Minecraft, không có ở bot mineflayer).
+
 ## Chạy
 ```bash
 node load.js          # khuyên dùng: tự tải/cập nhật code từ GitHub rồi chạy

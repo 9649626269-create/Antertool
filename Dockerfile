@@ -1,14 +1,15 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache tzdata
+# tzdata + wget (dùng cho HEALTHCHECK)
+RUN apk add --no-cache tzdata wget
 ENV TZ=Asia/Ho_Chi_Minh
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 
-# Có package-lock.json -> npm ci (đúng phiên bản đã khoá); chưa có -> npm install
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-fund --no-audit; else npm install --omit=dev --no-fund --no-audit; fi \
+# Ưu tiên npm ci vì đã có package-lock.json khóa phiên bản
+RUN npm ci --omit=dev --no-fund --no-audit \
     && npm cache clean --force
 
 COPY . .

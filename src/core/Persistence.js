@@ -2,6 +2,7 @@
 const fs = require('fs');
 const { dbg } = require('./debug');
 const path = require('path');
+const { validateConfig } = require('./ConfigValidator');
 class Persistence {
   constructor(configPath = path.join(process.cwd(), 'config.json')) {
     this._configPath = configPath;
@@ -15,7 +16,14 @@ class Persistence {
   load() {
     try {
       const raw = fs.readFileSync(this._configPath, 'utf8');
-      this._data = JSON.parse(raw);
+      const data = JSON.parse(raw);
+      const result = validateConfig(data);
+      if (!result.ok) {
+        const msg = 'Config không hợp lệ:\n- ' + result.errors.join('\n- ');
+        if (!process.env.SILENT_CONFIG) console.error('[Persistence]', msg);
+        // Vẫn load nhưng log lỗi — không chặn startup để tương thích ngược
+      }
+      this._data = data;
       return this._data;
     } catch (e) {
       throw new Error(`Cannot load config: ${e.message}`);
