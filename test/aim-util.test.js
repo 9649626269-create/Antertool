@@ -1,7 +1,7 @@
 'use strict';
-// VectorUtil: chỉ khối đặc nguyên khối mới che tia ngắm; block nửa khối (chồi thạch anh tím, nến, thảm, rào...) bỏ qua.
+// AimUtil: chỉ khối đặc nguyên khối mới che tia ngắm; block nửa khối (chồi thạch anh tím, nến, thảm, rào...) bỏ qua.
 const assert = require('assert');
-const { isFullCube, anglesTo, aimCheck, eyeHeightFor } = require('../src/core/VectorUtil');
+const { isFullCube, anglesTo, aimCheck, eyeHeightFor } = require('../src/core/AimUtil');
 
 const FULL = [[0, 0, 0, 1, 1, 1]];
 const blk = (name, shapes) => ({ name, shapes });

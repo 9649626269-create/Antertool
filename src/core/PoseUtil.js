@@ -8,7 +8,7 @@
 //   1. Tư thế SERVER báo (metadata[6], MC >= 1.14)   2. cờ metadata[0] (ngồi/bơi/lướt)   3. entity.eyeHeight của mineflayer (nếu khác 1.62)
 //   4. phím shift bot đang giữ   5. mặc định đứng
 // rồi kẹp theo TRẦN thực tế (khe thấp bị ép ngồi/bò), cuối cùng kiểm tra mắt không lọt vào khối đặc.
-const { EYE_STAND, EYE_SNEAK, EYE_CRAWL, isFullCube, eyeHeightFor } = require('./VectorUtil');
+const { EYE_STAND, EYE_SNEAK, EYE_CRAWL, isFullCube, eyeHeightFor } = require('./AimUtil');
 const { dbg } = require('./debug');
 
 // h = chiều cao hitbox, eye = độ cao mắt tính từ chân (MC 1.14+)
@@ -80,7 +80,7 @@ function headroomAbove({ pos, getBlock, max = 1.8 }) {
     const bx = Math.floor(px), bz = Math.floor(pz);
     for (let by = y0; by <= Math.floor(pos.y + max); by++) {
       let b = null;
-      try { b = getBlock({ x: bx, y: by, z: bz }); } catch (e) { dbg('MotionUtil', e); }
+      try { b = getBlock({ x: bx, y: by, z: bz }); } catch (e) { dbg('PoseUtil', e); }
       if (!b) continue;
       let bottom = null;
       if (Array.isArray(b.shapes)) {
@@ -142,7 +142,7 @@ function resolvePlayerPose({ entity, sneak = false, hasPoseMeta = true, getBlock
     try {
       const h = eyeHeightFor({ pos, base: eye, getBlock });
       if (h < eye - EPS) { eye = h; adjusted = true; key = h <= EYE_CRAWL + 0.01 ? 'swimming' : 'crouching'; }
-    } catch (e) { dbg('MotionUtil', e); }
+    } catch (e) { dbg('PoseUtil', e); }
   }
 
   const onGround = typeof entity?.onGround === 'boolean' ? entity.onGround : null;

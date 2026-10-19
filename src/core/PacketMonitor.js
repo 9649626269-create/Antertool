@@ -2,7 +2,7 @@
 const EventEmitter = require('events');
 const { dbg } = require('./debug');
 const { nowMs } = require('./utils');
-class TrafficWatcher extends EventEmitter {
+class PacketMonitor extends EventEmitter {
   constructor(botId) {
     super();
     this.botId = botId;
@@ -54,7 +54,7 @@ class TrafficWatcher extends EventEmitter {
           this._lastOut.push({ at: nowMs(), name: String(name), d });
           if (this._lastOut.length > 12) this._lastOut.shift();
         }
-      } catch (e) { dbg('TrafficWatcher', e); }
+      } catch (e) { dbg('PacketMonitor', e); }
       return this._origWrite(...args);
     };
     this._interval = setInterval(() => {
@@ -77,7 +77,7 @@ class TrafficWatcher extends EventEmitter {
         this._origWrite = null;
       }
       if (this._boundIn) {
-        try { this._mc._client.removeListener('packet', this._boundIn); } catch (e) { dbg('TrafficWatcher', e); }
+        try { this._mc._client.removeListener('packet', this._boundIn); } catch (e) { dbg('PacketMonitor', e); }
       }
     }
     this._mc = null;
@@ -115,4 +115,4 @@ class TrafficWatcher extends EventEmitter {
     }
   }
 }
-module.exports = TrafficWatcher;
+module.exports = PacketMonitor;

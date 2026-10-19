@@ -1,5 +1,5 @@
 'use strict';
-// PacketFilter — xử lý lỗi parse gói tin server->client của minecraft-protocol, ví dụ:
+// ProtocolGuard — xử lý lỗi parse gói tin server->client của minecraft-protocol, ví dụ:
 //   "Parse error for play.toClient: Read error for undefined : array size is abnormally large, not reading: 210986572"
 // CẢNH BÁO (đã kiểm chứng bằng log thật): nếu để lỗi này ném lên như bình thường thì minecraft-protocol gọi cb(err) trong
 // luồng giải mã -> luồng bị HUỶ -> bot không đọc thêm được gói nào (không thấy chat, không thấy teleport, không trả lời
@@ -48,7 +48,7 @@ const FLOOD_WINDOW_MS = 60000;
 const REPEAT_LOG_MS = 60000;
 
 let _writeChain = Promise.resolve();
-class PacketFilter {
+class ProtocolGuard {
   constructor({ botId = '?', log = () => {}, logDir = path.join(process.cwd(), 'logs'), skipBadPackets = true, onDead = null } = {}) {
     this.botId = botId;
     this._log = log;
@@ -76,12 +76,12 @@ class PacketFilter {
     this._deadNotified = false;
     // deserializer được tạo lại mỗi lần đổi state (login -> configuration -> play) nên phải hook lại
     this._onState = () => this._hook(client);
-    try { client.on('state', this._onState); } catch (e) { dbg('PacketFilter', e); }
+    try { client.on('state', this._onState); } catch (e) { dbg('ProtocolGuard', e); }
     this._hook(client);
   }
 
   detach() {
-    try { if (this._client && this._onState) this._client.removeListener('state', this._onState); } catch (e) { dbg('PacketFilter', e); }
+    try { if (this._client && this._onState) this._client.removeListener('state', this._onState); } catch (e) { dbg('ProtocolGuard', e); }
     this._client = null;
     this._mc = null;
     this._onState = null;
@@ -91,7 +91,7 @@ class PacketFilter {
   _hook(client) {
     try {
       const d = client.deserializer;
-      if (!d || d.__packetFilter || typeof d.parsePacketBuffer !== 'function') return;
+      if (!d || d.__protocolGuard || typeof d.parsePacketBuffer !== 'function') return;
       const orig = d.parsePacketBuffer;
       const self = this;
       d.parsePacketBuffer = function guardedParse(buf) {
@@ -100,12 +100,12 @@ class PacketFilter {
         } catch (e) {
           // PartialReadError do protodef tự nuốt (chờ thêm dữ liệu) — không đụng vào
           if (e && e.partialReadError) throw e;
-          try { self._remember(client, buf); } catch (e) { dbg('PacketFilter', e); }
+          try { self._remember(client, buf); } catch (e) { dbg('ProtocolGuard', e); }
           if (!self.skipBadPackets) throw e;   // chế độ cũ: ném lỗi lên (nguy cơ làm chết luồng đọc)
           // Chế độ mới: bỏ riêng gói này, trả về gói giả để luồng giải mã KHÔNG bị huỷ.
           const id = self._last?.id ?? null;
           self.skipped++;
-          try { self.handleError(e, { skipped: true }); } catch (e) { dbg('PacketFilter', e); }
+          try { self.handleError(e, { skipped: true }); } catch (e) { dbg('ProtocolGuard', e); }
           return {
             data: { name: 'unparsed_packet', params: { id, error: String(e?.message || e).slice(0, 200) } },
             metadata: { name: 'unparsed_packet', size: buf ? buf.length : 0 },
@@ -114,7 +114,7 @@ class PacketFilter {
           };
         }
       };
-      d.__packetFilter = true;
+      d.__protocolGuard = true;
     } catch { /* hook thất bại thì chỉ mất phần chẩn đoán, bot vẫn chạy */ }
   }
 
@@ -187,7 +187,7 @@ class PacketFilter {
         this._deadNotified = true;
         this._log('err', 'Luồng đọc gói tin đã bị huỷ sau lỗi parse — bot không nhận được gì từ server nữa, reconnect ngay.');
         if (this._onDead) this._onDead();
-      } catch (e) { dbg('PacketFilter', e); }
+      } catch (e) { dbg('ProtocolGuard', e); }
     });
   }
 
@@ -213,12 +213,12 @@ class PacketFilter {
         hexHead: rec?.head ? rec.head.toString('hex') : null,
       }) + '\n';
       // Ghi tuần tự (nhiều appendFile song song có thể đảo thứ tự dòng trong file)
-      _writeChain = _writeChain.then(() => fs.promises.appendFile(file, line)).catch(e => { dbg('PacketFilter', e); });
+      _writeChain = _writeChain.then(() => fs.promises.appendFile(file, line)).catch(e => { dbg('ProtocolGuard', e); });
     } catch { /* ghi log lỗi không được làm hỏng bot */ }
   }
 }
 
-module.exports = PacketFilter;
+module.exports = ProtocolGuard;
 module.exports.isParseError = isParseError;
 module.exports.readVarInt = readVarInt;
 module.exports.packetName = packetName;

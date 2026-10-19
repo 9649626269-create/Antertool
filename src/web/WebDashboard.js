@@ -3,7 +3,7 @@ const fs = require('fs');
 const { dbg } = require('../core/debug');
 const path = require('path');
 const security = require('./security');
-const SpawnMonitor = require('../core/SpawnMonitor');
+const SpawnerGuard = require('../core/SpawnerGuard');
 class WebDashboard {
   constructor(botManager, options = {}) {
     this.manager = botManager;
@@ -510,25 +510,25 @@ class WebDashboard {
       sock.on('getMacros', ({ id }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
-        const macros = b.scriptRunner.list().map(n => ({ name: n, next: b.cfg.macros?.[n]?.next || null }));
-        if (cb) cb({ ok: true, macros, running: b.scriptRunner.running, current: b.scriptRunner.currentMacro, waitingAnswer: b.scriptRunner.hasPendingQuestion, question: b.scriptRunner.pendingQuestion });
+        const macros = b.macroEngine.list().map(n => ({ name: n, next: b.cfg.macros?.[n]?.next || null }));
+        if (cb) cb({ ok: true, macros, running: b.macroEngine.running, current: b.macroEngine.currentMacro, waitingAnswer: b.macroEngine.hasPendingQuestion, question: b.macroEngine.pendingQuestion });
       });
       sock.on('runMacro', ({ id, name }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
-        b.scriptRunner.run(name).catch(() => { });
+        b.macroEngine.run(name).catch(() => { });
         if (cb) cb({ ok: true });
       });
       sock.on('stopMacro', ({ id }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
-        b.scriptRunner.stop();
+        b.macroEngine.stop();
         if (cb) cb({ ok: true });
       });
       sock.on('answerMacro', ({ id, text }, cb) => {
         const b = this.manager.findBot(id);
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
-        const ok = b.scriptRunner.answer(text || '');
+        const ok = b.macroEngine.answer(text || '');
         if (cb) cb({ ok, message: ok ? null : 'Không có câu hỏi nào đang chờ' });
       });
       // ===== Board / Đơn hàng =====
@@ -582,7 +582,7 @@ class WebDashboard {
         if (!b) { if (cb) cb({ ok: false, message: 'Bot không tồn tại' }); return; }
         if (cb) cb({ ok: true, on: b._spawnerProtectOn, range: b.spawnerProtectRange, spawners: b.protectedSpawners, whitelist: b.spawnerWhitelist,
           autoMine: b.spawnerAutoMine, autoDisconnect: b.spawnerAutoDisconnect, requireSilk: b.spawnerRequireSilk, enderCmd: b.enderChestCommand, saveRange: b.spawnerSaveRange,
-          ...b.getSpawnerLevelInfo(), guard: SpawnMonitor.describe() });
+          ...b.getSpawnerLevelInfo(), guard: SpawnerGuard.describe() });
       });
       sock.on('setSpawnerProtect', ({ id, on, range, autoMine, autoDisconnect, whitelist, requireSilk, enderCmd, level, tune, keepTune }, cb) => {
         const b = this.manager.findBot(id);
