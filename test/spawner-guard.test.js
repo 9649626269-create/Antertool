@@ -20,10 +20,10 @@ Module._load = function (request, ...rest) {
   if (request === 'express') { const f = () => ({}); f.static = () => (() => { }); f.json = () => (() => { }); return f; }
   return origLoad.call(this, request, ...rest);
 };
-const SG = require('../src/core/SpawnerGuard');
+const SG = require('../src/core/SpawnMonitor');
 const BotSession = require('../src/core/BotSession');
 const { CS } = require('../src/core/constants');
-const { anglesTo } = require('../src/core/AimUtil');
+const { anglesTo } = require('../src/core/VectorUtil');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const key = p => `${p.x},${p.y},${p.z}`;
 

@@ -1,10 +1,10 @@
 const assert = require('assert');
 const EventEmitter = require('events');
 const fs = require('fs'), os = require('os'), path = require('path');
-const ProtocolGuard = require('../src/core/ProtocolGuard');
+const PacketFilter = require('../src/core/PacketFilter');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-'));
 const logs = [];
-const g = new ProtocolGuard({ botId: 'bot-1', log: (l, m) => logs.push([l, m]), logDir: tmp, skipBadPackets: false }); // test đường cũ (ném lỗi)
+const g = new PacketFilter({ botId: 'bot-1', log: (l, m) => logs.push([l, m]), logDir: tmp, skipBadPackets: false }); // test đường cũ (ném lỗi)
 
 const mkDes = () => ({ parsePacketBuffer() { throw new Error('Read error for undefined : array size is abnormally large, not reading: 210986572'); } });
 const client = new EventEmitter();
@@ -64,13 +64,13 @@ setTimeout(() => {
   g.detach();
   assert.strictEqual(client.listenerCount('state'), 0);
   // 9) varint nhiều byte & buffer rỗng
-  const { readVarInt } = ProtocolGuard;
+  const { readVarInt } = PacketFilter;
   assert.deepStrictEqual(readVarInt(Buffer.from([0xac, 0x02])), { value: 300, size: 2 });
   assert.strictEqual(readVarInt(Buffer.alloc(0)), null);
   assert.strictEqual(readVarInt(Buffer.from([0x80, 0x80])), null);
   // 10) attach với mc không có _client không ném lỗi
   g.attach({}); g.attach(null);
-  console.log('ALL ProtocolGuard TESTS PASSED');
+  console.log('ALL PacketFilter TESTS PASSED');
 }, 100);
 
 // ===== 5) Mô phỏng FullPacketParser của minecraft-protocol: lỗi parse -> cb(err) -> luồng bị huỷ (bot điếc) =====
@@ -90,7 +90,7 @@ class FakeFullPacketParser extends Transform {
 const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'pg2-'));
 const run = (skip, label) => new Promise(resolve => {
   const glogs = [];
-  const guard = new ProtocolGuard({ botId: 'b', log: (l, m) => glogs.push([l, m]), logDir: tmp2, skipBadPackets: skip, onDead: () => glogs.push(['dead-cb', '']) });
+  const guard = new PacketFilter({ botId: 'b', log: (l, m) => glogs.push([l, m]), logDir: tmp2, skipBadPackets: skip, onDead: () => glogs.push(['dead-cb', '']) });
   const des = new FakeFullPacketParser();
   const cl = new EventEmitter(); cl.state = 'play'; cl.deserializer = des;
   const got = [];
@@ -123,5 +123,5 @@ const run = (skip, label) => new Promise(resolve => {
   assert.strictEqual(c.des.destroyed, false);
   assert.strictEqual(c.got[c.got.length - 1], 'ok_9');
   assert.strictEqual(c.glogs.filter(l => l[0] === 'warn').length, 1);
-  console.log('ProtocolGuard SKIP-MODE TESTS PASSED');
+  console.log('PacketFilter SKIP-MODE TESTS PASSED');
 })().catch(e => { console.error(e); process.exit(1); });
