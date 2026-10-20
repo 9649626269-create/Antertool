@@ -209,7 +209,7 @@ class AutoSellHandler {
     // (báo lỗi = cả chuỗi gõ /home rồi bán lại, tốn ~15s mỗi lần).
     let win = null, waited = 0;
     for (let attempt = 1; attempt <= SELL.GUI_CLICKS && !win; attempt++) {
-      const waitMs = attempt < SELL.GUI_CLICKS ? (s.cfg.sellGuiFirstWaitMs ?? SELL.GUI_FIRST_WAIT_MS) : (s.cfg.sellGuiLastWaitMs ?? SELL.GUI_LAST_WAIT_MS);
+      const waitMs = attempt < SELL.GUI_CLICKS ? SELL.GUI_FIRST_WAIT_MS : SELL.GUI_LAST_WAIT_MS;
       // đăng ký chờ GUI TRƯỚC khi click để không lỡ sự kiện windowOpen
       const winP = s._waitWindowOpen(mc, waitMs);
       try { await s._withTimeout(mc.activateBlock(block), 2500); }
@@ -285,12 +285,11 @@ class AutoSellHandler {
   async _sellGoHome(mc, n, stop) {
     const s = this.s;
     const cmd = s._sellHomeCmd();
-    const presendMs = s.cfg.tpPresendMs ?? TP.PRESEND_MS;
-    const minGap = s.cfg.sellHomeMinGapMs ?? (presendMs + s._tp.deadlineMs + s._tp.settleMs + 1000); // không gõ dồn khi lần trước chưa xong (server còn đếm ngược/cooldown)
+    const minGap = TP.PRESEND_MS + s._tp.deadlineMs + s._tp.settleMs + 1000; // không gõ dồn khi lần trước chưa xong (server còn đếm ngược/cooldown)
     while (nowMs() < (s._lastSellHomeAt || 0) + minGap) { if (stop()) return false; await sleep(500); }
     try { if (mc.currentWindow) mc.closeWindow(mc.currentWindow); } catch (e) { dbg('BotSession', e); }
     s._tpHoldStill(nowMs());
-    await sleep(presendMs);
+    await sleep(TP.PRESEND_MS);
     if (stop()) return false;
     try { mc.chat(cmd); } catch (e) { s.log('err', `Lỗi gửi ${cmd}: ${e.message}`); return false; }
     s._lastSellHomeAt = nowMs();

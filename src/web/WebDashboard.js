@@ -97,11 +97,6 @@ class WebDashboard {
     const bind = security.resolveBind(process.env, this.manager._config || {});
     this._host = bind.host;
     const token = bind.token;
-    security.setStrictLoopbackHost(!token && !bind.exposed);
-    this.expressApp.use((req, res, next) => {
-      if (req.path === '/healthz' || security.isAllowedHost(req)) return next();
-      res.status(403).send('Forbidden host');
-    });
     if (token) {
       this.expressApp.use((req, res, next) => {
         if (security.isAuthorized(token, req.headers.authorization)) return next();

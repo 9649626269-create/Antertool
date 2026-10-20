@@ -33,6 +33,7 @@
     "packetTimeout": 120000,
     "entityTimeout": 90000
   },
+  "ai": { "enabled": true, "model": "gemini-2.5-flash", "cooldownMin": 30, "maxPerDay": 20 },
   "bots": [
     {
       "id": "bot-1",

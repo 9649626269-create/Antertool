@@ -13,6 +13,7 @@
     "start:nolauncher": "node main.js",
     "test": "node test/run-all.js",
     "lint": "node scripts/check-syntax.js",
+    "ai:test": "node scripts/ai-test.js",
     "start:production": "NODE_ENV=production node main.js"
   },
   "dependencies": {

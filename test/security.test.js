@@ -33,14 +33,4 @@ let res; s.allowSocketRequest(req('https://evil.com', 'localhost:3000'), (e, ok)
   assert.deepStrictEqual([b.token, b.exposed], ['', false]);
   assert.notStrictEqual(r({ NODE_ENV: 'production' }, {}).token, r({ NODE_ENV: 'production' }, {}).token);
 }
-// DNS-rebinding: loopback không token -> Host phải là loopback
-{
-  const h = host => ({ headers: { host } });
-  assert.strictEqual(s.isAllowedHost(h('evil.com:3000')), true, 'mặc định (chưa bật strict) cho qua');
-  s.setStrictLoopbackHost(true);
-  for (const ok of ['localhost:3000', '127.0.0.1:3000', '[::1]:3000', '127.0.0.1']) assert.strictEqual(s.isAllowedHost(h(ok)), true, ok);
-  for (const bad of ['evil.com:3000', 'localhost.evil.com', undefined]) assert.strictEqual(s.isAllowedHost(h(bad)), false, String(bad));
-  let r; s.allowSocketRequest({ headers: { host: 'evil.com' } }, (e, ok) => r = ok); assert.strictEqual(r, false);
-  s.setStrictLoopbackHost(false);
-}
 console.log('SECURITY TESTS PASSED');

@@ -7,6 +7,7 @@ const chalk = require('chalk');
 const BotManager = require('./src/services/BotManager');
 const Notifier = require('./src/core/Notifier');
 const TelegramNotifier = require('./src/core/TelegramNotifier');
+const AiDiagnoser = require('./src/core/AiDiagnoser');
 const HelpCatalog = require('./src/core/HelpCatalog');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 let config;
@@ -102,6 +103,13 @@ const manager = new BotManager({
   io,
   onBotLog: printBotLog,
 });
+// AI phân tích lỗi nặng bằng Gemini (chỉ gợi ý, không tự sửa code). Tự tắt nếu chưa có GEMINI_API_KEY. Xem README mục "AI phân tích lỗi".
+const aiDiag = new AiDiagnoser({
+  config,
+  redact: s => { try { return manager.telegramLogs._redact(s); } catch (e) { return s; } },
+  log: (level, msg) => { try { manager.runtimeLog(level, msg); } catch (e) { dbg('main', e); } },
+});
+
 const WebDashboard = require('./src/web/WebDashboard');
 const dashboard = new WebDashboard(manager, {
   expressApp,
@@ -611,6 +619,7 @@ async function shutdown(code = 0) {
     console.error(colors.err('[FATAL]'), e.message);
     console.error(e.stack);
     try { manager.runtimeLog('err', '[FATAL] ' + (e && e.stack ? e.stack : e)); await manager.flushTelegramLogs(2500); } catch (e) { dbg('main', e); }
+    try { await Promise.race([aiDiag.diagnose('FATAL', e), new Promise(r => setTimeout(r, 15000))]); await manager.flushTelegramLogs(2500); } catch (e2) { dbg('main', e2); } // tool sắp thoát: chờ tối đa 15s để lưu kết luận AI
     process.exit(1);
   }
 })();
@@ -619,8 +628,10 @@ process.on('SIGTERM', () => shutdown());
 process.on('uncaughtException', err => {
   console.error(colors.err('[UNCAUGHT]'), err.message || err);
   try { manager.runtimeLog('err', '[UNCAUGHT] ' + ((err && err.stack) || err)); } catch (e) { dbg('main', e); }
+  aiDiag.diagnose('UNCAUGHT', err);   // không await: không chặn tiến trình
 });
 process.on('unhandledRejection', (reason) => {
   console.error(colors.err('[UNHANDLED]'), reason?.message || reason);
   try { manager.runtimeLog('err', '[UNHANDLED] ' + ((reason && reason.stack) || reason)); } catch (e) { dbg('main', e); }
+  aiDiag.diagnose('UNHANDLED', reason);
 });

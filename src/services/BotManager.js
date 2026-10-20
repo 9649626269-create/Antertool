@@ -44,7 +44,7 @@ class BotManager {
     });
     // Log runtime -> FILE trên máy (logs/runtime-YYYY-MM-DD.log): còn đọc được sau khi tool sập. Cấu hình: xem _applyFileLogConfig
     this.fileLogs = new FileLogger({
-      dir: process.env.ANTER_LOG_DIR || (require('fs').existsSync('/sdcard') ? '/sdcard/bot' : require('path').join(require('path').dirname(this.configPath), 'logs')), // Android/Termux: log runtime vào /sdcard/bot (ghi đè bằng ANTER_LOG_DIR hoặc config.fileLogDir)
+      dir: process.env.ANTER_LOG_DIR || require('path').join(require('path').dirname(this.configPath), 'logs'),
       tz: () => this._scheduleTz(),
       redact: s => this.telegramLogs._redact(s), // dùng chung bộ che mật khẩu/token với log Telegram
     });

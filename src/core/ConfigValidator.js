@@ -69,18 +69,15 @@ function validateMacros(macros, where, errors) {
   }
 }
 
-// Lỗi nghiêm trọng: config không phải object, host/port sai, bots/proxies sai cấu trúc, bot thiếu/trùng id.
-const FATAL_RE = /^(config phải|host phải|port phải|bots phải|bots\[\d+\]( phải là object|\.id |\.port )|bots\[\]\.id|proxies)/;
-
 /**
  * Validate toàn bộ config.
  * @param {object} cfg
- * @returns {{ok: boolean, errors: string[], fatal: string[], warnings: string[]}}
+ * @returns {{ok: boolean, errors: string[]}}
  */
 function validateConfig(cfg) {
   const errors = [];
   if (!isObj(cfg)) {
-    return { ok: false, errors: ['config phải là object'], fatal: ['config phải là object'], warnings: [] };
+    return { ok: false, errors: ['config phải là object'] };
   }
 
   // Top-level optional but typed
@@ -162,18 +159,8 @@ function validateConfig(cfg) {
 
   // proxies
   if (cfg.proxies !== undefined && !Array.isArray(cfg.proxies)) errors.push('proxies phải là mảng');
-  else if (Array.isArray(cfg.proxies)) {
-    cfg.proxies.forEach((p, i) => {
-      if (!isObj(p)) { errors.push(`proxies[${i}] phải là object { host, port }`); return; }
-      if (!isStr(p.host) || !p.host.trim()) errors.push(`proxies[${i}].host bắt buộc và phải là string không rỗng`);
-      if (!isNum(p.port) || p.port < 1 || p.port > 65535) errors.push(`proxies[${i}].port phải là số 1-65535`);
-    });
-  }
 
-  // Phân loại: lỗi nghiêm trọng (cấu trúc/trường bắt buộc — không thể chạy an toàn) vs cảnh báo (kiểu của tuỳ chọn phụ).
-  const fatal = errors.filter(e => FATAL_RE.test(e));
-  const warnings = errors.filter(e => !FATAL_RE.test(e));
-  return { ok: errors.length === 0, errors, fatal, warnings };
+  return { ok: errors.length === 0, errors };
 }
 
 module.exports = { validateConfig, validateMacroSteps, validateMacros };

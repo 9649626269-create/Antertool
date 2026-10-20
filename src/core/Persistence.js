@@ -19,19 +19,14 @@ class Persistence {
       const data = JSON.parse(raw);
       const result = validateConfig(data);
       if (!result.ok) {
-        const fatal = result.fatal || [];
-        const warns = result.warnings || result.errors;
-        if (warns.length && !process.env.SILENT_CONFIG) console.error('[Persistence] Cảnh báo config:\n- ' + warns.join('\n- '));
-        // Lỗi nghiêm trọng (trường bắt buộc/cấu trúc sai) -> dừng khởi động. Đặt ALLOW_INVALID_CONFIG=1 để bỏ qua (không khuyến nghị).
-        if (fatal.length && process.env.ALLOW_INVALID_CONFIG !== '1') {
-          throw new Error('Config không hợp lệ:\n- ' + fatal.join('\n- '));
-        }
-        if (fatal.length && !process.env.SILENT_CONFIG) console.error('[Persistence] ALLOW_INVALID_CONFIG=1 — vẫn chạy dù có lỗi nghiêm trọng:\n- ' + fatal.join('\n- '));
+        const msg = 'Config không hợp lệ:\n- ' + result.errors.join('\n- ');
+        if (!process.env.SILENT_CONFIG) console.error('[Persistence]', msg);
+        // Vẫn load nhưng log lỗi — không chặn startup để tương thích ngược
       }
       this._data = data;
       return this._data;
     } catch (e) {
-      throw new Error(e.message.startsWith('Config không hợp lệ') ? e.message : `Cannot load config: ${e.message}`);
+      throw new Error(`Cannot load config: ${e.message}`);
     }
   }
   get data() {

@@ -40,6 +40,18 @@ Khác bản Java: giới hạn số lần gửi lại lệnh login, chờ GUI n�
 ## Đọc stats người chơi — `checkstats` (2026-10-20)
 Port phần đọc dữ liệu stats của CheckStatsKingMC → `src/core/StatsReader.js`. Lệnh `checkstats <người chơi>`: bot gõ `/stats <tên>`, đọc GUI (tên + lore của từng ô, kể cả NBT/component), bỏ mã màu và chữ hoa nhỏ (`ᴍᴏɴᴇʏ` → `MONEY`), bỏ item trang trí (kính, barrier) và dòng hướng dẫn "nhấp/click", rồi in `TIÊU ĐỀ | giá trị` ra log + phát sự kiện `playerStats` (socket.io / `session.on`). Dùng trong code: `await session.statsReader.request('Notch')` → `{ player, title, items[], lines[] }`. Có timeout 15s, nhận tin "không tìm thấy người chơi", từ chối khi bot offline/bận (macro, bảo vệ lồng, đang đăng nhập). Trong lúc chờ GUI, `WindowRouter`/`StatsParser` bị chặn để không ghi đè shard của chính bot. Chưa port: `/bal`, order, AH, online, leaderboard, phần Discord/queue. Test: `test/stats-reader.test.js`.
 
+## AI phân tích lỗi (Gemini)
+Khi tool gặp lỗi nặng (`[FATAL]`, `[UNCAUGHT]`, `[UNHANDLED]`), `src/core/AiDiagnoser.js` gửi stack trace (đã che mật khẩu/token) cho Gemini và ghi kết luận `[AI] ...` (nguyên nhân – cách kiểm tra – hướng sửa) vào log runtime + Telegram. **Chỉ gợi ý, không tự sửa code.** Không có khoá thì tự tắt.
+
+Cài đặt:
+1. Tạo khoá ở https://aistudio.google.com → *Get API key* (free tier không cần bật billing; hạn mức tuỳ model, có thể đổi theo thời gian).
+2. Đặt `GEMINI_API_KEY=...` trong biến môi trường hoặc file `.env` cạnh `config.json` (đã nằm trong `.gitignore`). Docker/Render: dùng `--env-file`/Environment. Đừng dán khoá vào chat hay commit lên GitHub.
+3. Thử: `npm run ai:test` (gửi 1 lỗi giả, in kết luận).
+
+Tuỳ chọn trong `config.json`: `"ai": { "enabled": true, "model": "gemini-2.5-flash", "cooldownMin": 30, "maxPerDay": 20, "timeoutMs": 30000 }`. `GEMINI_MODEL` (môi trường) ưu tiên hơn `ai.model`; nếu báo 404 thì tên model đã đổi — xem danh sách model trong AI Studio. `AI_DIAGNOSE=0` tắt hẳn.
+Chống tốn quota: cùng một lỗi chỉ phân tích 1 lần / `cooldownMin` phút, tối đa `maxPerDay` lần/ngày; hết hạn mức (429) hoặc lỗi mạng chỉ ghi cảnh báo, bot không bị ảnh hưởng.
+Lưu ý riêng tư: free tier của Google có thể dùng nội dung để cải thiện sản phẩm — chat người chơi không bao giờ được gửi, nhưng stack trace có thể chứa tên bot/đường dẫn.
+
 ## Chạy
 ```bash
 node load.js          # khuyên dùng: tự tải/cập nhật code từ GitHub rồi chạy
