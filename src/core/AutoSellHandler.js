@@ -387,6 +387,6 @@ class AutoSellHandler {
       revenue: s.autoSellSpawnRevenue, msgKeyword: s.autoSellSpawnMsgKeyword, ignoreChat: s.autoSellSpawnIgnoreChat, reportMin: s.autoSellSpawnReportMin,
     };
   }
-$}
+}
 
 module.exports = AutoSellHandler;

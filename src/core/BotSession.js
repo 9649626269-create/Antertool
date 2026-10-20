@@ -580,8 +580,8 @@ class BotSession extends EventEmitter {
   forceReconnect() { return this.reconnectHandler.force(); }
   async start() {
     if (this._shouldNotRun) return;
-    if (this.isConnected) {
-      this.log('warn', 'start() gọi khi bot đã kết nối — bỏ qua');
+    if (this.isConnected || this.state.connState === CS.CONNECTING) {
+      this.log('warn', 'start() gọi khi bot đang kết nối hoặc đã kết nối — bỏ qua');
       return;
     }
     if (this._manager && this._manager._activeConnects >= TIMING.MAX_CONCURRENT_CONNECTS) {
@@ -814,7 +814,7 @@ class BotSession extends EventEmitter {
         this.log('chat', text);
         if (pos !== 'chat') { this._tp.note(text, nowMs()); this.emit('serverNotice', { id: this.cfg.id, kind: 'system', text }); } // tin hệ thống trong lúc chờ teleport (không tính chat người chơi)
         if (!this._loginConfirmed && this._isLoginSuccessText(text)) this._onLoginConfirmed();
-        this.tryChatShard(text);
+        if (pos !== 'chat') this.tryChatShard(text); // chat người chơi có thể bị giả mạo số shard
       } catch (e) {
         this.log('err', 'Lỗi message: ' + e.message);
       }
@@ -1505,7 +1505,7 @@ class BotSession extends EventEmitter {
   // đè lên góc nhìn vừa chỉnh về lồng ngay trước lúc chuột phải/đào nên "góc nhìn không đổi".)
   _holdView(ms) { this._viewLockUntil = Math.max(this._viewLockUntil || 0, nowMs() + ms); }
   _afkPaused(now = nowMs()) {
-    return this._tp.frozen(now) || this._sellSpawnBusy || this._sellRecovering || this._spawnerBusy || now < (this._viewLockUntil || 0);
+    return this._tp.frozen(now) || this._sellSpawnBusy || this._sellRecovering || this._spawnerBusy || !!this.scriptRunner?.running || !!this.autoOrder?.active || now < (this._viewLockUntil || 0);
   }
   // Thả các phím AFK đang giữ (đi/nhảy) để bot đứng im khi cần nhắm
   _releaseAfkKeys() {
@@ -1883,7 +1883,7 @@ class BotSession extends EventEmitter {
     return new Promise(resolve => {
       let done = false;
       const finish = w => { if (done) return; done = true; clearTimeout(t); mc.removeListener('windowOpen', onOpen); resolve(w); };
-      const onOpen = w => setTimeout(() => finish(w), 500); // chờ server gửi đủ ô đồ
+      const onOpen = w => { clearTimeout(t); setTimeout(() => finish(w), 500); }; // chờ server gửi đủ ô đồ (hủy timeout 6s ngay khi cửa sổ mở)
       const t = setTimeout(() => finish(null), 6000);
       mc.on('windowOpen', onOpen);
       try { mc.chat(cmd.startsWith('/') ? cmd : `/${cmd}`); } catch { finish(null); }
@@ -2055,6 +2055,7 @@ class BotSession extends EventEmitter {
           if (!mc.heldItem || !/_pickaxe$/.test(mc.heldItem.name || '')) { // cúp hỏng giữa chừng
             const alt = this._invPickaxe();
             if (!alt) throw new Error('cúp đã hỏng, không còn cúp khác');
+            pick = alt;
             await mc.equip(alt, 'hand');
           }
           if (!mc.canDigBlock(block)) { outOfReach = true; break; }
@@ -2961,6 +2962,10 @@ class BotSession extends EventEmitter {
         this.log('sys', g.status() + ' | Lệnh: beggar on|off|list|forget <tên>|test <tin>');
       }
     });
+    r.register('begger', 'Chặn người ăn xin (alias của beggar): begger on|off|status|list|forget <tên>|test <tin nhắn>', (args) => {
+      const entry = r._commands.get('beggar');
+      if (entry && entry.fn) entry.fn(args);
+    });
     r.register('shard', 'Bật/Tắt Auto Shard', () => {
       if (!this.requireOnline('shard')) return;
       this.state.autoShard = !this.state.autoShard;
@@ -3008,7 +3013,7 @@ class BotSession extends EventEmitter {
       const onTpaWindow = (win) => {
         if (tpaGuiTimer) { clearTimeout(tpaGuiTimer); tpaGuiTimer = null; }
         this.mc.removeListener('windowOpen', onTpaWindow);
-        this._setTimer('tpaConfirm', () => {
+        this._setTimer('tpaConfirmCmd', () => {
           if (!this.isOnline) return;
           try {
             if (!win.slots || win.slots.length <= TPA_CONFIRM_SLOT) {

@@ -183,6 +183,7 @@ class AutoLoginFlow {
     this.s.cfg.autoLogin = { ...(this.s.cfg.autoLogin || {}), enabled: !!v };
     this.reload();
     if (!v) this.reset();
+    try { this.s._persistAutoLoginCfg?.(); } catch { /* lưu cấu hình không được làm hỏng bot */ }
   }
 
   status() {

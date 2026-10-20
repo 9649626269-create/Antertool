@@ -495,7 +495,8 @@ class ProxyManager {
     }
     const parts = str.split(':');
     if (parts.length === 4) {
-      return this.add(`${detection.type}://${parts[0]}:${parts[1]}@${parts[2]}:${parts[3]}`, tag);
+      // ip:port:user:pass -> type://user:pass@ip:port
+      return this.add(`${detection.type}://${encodeURIComponent(parts[2])}:${encodeURIComponent(parts[3])}@${parts[0]}:${parts[1]}`, tag);
     } else if (parts.length === 3) {
       return this.add(`${detection.type}://${parts[0]}:${parts[1]}`, tag);
     } else {

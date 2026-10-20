@@ -43,9 +43,9 @@ class BotManager {
       botIds: () => this.bots.map(b => b?.cfg?.id).filter(x => x !== undefined && x !== null), // bot hiện có -> ghi stats cả bot chưa có log
       stats: (id) => this._serverStats(id), // stats server (scoreboard: money, shard, kills...) ghi đầu file log_all.txt, mỗi bot 1 khối
     });
-    // Log runtime -> FILE trên máy (logs/runtime-YYYY-MM-DD.log): còn đọc được sau khi tool sập. Cấu hình: xem _applyFileLogConfig
+    // Log runtime -> FILE trên máy (/sdcard/bot/log/runtime-YYYY-MM-DD.log): còn đọc được sau khi tool sập. Cấu hình: xem _applyFileLogConfig
     this.fileLogs = new FileLogger({
-      dir: this._envLogDir() || require('path').join(require('path').dirname(this.configPath), 'logs'),
+      dir: this._envLogDir() || FileLogger.resolveDefaultLogDir(require('path').dirname(this.configPath)),
       tz: () => this._scheduleTz(),
       redact: s => this.telegramLogs._redact(s), // dùng chung bộ che mật khẩu/token với log Telegram
     });
@@ -116,14 +116,25 @@ class BotManager {
   _envLogDir() {
     const base = require('path').dirname(this.configPath);
     const v = process.env.ANTER_LOG_DIR || readDotEnv(base).ANTER_LOG_DIR;
-    return v ? require('path').resolve(base, String(v)) : '';
+    return v ? FileLogger.normalizeLogDir(v, base) : '';
   }
   _applyFileLogConfig() {
     const c = this._config || {};
+    const base = require('path').dirname(this.configPath);
     const fl = { enabled: c.fileLogs !== false, levels: c.fileLogLevels ?? 'all', includeChat: c.fileLogChat === true,
-      keepDays: c.fileLogKeepDays ?? 7, maxMB: c.fileLogMaxMB ?? 10, format: c.fileLogFormat ?? 'text' };
-    if (!this._envLogDir() && c.fileLogDir) fl.dir = require('path').resolve(require('path').dirname(this.configPath), String(c.fileLogDir));
+      keepDays: c.fileLogKeepDays ?? 7, maxMB: c.fileLogMaxMB ?? 10, format: c.fileLogFormat ?? 'text', baseDir: base };
+    const envDir = this._envLogDir();
+    if (envDir) fl.dir = envDir;
+    else if (c.fileLogDir) fl.dir = FileLogger.normalizeLogDir(c.fileLogDir, base);
+    else fl.dir = FileLogger.resolveDefaultLogDir(base);
     this.fileLogs.configure(fl);
+    try { if (this.fileLogs.enabled) this.fileLogs.ensureFile(); } catch (e) { dbg('BotManager', e); }
+  }
+  setFileLogOption(key, value) {
+    if (!this._config) this._config = {};
+    this._config[key] = value;
+    this.persistence.set(key, value);
+    this._applyFileLogConfig();
   }
   _wireBotLog(bot) {
     bot.on('log', ev => {
@@ -439,7 +450,7 @@ class BotManager {
     const freeMemMB = os.freemem() / (1024 * 1024);
     const procMem = process.memoryUsage();
     const usedByProcessMB = procMem.rss / (1024 * 1024);
-    const availableMB = freeMemMB - CAPACITY.RESERVED_OS_MB;
+    const availableMB = Math.max(0, freeMemMB - CAPACITY.RESERVED_OS_MB);
     const safeMB = Math.max(0, availableMB - CAPACITY.RESERVED_SYSTEM_MB);
     const afkCount = this.bots.filter(b => b.state.afk).length;
     const activeCount = this.bots.filter(b => b.isOnline && !b.state.afk).length;

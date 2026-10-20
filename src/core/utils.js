@@ -64,7 +64,10 @@ function parseShardNum(text) {
   const up = text.toUpperCase();
   if (!up.includes('SHARD') && !up.includes('MẢNH')) return null;
   for (const m of text.matchAll(/(\d[\d,.]*)\s*(k|K|M)?/g)) {
-    let n = parseFloat(m[1].replace(/[,.]/g, ''));
+    // Có hậu tố k/M: "1.5k" = 1500 (dấu . , cuối + 1-2 chữ số là phần thập phân). Không hậu tố: bỏ dấu phân cách nghìn.
+    let numStr = m[1];
+    const dec = m[2] ? numStr.match(/^(\d[\d,.]*?)[.,](\d{1,2})$/) : null;
+    let n = dec ? parseFloat(dec[1].replace(/[,.]/g, '') + '.' + dec[2]) : parseFloat(numStr.replace(/[,.]/g, ''));
     if (isNaN(n)) continue;
     if (m[2] === 'k' || m[2] === 'K') n *= 1e3;
     if (m[2] === 'M') n *= 1e6;

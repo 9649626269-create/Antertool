@@ -24,7 +24,8 @@ const SECTIONS = [
     bot: [
       { name: 'checkstats', usage: 'checkstats <người chơi>', desc: 'xem stats của người chơi khác: gõ /stats <tên>, đọc GUI, làm sạch tên + lore, bỏ item trang trí' },
       { name: 'autologin', usage: 'autologin on|off|status|now', desc: 'Auto Login & Antibot & Auto Join: tự đăng nhập (/l), vượt GUI antibot, mở /menu và click vào server; now = vào server ngay' },
-      { name: 'beggar', usage: 'beggar on|off|status|list|forget <tên>|test <tin>', desc: 'chặn người ăn xin (xin tiền/xin đồ/"em là newbie"): tự gõ /block <tên> một lần cho mỗi người; test = thử một tin nhắn mà không cần server' },
+      { name: 'beggar', usage: 'beggar on|off|status|list|forget <tên>|test <tin>', desc: 'chặn người ăn xin (xin tiền/xin đồ/"em là newbie"): tự gõ /block <tên> một lần cho mỗi người; test = thử một tin nhắn (gõ "begger" cũng được)' },
+      { name: 'sessioncheck', usage: 'sessioncheck on|off|status', desc: 'quản lý SessionCheck verify: bật/tắt/xem trạng thái tự vượt anti-bot khi kết nối' },
       { name: 'status', usage: 'status', desc: 'hiện trạng thái bot' },
       { name: 'ping', usage: 'ping', desc: 'hiện ping' },
       { name: 'pos', usage: 'pos', desc: 'hiện toạ độ' },
@@ -63,6 +64,7 @@ const SECTIONS = [
       { name: 'addspawner', usage: 'addspawner [x y z]', desc: 'thêm lồng cần bảo vệ (bỏ trống = vị trí hiện tại)' },
       { name: 'removespawner', usage: 'removespawner <x> <y> <z>', desc: 'bỏ lồng khỏi danh sách bảo vệ' },
       { name: 'listspawners', usage: 'listspawners', desc: 'xem danh sách lồng đang bảo vệ' },
+      { name: 'spawneresp', usage: 'spawneresp on|off|status|list|filter BOTH|NATURAL|SMP', desc: 'SpawnerESP: quét/phân loại lồng spawn (tự nhiên vs SMP), lọc hiển thị' },
     ],
   },
   {
@@ -116,6 +118,7 @@ const SECTIONS = [
       { name: 'webhook', usage: 'webhook set <url>', desc: 'lưu webhook Discord (báo disconnect, reconnect, goal, bảo vệ lồng)' },
       { name: 'webhook', usage: 'webhook test | off', desc: 'gửi thử / tắt webhook' },
       { name: 'webhook', usage: 'webhook events [a,b,c]', desc: 'xem/đặt loại sự kiện được báo' },
+      { name: 'webhook', usage: 'webhook mention <ID|@tên|off> | test', desc: 'tag người nhận ở cuối thông báo kick/hết reconnect/cảnh báo lồng (dùng ID số để ping)' },
       { name: 'telegram', usage: 'telegram set <token> [chatId] | chatid | test | off', desc: 'bảng Auto sell spawner + cảnh báo qua Telegram (chatid: tự tìm chat_id sau khi nhắn /start cho bot)' },
       { name: 'telegram', usage: 'telegram panel | every <1s|10s|10m|off> | mode edit|new | events [a,b,c] | commands on|off', desc: 'gửi bảng ngay / nhịp cập nhật (mặc định 1s) / sửa tại chỗ hay tin mới / loại sự kiện / lệnh /status /panel' },
       { name: 'telegram', usage: 'telegram logs [on|off]', desc: 'log runtime (log của TẤT CẢ bot + khởi động/tắt/lỗi) gửi lên Telegram thành 1 file log_all.txt tự cập nhật tại chỗ (có stats server từng bot ở đầu file); không có đối số = xem trạng thái' },
@@ -133,7 +136,8 @@ const SECTIONS = [
     con: [
       { name: 'web', usage: 'web on|off|status', desc: 'bật/tắt web localhost (bot vẫn chạy). Gõ "localhost on|off" cũng được' },
       { name: 'sys', usage: 'sys', desc: 'thông số hệ thống (RAM, CPU, uptime)' },
-      { name: 'chatlog', usage: 'chatlog', desc: 'bật/tắt hiển thị chat server/người chơi' },
+      { name: 'chatlog', usage: 'chatlog [on|off|smart|player|all|clear|status]', desc: 'bật/tắt chat; smart = gộp tin trùng nhiều bot & ẩn broadcast lặp lại; player = ẩn toàn bộ broadcast server' },
+      { name: 'filelog', usage: 'filelog [status|on|off|dir <đường_dẫn>|chat on|off]', desc: 'log runtime ghi ra file (mặc định /sdcard/bot/log/runtime-YYYY-MM-DD.log, tự tạo thư mục & file nếu chưa có)' },
       { name: 'update', usage: 'update', desc: 'kiểm tra GitHub, có bản mới thì cập nhật rồi chạy lại (cần chạy bằng npm start)' },
       { name: 'help', usage: 'help | h | ? [phân khu|lệnh|all]', desc: 'trợ giúp theo phân khu' },
       { name: 'exit', usage: 'exit | q | e', desc: 'thoát chương trình' },
@@ -143,7 +147,7 @@ const SECTIONS = [
 ];
 
 // Lệnh đã đăng ký nhưng không liệt kê riêng (là lối vào help hoặc tên gọi khác)
-const HIDDEN_BOT_CMDS = new Set(['help', 'h', 'autosellspawn']);
+const HIDDEN_BOT_CMDS = new Set(['help', 'h', 'autosellspawn', 'begger']);
 
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').trim();
 const botEntries = (sec, regNames) => sec.bot.filter(e => !regNames || regNames.has(e.name));
@@ -155,9 +159,30 @@ function resolveSection(q) {
   return SECTIONS.find(s => s.key === n || norm(s.title) === n || s.aliases.some(a => norm(a) === n)) || null;
 }
 
+const COMMAND_ALIASES = {
+  begger: 'beggar',
+  autosellspawn: 'autosell_spawn',
+  h: 'help',
+  '?': 'help',
+  ls: 'list',
+  add: 'addbot',
+  rmbot: 'delbot',
+  removebot: 'delbot',
+  localhost: 'web',
+  lochost: 'web',
+  dashboard: 'web',
+  tg: 'telegram',
+  system: 'sys',
+  logdir: 'filelog',
+  quit: 'exit',
+  q: 'exit',
+  e: 'exit',
+};
+
 // Tìm theo tên lệnh -> [{ sec, scope:'con'|'bot', e }]
 function findCommands(q, scope, regNames) {
-  const n = norm(q);
+  let n = norm(q);
+  if (COMMAND_ALIASES[n]) n = COMMAND_ALIASES[n];
   const out = [];
   for (const sec of SECTIONS) {
     if (scope === 'console') for (const e of sec.con) if (norm(e.name) === n) out.push({ sec, scope: 'con', e });

@@ -8,6 +8,8 @@ const BotManager = require('./src/services/BotManager');
 const Notifier = require('./src/core/Notifier');
 const TelegramNotifier = require('./src/core/TelegramNotifier');
 const HelpCatalog = require('./src/core/HelpCatalog');
+const ChatFilter = require('./src/core/ChatFilter');
+const FileLogger = require('./src/core/FileLogger');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 let config;
 try {
@@ -51,7 +53,10 @@ const colors = {
 };
 const readline = require('readline');
 let rl = null; // gán khi CLI tương tác khởi động (TTY)
-let _showChatLog = true; // bật/tắt hiển thị chat qua lệnh "chatlog"
+const chatFilter = new ChatFilter({
+  enabled: config.chatLog !== false,
+  mode: config.chatLogMode || 'smart',
+});
 const LEVEL_COLORS = {
   sys: chalk.hex('#64748b'),
   ok: chalk.green,
@@ -65,24 +70,51 @@ const LEVEL_COLORS = {
 function timeStr(ts) {
   return new Date(ts || Date.now()).toLocaleTimeString('vi-VN', { hour12: false });
 }
-// Nhận diện chat người chơi "<Tên> nội dung" để tô màu riêng, khác với
-// thông báo hệ thống/server (join/leave, broadcast, tpa request, v.v.)
-function formatChatLine(botId, msg) {
-  const tag = chalk.hex('#38bdf8')(`[${botId}]`);
-  const playerMatch = /^<\s*([^>]+?)\s*>\s?(.*)$/s.exec(msg || '');
-  if (playerMatch) {
-    const [, name, content] = playerMatch;
-    return `${tag} ${chalk.hex('#facc15').bold('<' + name + '>')} ${chalk.whiteBright(content)}`;
+function collectOnlinePlayers() {
+  if (!manager || !Array.isArray(manager.bots)) return { players: [], onlineBotCount: 0 };
+  const seen = new Set();
+  const players = [];
+  let onlineBotCount = 0;
+  for (const b of manager.bots) {
+    if (!b.isOnline) continue;
+    onlineBotCount++;
+    const pl = b.mc && b.mc.players;
+    if (pl) {
+      for (const name of Object.keys(pl)) {
+        const low = name.toLowerCase();
+        if (!seen.has(low)) { seen.add(low); players.push(name); }
+      }
+    }
   }
+  return { players, onlineBotCount };
+}
+// Nhận diện chat người chơi ("<Tên> nội dung" hoặc "[Rank] Tên » nội dung") để tô màu riêng,
+// đồng thời gộp/ẩn thông báo server lặp lại khi chạy nhiều bot.
+function formatChatLine(botId, msg, dec) {
+  if (dec && dec.kind === 'player' && dec.sender) {
+    const tag = chalk.hex('#38bdf8')(`[${botId}]`);
+    return `${tag} ${chalk.hex('#facc15').bold('<' + dec.sender + '>')} ${chalk.whiteBright(dec.content)}`;
+  }
+  if (dec && dec.kind === 'broadcast' && dec.isServerWide) {
+    const tag = chalk.hex('#94a3b8')('[Server]');
+    return `${tag} ${chalk.hex('#a78bfa')('»')} ${chalk.hex('#cbd5e1')(dec.clean || msg || '')}`;
+  }
+  const tag = chalk.hex('#38bdf8')(`[${botId}]`);
   return `${tag} ${chalk.hex('#a78bfa')('»')} ${chalk.hex('#e2e8f0')(msg || '')}`;
 }
 function printBotLog(botId, entry) {
   const level = entry.level || 'sys';
-  if (level === 'chat' && !_showChatLog) return;
   const time = colors.muted(timeStr(entry.time));
   let line;
   if (level === 'chat') {
-    line = `  ${time} ${formatChatLine(botId, entry.msg)}`;
+    const { players, onlineBotCount } = collectOnlinePlayers();
+    const dec = chatFilter.decide(botId, entry.msg, {
+      time: entry.time || Date.now(),
+      onlinePlayers: players,
+      onlineBotCount,
+    });
+    if (!dec.show) return;
+    line = `  ${time} ${formatChatLine(botId, entry.msg, dec)}`;
   } else {
     const c = LEVEL_COLORS[level] || chalk.white;
     line = `  ${time} ${chalk.hex('#38bdf8')(`[${botId}]`)} ${c(`[${level.toUpperCase()}]`)} ${c(entry.msg || '')}`;
@@ -304,7 +336,7 @@ async function shutdown(code = 0) {
     if (manager.fileLogs.enabled) {
       const logErr = manager.fileLogs.probe();
       if (logErr) console.log(colors.warn(`   Log file: KHÔNG ghi được vào ${manager.fileLogs.dir} (${logErr}). Termux: chạy "termux-setup-storage" để cấp quyền /sdcard, hoặc đổi "fileLogDir"/ANTER_LOG_DIR.`));
-      else console.log(colors.muted(`   Log file: ${manager.fileLogs.dir}`));
+      else console.log(colors.muted(`   Log file: ${manager.fileLogs.currentFile}`));
     }
     if (webOk) console.log(colors.accent(`   Dashboard: http://localhost:${dashboard.port}`));
     else if (!webWanted) console.log(colors.muted('   Dashboard: TẮT — gõ "web on" để bật'));
@@ -591,10 +623,65 @@ async function shutdown(code = 0) {
             case 'system':
               showSysInfo(manager.getSystemMetrics());
               break;
-            case 'chatlog':
-              _showChatLog = !_showChatLog;
-              console.log(_showChatLog ? colors.ok('  ✓ Hiển thị chat: BẬT') : colors.warn('  ✓ Hiển thị chat: TẮT'));
+            case 'chatlog': {
+              const sub = String(args[0] || '').toLowerCase().trim();
+              if (!sub) {
+                chatFilter.enabled = !chatFilter.enabled;
+                console.log(chatFilter.enabled ? colors.ok('  ✓ ' + chatFilter.statusText()) : colors.warn('  ✓ Hiển thị chat: TẮT'));
+              } else if (sub === 'status') {
+                console.log(colors.muted('  ' + chatFilter.statusText()));
+                console.log(colors.muted('  Usage: chatlog [on|off|smart|player|all|clear|status]'));
+              } else if (sub === 'clear' || sub === 'reset') {
+                chatFilter.reset();
+                console.log(colors.ok('  ✓ Đã làm mới bộ nhớ lọc trùng chat'));
+              } else if (chatFilter.setMode(sub)) {
+                console.log(chatFilter.enabled ? colors.ok('  ✓ ' + chatFilter.statusText()) : colors.warn('  ✓ Hiển thị chat: TẮT'));
+              } else {
+                console.log(colors.muted('  Usage: chatlog [on|off|smart|player|all|clear|status]'));
+                console.log(colors.muted('    • smart  (mặc định): gộp tin trùng giữa các bot + ẩn thông báo server lặp lại'));
+                console.log(colors.muted('    • player           : chỉ hiện chat người chơi & phản hồi lệnh, ẩn toàn bộ thông báo server'));
+                console.log(colors.muted('    • all              : hiện toàn bộ tin nhắn thô của từng bot'));
+              }
               break;
+            }
+            case 'filelog':
+            case 'logdir': {
+              const fl = manager.fileLogs;
+              const sub = String(args[0] || 'status').toLowerCase().trim();
+              if (sub === 'on' || sub === 'off') {
+                manager.setFileLogOption('fileLogs', sub === 'on');
+                if (fl.enabled) {
+                  const err = fl.probe();
+                  console.log(err ? colors.warn('  ✗ Không ghi được vào ' + fl.dir + ': ' + err) : colors.ok('  ✓ Đã BẬT ghi log runtime → ' + fl.currentFile));
+                } else {
+                  console.log(colors.warn('  ✓ Đã TẮT ghi log runtime ra file'));
+                }
+              } else if (sub === 'dir' && args[1]) {
+                const rawPath = args.slice(1).join(' ');
+                const normPath = FileLogger.normalizeLogDir(rawPath, path.dirname(manager.configPath));
+                manager.setFileLogOption('fileLogDir', normPath);
+                const err = fl.probe();
+                console.log(err
+                  ? colors.warn('  ✗ Đã đổi thư mục sang ' + fl.dir + ' nhưng chưa ghi được (' + err + '). Trên Termux hãy chạy: termux-setup-storage')
+                  : colors.ok('  ✓ Đã tạo và ghi log runtime vào: ' + fl.currentFile));
+              } else if (sub === 'chat') {
+                const v = String(args[1] || '').toLowerCase();
+                if (v !== 'on' && v !== 'off') {
+                  console.log(colors.muted('  Usage: filelog chat on|off'));
+                  break;
+                }
+                manager.setFileLogOption('fileLogChat', v === 'on');
+                console.log(colors.ok('  ✓ Ghi chat người chơi vào file log: ' + (v === 'on' ? 'BẬT' : 'TẮT')));
+              } else {
+                const err = fl.enabled ? fl.probe() : null;
+                console.log(colors.muted('  Log runtime ra file: ' + (fl.enabled ? (err ? 'LỖI (' + err + ')' : 'BẬT') : 'TẮT')));
+                console.log(colors.muted('  Thư mục: ' + fl.dir));
+                console.log(colors.muted('  File hiện tại: ' + fl.currentFile));
+                console.log(colors.muted('  Ghi chat: ' + (fl.levels.has('chat') ? 'BẬT' : 'TẮT') + ' · Giữ: ' + fl.keepDays + ' ngày'));
+                console.log(colors.muted('  Usage: filelog [status|on|off|dir <đường_dẫn>|chat on|off]'));
+              }
+              break;
+            }
             case 'exit':
             case 'quit':
             case 'q':

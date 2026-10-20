@@ -10,6 +10,7 @@
   "autoMenu": true,
   "menuCommand": "/menu",
   "webDashboard": true,
+  "fileLogDir": "/sdcard/bot/log",
   "dashboardToken": "",
   "afkTabNoise": false,
   "settingsProfile": "vanilla",

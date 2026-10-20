@@ -26,6 +26,10 @@ class Persistence {
       this._data = data;
       return this._data;
     } catch (e) {
+      if (e && e.code === 'ENOENT') { // chưa có config.json -> khởi tạo rỗng thay vì sập lúc khởi động
+        this._data = { bots: [] };
+        return this._data;
+      }
       throw new Error(`Cannot load config: ${e.message}`);
     }
   }

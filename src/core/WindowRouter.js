@@ -106,7 +106,7 @@ const StatsParser = {
       let shard = 0, money = 0;
       for (const sl of win.slots) {
         if (!sl) continue;
-        const type = (sl.type || '').toLowerCase();
+        const type = String(sl.name || '').toLowerCase(); // sl.type là ID số, tên chuỗi nằm ở sl.name
         const name = resolveText(sl.customName || sl.displayName || '').toLowerCase();
         if (type.includes('amethyst') || name.includes('amethyst')) { shard = this._extractNum(sl); }
         if (type.includes('emerald') || name.includes('emerald')) { money = this._extractNum(sl); }

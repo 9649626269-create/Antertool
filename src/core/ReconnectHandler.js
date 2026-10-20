@@ -46,12 +46,12 @@ class ReconnectHandler {
       }, 5 * 60 * 1000);
       return;
     }
-    s._reconnectTimestamps.push(now);
-    s._lastReconnectTime = now;
     if (s._manager && s._manager._activeConnects >= TIMING.MAX_CONCURRENT_CONNECTS) {
       s._setTimer('reconnect_queued', () => this.schedule(reason), 3000);
-      return;
+      return; // chưa kết nối thật -> không tính vào cooldown/rate-limit
     }
+    s._reconnectTimestamps.push(now);
+    s._lastReconnectTime = now;
     s._reconnectScheduled = true;
     s._setState(CS.RECONNECTING);
     const spawnAge = s._spawnTime > 0 ? nowMs() - s._spawnTime : Infinity;
