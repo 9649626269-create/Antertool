@@ -132,8 +132,9 @@ const SECTIONS = [
   },
   {
     key: 'system', title: 'Hệ thống & Web', desc: 'bật/tắt web localhost, thông số máy, cập nhật, thoát',
-    aliases: ['sys', 'web', 'localhost', 'lochost', 'he thong'],
+    aliases: ['sys', 'web', 'localhost', 'lochost', 'he thong', 'dash', 'status'],
     con: [
+      { name: 'dash', usage: 'dash | status', desc: 'hiển thị bảng điều khiển TUI đa khung (System Telemetry, Connectivity, Bot Status)' },
       { name: 'web', usage: 'web on|off|status', desc: 'bật/tắt web localhost (bot vẫn chạy). Gõ "localhost on|off" cũng được' },
       { name: 'sys', usage: 'sys', desc: 'thông số hệ thống (RAM, CPU, uptime)' },
       { name: 'chatlog', usage: 'chatlog [on|off|smart|player|all|clear|status]', desc: 'bật/tắt chat; smart = gộp tin trùng nhiều bot & ẩn broadcast lặp lại; player = ẩn toàn bộ broadcast server' },
@@ -171,6 +172,7 @@ const COMMAND_ALIASES = {
   localhost: 'web',
   lochost: 'web',
   dashboard: 'web',
+  tui: 'dash',
   tg: 'telegram',
   system: 'sys',
   logdir: 'filelog',

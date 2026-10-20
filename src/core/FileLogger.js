@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { dbg } = require('./debug');
+const { formatLogEntry } = require('./TuiEngine');
 
 /**
  * FileLogger — ghi LOG RUNTIME (log từng bot + log hệ thống) ra file trên máy, để còn đọc được sau khi tool sập/tắt.
@@ -88,7 +89,9 @@ class FileLogger {
     this._cur = null;        // { day, part, size, file }
     this._pruned = '';       // ngày đã dọn file cũ gần nhất
     this._lastErr = '';      // lỗi ghi file đã báo gần nhất (chỉ báo lại khi lỗi/thư mục đổi)
-    this.onError = typeof opts.onError === 'function' ? opts.onError : (msg => { try { console.error('\x1b[33m[FileLogger]\x1b[0m ' + msg); } catch (e) { /* bỏ qua */ } });
+    this.onError = typeof opts.onError === 'function' ? opts.onError : (msg => {
+      try { console.error(formatLogEntry({ level: 'warn', scope: 'FileLogger', msg })); } catch (e) { /* bỏ qua */ }
+    });
     this._onExit = () => this.flushSync();
     process.on('exit', this._onExit);
   }

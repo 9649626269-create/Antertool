@@ -4,6 +4,7 @@ const { dbg } = require('../core/debug');
 const path = require('path');
 const security = require('./security');
 const SpawnMonitor = require('../core/SpawnMonitor');
+const { formatLogEntry, renderTable, theme } = require('../core/TuiEngine');
 class WebDashboard {
   constructor(botManager, options = {}) {
     this.manager = botManager;
@@ -15,13 +16,15 @@ class WebDashboard {
     this._prevStatusSnap = '';
     this._statusInterval = null;
     this._metricsInterval = null;
+    this.lastError = null;
   }
   get isRunning() { return !!this._running; }
   // Bật web (localhost). Gọi lại nhiều lần được: route/socket chỉ đăng ký 1 lần,
   // mỗi lần bật chỉ mở lại cổng + timer. Trả về Promise<boolean> (true = đã nghe cổng).
   start() {
     if (!this.expressApp || !this.io || !this.expressServer) {
-      console.log('[Dashboard] express/socket.io không khả dụng');
+      this.lastError = 'express/socket.io không khả dụng';
+      console.log(formatLogEntry({ level: 'warn', scope: 'Dashboard', msg: this.lastError }));
       return Promise.resolve(false);
     }
     if (this._running) return Promise.resolve(true);
@@ -61,22 +64,30 @@ class WebDashboard {
         const msg = err && err.code === 'EADDRINUSE'
           ? `cổng ${this.port} đang bị chiếm (có thể Antares/ứng dụng khác đang chạy)`
           : (err && err.message) || String(err);
-        console.log(`\x1b[31m[Dashboard] Không mở được web: ${msg}\x1b[0m`);
+        this.lastError = msg;
+        console.log(formatLogEntry({ level: 'err', scope: 'Dashboard', msg: `Không mở được web: ${msg}` }));
         resolve(false);
       };
       const onListening = () => {
         srv.removeListener('error', onError);
+        this.lastError = null;
         const urlHost = (!this._host || this._host === '0.0.0.0' || this._host === '::') ? 'localhost' : this._host;
         const url = `http://${urlHost}:${this.port}`;
+        this.url = url;
         if (this.autoExe) {
-          console.log(`\x1b[36m╔══════════════════════════════════════╗\x1b[0m`);
-          console.log(`\x1b[36m║  ⬡   Bot Manager — Antares       ║\x1b[0m`);
-          console.log(`\x1b[36m╠══════════════════════════════════════╣\x1b[0m`);
-          console.log(`\x1b[36m║  Web Dashboard:                      ║\x1b[0m`);
-          console.log(`\x1b[36m║  \x1b[33m${url.padEnd(36)}\x1b[36m║\x1b[0m`);
-          console.log(`\x1b[36m╚══════════════════════════════════════╝\x1b[0m`);
+          console.log(renderTable({
+            title: '⚡ ANTARES WEB DASHBOARD (AUTO-EXE)',
+            columns: [
+              { key: 'k', header: 'PROPERTY', minWidth: 14 },
+              { key: 'v', header: 'ENDPOINT / VALUE', minWidth: 26 },
+            ],
+            rows: [
+              { k: theme.muted('Web Endpoint'), v: theme.path(url) },
+              { k: theme.muted('Bind Address'), v: theme.white(`${this._host || '127.0.0.1'}:${this.port}`) },
+            ],
+          }));
         } else {
-          console.log(`\x1b[36m[Dashboard] Web UI: ${url}\x1b[0m`);
+          console.log(formatLogEntry({ level: 'ok', scope: 'Dashboard', msg: `Web UI listening at ${url}` }));
         }
         resolve(true);
       };
@@ -110,14 +121,12 @@ class WebDashboard {
         next(new Error('unauthorized'));
       });
       if (bind.generated) {
-        console.log('\x1b[33m[Dashboard] Dashboard mở ra ngoài (' + bind.host + ') mà chưa đặt DASHBOARD_TOKEN → đã tự sinh token cho lần chạy này.\x1b[0m');
-        console.log('\x1b[33m[Dashboard] Đăng nhập: tên đăng nhập tuỳ ý, mật khẩu = ' + token + '   (đặt DASHBOARD_TOKEN để dùng token cố định)\x1b[0m');
+        console.log(formatLogEntry({ level: 'warn', scope: 'Dashboard', msg: `Dashboard mở ra ngoài (${bind.host}) mà chưa đặt DASHBOARD_TOKEN → đã tự sinh token cho lần chạy này.\nĐăng nhập: tên đăng nhập tuỳ ý, mật khẩu = ${token}   (đặt DASHBOARD_TOKEN để dùng token cố định)` }));
       } else {
-        console.log('\x1b[32m[Dashboard] Đã bật xác thực (tên đăng nhập tuỳ ý, mật khẩu = DASHBOARD_TOKEN)\x1b[0m');
+        console.log(formatLogEntry({ level: 'ok', scope: 'Dashboard', msg: 'Đã bật xác thực (tên đăng nhập tuỳ ý, mật khẩu = DASHBOARD_TOKEN)' }));
       }
     } else {
-      console.log('\x1b[33m[Dashboard] Chưa đặt DASHBOARD_TOKEN — dashboard chỉ nghe trên ' + bind.host +
-        ' (chỉ máy này truy cập được). Muốn mở ra ngoài: đặt DASHBOARD_TOKEN rồi DASHBOARD_HOST=0.0.0.0.\x1b[0m');
+      console.log(formatLogEntry({ level: 'info', scope: 'Dashboard', msg: `Chưa đặt DASHBOARD_TOKEN — dashboard chỉ nghe trên ${bind.host} (chỉ máy này truy cập được). Muốn mở ra ngoài: đặt DASHBOARD_TOKEN rồi DASHBOARD_HOST=0.0.0.0.` }));
     }
     // Yêu cầu ghi (POST/PATCH/DELETE) từ trang web khác nguồn -> từ chối
     this.expressApp.use((req, res, next) => {
@@ -763,7 +772,7 @@ class WebDashboard {
         };
         const code = reasonMap[reason] || reason;
         if (!process.env.SILENT_SOCKET) {
-          console.log(`[Socket] Client disconnected (${clientIp}): ${code}`);
+          console.log(formatLogEntry({ level: 'debug', scope: 'Socket', msg: `Client disconnected (${clientIp}): ${code}` }));
         }
       });
     });

@@ -3243,7 +3243,11 @@ class BotSession extends EventEmitter {
       if (!inv.length) { this.log('warn', 'Túi đồ trống'); return; }
       inv.forEach(item => this.log('sys', `[${item.slot}] ${item.name} x${item.count}`));
     });
-    r.register('status', 'Hiện trạng thái', () => this.emit('status'));
+    r.register('status', 'Hiện trạng thái', () => {
+      const s = this.getSummary();
+      this.log('sys', `Trạng thái: ${s.state} | Ping: ${s.ping >= 0 ? s.ping + "ms" : "N/A"} | HP: ${s.health}/20 | Food: ${s.food}/20 | Money: ${(s.money || 0).toLocaleString()} | Shards: ${(s.shard || 0).toLocaleString()}`);
+      this.emit('status', s);
+    });
     r.register('spawneresp', 'SpawnerESP: quét/phân loại lồng spawn — spawneresp on|off|status|list|filter BOTH|NATURAL|SMP', args => this._spawnerEspCommand(args));
     r.register('reconnect', 'Force reconnect', () => this.forceReconnect());
     r.register('menu', 'Gửi menu command thủ công', () => {
