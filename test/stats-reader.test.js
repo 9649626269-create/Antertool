@@ -112,6 +112,19 @@ assert.ok(!R.isNotFoundMessage('xin chào Steve', 'Steve'));
     const p = r.request('Steve', 5000); r.reset();
     await assert.rejects(p, /ngắt kết nối/);
   }
+  // 6) race: GUI trễ sau timeout không được gán cho yêu cầu mới; cửa sổ thứ hai của cùng yêu cầu bị bỏ qua
+  {
+    const s = mkSession(); const r = new StatsReader(s);
+    await assert.rejects(r.request('Slow', 50), /Timeout/);
+    await assert.rejects(r.request('Next', 50), /vừa timeout/);   // chặn tới khi hết thời gian chờ GUI trễ
+    assert.strictEqual(r.handleWindow(mkWin([it('emerald', 'Money', ['$9'])])), true); // GUI trễ bị nuốt + đóng
+    assert.ok(s.mc.closed); assert.ok(!r.pending);
+    const p = r.request('Next', 5000);                               // đã thông: yêu cầu mới chạy bình thường
+    const w1 = mkWin([it('emerald', 'Money', ['$1'])]);
+    assert.strictEqual(r.handleWindow(w1), true);
+    assert.strictEqual(r.handleWindow(mkWin([it('emerald', 'Money', ['$2'])])), false); // cửa sổ thứ hai không tạo vòng đọc song song
+    assert.deepStrictEqual((await p).lines, ['MONEY | $1']);
+  }
   console.log('stats-reader OK');
   process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });

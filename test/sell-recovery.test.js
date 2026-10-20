@@ -22,6 +22,9 @@ Module._load = function (request, ...rest) {
 };
 const BotSession = require('../src/core/BotSession');
 const { CS } = require('../src/core/constants');
+// Watchdog: test chỉ chờ timer thật (GUI/teleport) — nếu vượt 30s thì báo rõ đang ở bước nào thay vì treo im lặng.
+let _step = 'khởi động'; const _t0 = Date.now();
+const _wd = setTimeout(() => { console.error(`sell-recovery.test TIMEOUT 30s — đang ở: ${_step} (có promise/timer không kết thúc)`); process.exit(2); }, 30000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SPAWNER = { x: 3, y: 64, z: 0 };
 const key = p => `${p.x},${p.y},${p.z}`;
@@ -33,7 +36,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
   const logs = [];
   const bot = new BotSession({
     id: 't', host: 'h', port: 25565, username: 'u', autoSellSpawnRevenue: false,
-    spawnHomeWarmupMs: 100, spawnHomeMarginMs: 100, sellHomeChunkWaitMs: 100, ...cfg,
+    spawnHomeWarmupMs: 100, spawnHomeMarginMs: 100, sellHomeChunkWaitMs: 100, sellHomeMinGapMs: 300, tpPresendMs: 50, sellGuiFirstWaitMs: 200, sellGuiLastWaitMs: 200, ...cfg,
   }, 'teal', null);
   bot.state.connState = CS.ONLINE;
   bot._tp.settleMs = 100;
@@ -64,6 +67,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
 }
 
 (async () => {
+  _step = 'case 1)';
   // 1) lần đầu lỗi -> gõ /home treolong 1 lần -> bán lại được -> KHÔNG báo webhook
   {
     const { bot, chats, notified, logs } = mkBot({ healOnHome: true });
@@ -75,6 +79,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._sellRecovering, false);
   }
 
+  _step = 'case 2)';
   // 2) lỗi hoài: gõ /home đúng N lần (N=3 ở test) rồi báo webhook, tag đúng người (khi có cấu hình)
   {
     const { bot, chats, notified } = mkBot({ sellFailMaxHome: 3, sellFailMention: '1413104059333873764' });
@@ -90,6 +95,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._sellRecovering, false);
   }
 
+  _step = 'case 3)';
   // 3) mặc định tối đa 10 lần, sellFailMention rỗng (không còn hardcoded Discord ID)
   {
     const { bot } = mkBot();
@@ -97,6 +103,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot.sellFailMention, '');
   }
 
+  _step = 'case 4)';
   // 4) báo thất bại có giãn cách (không spam mỗi chu kỳ) + đổi/tắt tag bằng cấu hình
   {
     const { bot, notified } = mkBot({ sellFailMaxHome: 1, sellFailMention: '@999999999999999999' });
@@ -109,6 +116,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert(!b2.notified[0][4].includes('<@'), 'mention=off thì không tag');
   }
 
+  _step = 'case 5)';
   // 5) bị ngắt giữa chừng (bảo vệ lồng/tắt autosell) -> dừng thử lại, không báo thất bại
   {
     const { bot, mc, chats, notified } = mkBot({ sellFailMaxHome: 5 });
@@ -121,6 +129,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._sellRecovering, false);
   }
 
+  _step = 'case 6)';
   // 6) sellFailMaxHome = 0 -> tắt hẳn chuỗi thử lại (hành vi cũ)
   {
     const { bot, chats, notified } = mkBot({ sellFailMaxHome: 0 });
@@ -130,6 +139,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(notified.length, 0);
   }
 
+  _step = 'case 7)';
   // 7) đang trong chuỗi thử lại: canh-vị-trí/AFK không được chen vào
   {
     const { bot } = mkBot({ healOnHome: true });
@@ -142,6 +152,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert.strictEqual(bot._isBusy, false);
   }
 
+  _step = 'case 8)';
   // 8) LỖI THỰC TẾ: chuột phải lần đầu GUI không mở -> nhắm lại + chuột phải lần 2 mở được => bán xong, KHÔNG phải gõ /home
   {
     const { bot, mc, chats, logs, notified } = mkBot({ startFar: false, sellFailMaxHome: 3 });
@@ -156,6 +167,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert(logs.some(l => l.includes('GUI chưa mở') && l.includes('lần 2/2')), logs.join('\n'));
   }
 
+  _step = 'case 9)';
   // 9) GUI không bao giờ mở: chuột phải đúng 2 lần mỗi lồng rồi mới báo lỗi (sau đó mới tới chuỗi /home)
   {
     const { bot, mc, chats, logs } = mkBot({ startFar: false, sellFailMaxHome: 0 });
@@ -168,6 +180,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert(logs.some(l => /GUI không mở sau \d+s/.test(l)), logs.join('\n'));
   }
 
+  _step = 'case 10)';
   // 10) bị ngắt (tắt autosell/mất kết nối) giữa 2 lần chuột phải -> không chuột phải thêm, không báo lỗi giả
   {
     const { bot, mc, logs } = mkBot({ startFar: false, sellFailMaxHome: 0 });
@@ -179,6 +192,7 @@ function mkBot({ healOnHome = false, startFar = true, ...cfg } = {}) {
     assert(!logs.some(l => l.includes('GUI không mở')), 'bị ngắt không được báo lỗi giả');
   }
 
+  clearTimeout(_wd);
   console.log('sell-recovery.test OK');
   process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });

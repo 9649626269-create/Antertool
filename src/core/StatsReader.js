@@ -14,6 +14,8 @@
 const { dbg } = require('./debug');
 const { nbtSimplify, sleep, nowMs } = require('./utils');
 
+const LATE_WINDOW_MS = 4000;
+
 // ── logic thuần (có test) ─────────────────────────────────────────────────────
 
 /** Component / NBT / chuỗi JSON → chữ thường (đệ quy). Port từ parseMinecraftJSON. */
@@ -184,7 +186,8 @@ class StatsReader {
   /** @param {import('./BotSession')} session */
   constructor(session) {
     this.s = session;
-    this._p = null; // { player, resolve, reject, timer, startedAt }
+    this._p = null; // { player, resolve, reject, timer, startedAt, win }
+    this._lateUntil = 0; // sau timeout: GUI trễ của yêu cầu cũ còn có thể tới — chặn để không gán nhầm cho yêu cầu mới
   }
 
   get pending() { return !!this._p; }
@@ -200,16 +203,23 @@ class StatsReader {
     if (!s.isOnline || !s.mc) return Promise.reject(new Error('Bot chưa online'));
     if (this._p) return Promise.reject(new Error('Đang xử lý một yêu cầu stats khác'));
     if (s._isBusy) return Promise.reject(new Error('Bot đang bận (macro / bảo vệ lồng / đăng nhập) — thử lại sau'));
+    if (nowMs() < this._lateUntil) return Promise.reject(new Error('Yêu cầu stats trước vừa timeout — đợi vài giây rồi thử lại'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this._finish(new Error(`Timeout: không mở được bảng stats sau ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
-      this._p = { player: name, resolve, reject, timer, startedAt: nowMs() };
+      const p = { player: name, resolve, reject, timer: null, startedAt: nowMs(), win: null };
+      p.timer = setTimeout(() => {
+        if (this._p !== p) return; // đã xong/bị thay trước khi timer chạy
+        this._lateUntil = nowMs() + LATE_WINDOW_MS;
+        this._finish(new Error(`Timeout: không mở được bảng stats sau ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+      this._p = p;
       try { s.mc.chat(`/stats ${name}`); } catch (e) { this._finish(e); }
     });
   }
 
-  _finish(err, value) {
+  // owner: nếu truyền vào, chỉ chốt khi yêu cầu hiện tại đúng là owner (tránh lỗi trễ của vòng đọc cũ huỷ nhầm yêu cầu mới)
+  _finish(err, value, owner) {
     const p = this._p;
-    if (!p) return;
+    if (!p || (owner && owner !== p)) return;
     this._p = null;
     clearTimeout(p.timer);
     if (err) p.reject(err); else p.resolve(value);
@@ -218,8 +228,14 @@ class StatsReader {
   /** Gọi từ handler windowOpen. @returns {boolean} true = đã nhận cửa sổ này (BotSession không xử lý thêm) */
   handleWindow(win) {
     const p = this._p;
-    if (!p) return false;
-    this._read(win, p).catch(e => this._finish(e));
+    if (!p) {
+      // GUI của yêu cầu vừa timeout mới tới: đóng và nuốt, không để rơi sang WindowRouter/StatsParser
+      if (nowMs() < this._lateUntil) { this._lateUntil = 0; try { this.s.mc?.closeWindow(win); } catch (e) { dbg('StatsReader', e); } return true; }
+      return false;
+    }
+    if (p.win) return false; // mỗi yêu cầu chỉ nhận cửa sổ đầu tiên — cửa sổ thứ hai không được tạo vòng đọc song song
+    p.win = win;
+    this._read(win, p).catch(e => this._finish(e, undefined, p));
     return true;
   }
 
@@ -236,8 +252,8 @@ class StatsReader {
     if (this._p !== p) return;
     try { this.s.mc?.closeWindow(win); } catch (e) { dbg('StatsReader', e); }
     const items = buildItems(raws);
-    if (!items.length) return this._finish(new Error('Không có stats hữu ích (người chơi chưa từng đăng nhập hoặc GUI rỗng)'));
-    this._finish(null, { player: p.player, title: cleanMinecraftText(title), items, lines: items.map(formatLine) });
+    if (!items.length) return this._finish(new Error('Không có stats hữu ích (người chơi chưa từng đăng nhập hoặc GUI rỗng)'), undefined, p);
+    this._finish(null, { player: p.player, title: cleanMinecraftText(title), items, lines: items.map(formatLine) }, p);
   }
 
   /** Gọi từ handler chat: server trả lời "không tìm thấy người chơi" thay vì mở GUI */
@@ -248,7 +264,7 @@ class StatsReader {
   }
 
   /** Mất kết nối */
-  reset() { this._finish(new Error('Bot bị ngắt kết nối khi đang lấy stats')); }
+  reset() { this._lateUntil = 0; this._finish(new Error('Bot bị ngắt kết nối khi đang lấy stats')); }
 }
 
 module.exports = StatsReader;

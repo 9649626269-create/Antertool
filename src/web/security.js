@@ -31,9 +31,23 @@ function isSameOrigin(req) {
   try { return new URL(origin).host === req.headers.host; } catch { return false; }
 }
 
+// Chống DNS-rebinding: khi dashboard chỉ nghe loopback và KHÔNG có token, Host header phải là loopback
+// (trang web lạ trỏ tên miền về 127.0.0.1 vẫn có Origin == Host nên isSameOrigin không chặn được).
+let _strictLoopbackHost = false;
+function setStrictLoopbackHost(on) { _strictLoopbackHost = !!on; }
+function hostnameOf(hostHeader) {
+  const h = String(hostHeader || '').trim();
+  const m = /^\[([^\]]+)\](?::\d+)?$/.exec(h);
+  return (m ? m[1] : h.replace(/:\d+$/, '')).toLowerCase();
+}
+function isAllowedHost(req) {
+  if (!_strictLoopbackHost) return true;
+  return isLoopbackHost(hostnameOf(req.headers && req.headers.host));
+}
+
 // engine.io allowRequest: chặn WebSocket/polling từ trang web lạ
 function allowSocketRequest(req, cb) {
-  cb(null, isSameOrigin(req));
+  cb(null, isSameOrigin(req) && isAllowedHost(req));
 }
 
 function isAuthorized(token, headerValue, authToken) {
@@ -58,4 +72,4 @@ function resolveBind(env = process.env, config = {}) {
   return { host, token, generated, exposed: !isLoopbackHost(host) };
 }
 
-module.exports = { resolveBind, isLoopbackHost, tokenEquals, tokenFromHeader, isSameOrigin, allowSocketRequest, isAuthorized, allowedOrigins };
+module.exports = { setStrictLoopbackHost, isAllowedHost, hostnameOf, resolveBind, isLoopbackHost, tokenEquals, tokenFromHeader, isSameOrigin, allowSocketRequest, isAuthorized, allowedOrigins };

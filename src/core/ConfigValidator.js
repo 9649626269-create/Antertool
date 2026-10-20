@@ -10,15 +10,77 @@ function isStr(v) { return typeof v === 'string'; }
 function isNum(v) { return typeof v === 'number' && isFinite(v); }
 function isBool(v) { return typeof v === 'boolean'; }
 
+// Cú pháp bước macro — phải khớp ScriptRunner._runSteps. Biến $answer/$label/$owner... được thay lúc chạy nên số có thể là "$x".
+const MACRO_TEXT_OPS = new Set(['stopif', 'ask', 'confirm', 'until']); // cần đoạn chữ sau tên lệnh
+const MACRO_OPS = new Set(['chat', 'delay', 'winclick', 'waitmsg', 'waitmsg!', 'loop', 'until', 'closewin', 'stopif', 'ask', 'askmap', 'askmenu', 'confirm']);
+const isIntOrVar = s => /^\d+$/.test(s) || /^\$\w+$/.test(s);
+
+/** Kiểm tra từng dòng của macro.steps → đẩy lỗi vào errors (kèm số dòng). */
+function validateMacroSteps(steps, where, errors) {
+  if (!isStr(steps)) { errors.push(`${where}.steps phải là string (mỗi bước một dòng)`); return; }
+  const lines = steps.split('\n').map(l => l.trim());
+  let inLoop = false;
+  lines.forEach((line, idx) => {
+    if (!line) return;
+    const at = `${where}.steps dòng ${idx + 1}`;
+    const parts = line.split(/\s+/);
+    const op = parts[0].toLowerCase();
+    const arg = line.slice(parts[0].length).trim();
+    if (!MACRO_OPS.has(op)) { errors.push(`${at}: lệnh "${parts[0]}" không tồn tại`); return; }
+    if (op === 'chat' && !arg) errors.push(`${at}: chat thiếu nội dung`);
+    else if (op === 'delay' && !isIntOrVar(parts[1] || '')) errors.push(`${at}: delay cần số mili-giây`);
+    else if (op === 'winclick') {
+      if (!isIntOrVar(parts[1] || '')) errors.push(`${at}: winclick cần slot là số nguyên >= 0`);
+      if (parts[2] !== undefined && !/^[01]$/.test(parts[2]) && !/^\$\w+$/.test(parts[2])) errors.push(`${at}: winclick button chỉ là 0 (trái) hoặc 1 (phải)`);
+    } else if (op === 'waitmsg' || op === 'waitmsg!') {
+      const text = (/^\d+$/.test(parts[1] || '') ? parts.slice(2) : parts.slice(1)).join(' ');
+      if (!text) errors.push(`${at}: ${op} thiếu đoạn chữ cần chờ`);
+    } else if (op === 'loop') {
+      if (parts[1] !== undefined && !/^\d+$/.test(parts[1])) errors.push(`${at}: loop chỉ nhận số lượt tối đa`);
+      inLoop = true;
+    } else if (MACRO_TEXT_OPS.has(op) && !arg) errors.push(`${at}: ${op} thiếu nội dung`);
+    if (op === 'until' && !inLoop) errors.push(`${at}: until cần có "loop" phía trên`);
+    if (op === 'askmap') {
+      const sep = line.indexOf('||');
+      if (sep === -1) errors.push(`${at}: askmap thiếu "||" — cú pháp: askmap <câu hỏi> || nhãn=giá_trị,...`);
+      else if (!line.slice(sep + 2).split(',').some(p => p.includes('='))) errors.push(`${at}: askmap không có cặp nhãn=giá_trị nào`);
+    } else if (op === 'askmenu') {
+      const sep = line.indexOf('||');
+      if (sep === -1 || !line.slice(sep + 2).includes('=')) errors.push(`${at}: askmenu cần bảng lựa chọn sau "||" — vd: askmenu <tiêu đề> || NHÓM: 2=nhãn,3=nhãn`);
+    }
+  });
+  if (!lines.some(Boolean)) errors.push(`${where}.steps rỗng`);
+}
+
+/** macros: { tên: { steps, next? } } — kiểm tra kiểu, steps, và `next` phải trỏ tới macro có thật. */
+function validateMacros(macros, where, errors) {
+  if (macros === undefined) return;
+  if (!isObj(macros)) { errors.push(`${where} phải là object`); return; }
+  const squash = v => String(v).toLowerCase().replace(/[\s_\-]+/g, '');
+  const keys = Object.keys(macros);
+  for (const k of keys) {
+    const m = macros[k], w = `${where}.${k}`;
+    if (!isObj(m)) { errors.push(`${w} phải là object { steps, next? }`); continue; }
+    validateMacroSteps(m.steps, w, errors);
+    if (m.next !== undefined) {
+      if (!isStr(m.next) || !m.next.trim()) errors.push(`${w}.next phải là string không rỗng`);
+      else if (!keys.some(x => x.toLowerCase() === m.next.trim().toLowerCase() || squash(x) === squash(m.next))) errors.push(`${w}.next: macro "${m.next}" không tồn tại`);
+    }
+  }
+}
+
+// Lỗi nghiêm trọng: config không phải object, host/port sai, bots/proxies sai cấu trúc, bot thiếu/trùng id.
+const FATAL_RE = /^(config phải|host phải|port phải|bots phải|bots\[\d+\]( phải là object|\.id |\.port )|bots\[\]\.id|proxies)/;
+
 /**
  * Validate toàn bộ config.
  * @param {object} cfg
- * @returns {{ok: boolean, errors: string[]}}
+ * @returns {{ok: boolean, errors: string[], fatal: string[], warnings: string[]}}
  */
 function validateConfig(cfg) {
   const errors = [];
   if (!isObj(cfg)) {
-    return { ok: false, errors: ['config phải là object'] };
+    return { ok: false, errors: ['config phải là object'], fatal: ['config phải là object'], warnings: [] };
   }
 
   // Top-level optional but typed
@@ -95,12 +157,23 @@ function validateConfig(cfg) {
   if (Array.isArray(cfg.bots)) cfg.bots.forEach((b, i) => { if (isObj(b)) checkAutoLogin(b.autoLogin, `bots[${i}]`); });
 
   // macros
-  if (cfg.macros !== undefined && !isObj(cfg.macros)) errors.push('macros phải là object');
+  validateMacros(cfg.macros, 'macros', errors);
+  if (Array.isArray(cfg.bots)) cfg.bots.forEach((b, i) => { if (isObj(b)) validateMacros(b.macros, `bots[${i}].macros`, errors); });
 
   // proxies
   if (cfg.proxies !== undefined && !Array.isArray(cfg.proxies)) errors.push('proxies phải là mảng');
+  else if (Array.isArray(cfg.proxies)) {
+    cfg.proxies.forEach((p, i) => {
+      if (!isObj(p)) { errors.push(`proxies[${i}] phải là object { host, port }`); return; }
+      if (!isStr(p.host) || !p.host.trim()) errors.push(`proxies[${i}].host bắt buộc và phải là string không rỗng`);
+      if (!isNum(p.port) || p.port < 1 || p.port > 65535) errors.push(`proxies[${i}].port phải là số 1-65535`);
+    });
+  }
 
-  return { ok: errors.length === 0, errors };
+  // Phân loại: lỗi nghiêm trọng (cấu trúc/trường bắt buộc — không thể chạy an toàn) vs cảnh báo (kiểu của tuỳ chọn phụ).
+  const fatal = errors.filter(e => FATAL_RE.test(e));
+  const warnings = errors.filter(e => !FATAL_RE.test(e));
+  return { ok: errors.length === 0, errors, fatal, warnings };
 }
 
-module.exports = { validateConfig };
+module.exports = { validateConfig, validateMacroSteps, validateMacros };

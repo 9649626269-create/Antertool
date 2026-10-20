@@ -17,7 +17,7 @@ Bộ quản lý nhiều bot Minecraft (mineflayer) kèm web dashboard, macro, pr
 
 ## Tích hợp logic premium (2026-10-19)
 Port từ gói `premium` (Java/Fabric) những phần chạy được ở bot headless:
-- `src/core/PremiumLogic.js` — logic thuần: parse lore đơn hàng (còn thiếu / giá K-M-B), chọn đơn giá cao nhất, parse tin "Bạn đã giao…", đếm stack theo xác nhận server (`ConfirmedTransfer`, `PendingAccounting`), phát hiện hết hàng / hết tiền, whitelist/blacklist, NameProtect, độ trễ theo ping.
+- `src/core/PremiumLogic.js` — logic thuần: parse lore đơn hàng (còn thiếu / giá), chọn đơn giá cao nhất, parse tin "Bạn đã giao…", đếm stack theo xác nhận server (`ConfirmedTransfer`, `PendingAccounting`), phát hiện hết hàng / hết tiền, whitelist/blacklist, NameProtect, độ trễ theo ping.
 - `src/core/AutoOrder.js` + lệnh `autoorder <item> | off | status` — tự `/order`, lật trang, giao hàng, xác nhận, cộng tiền; báo cáo định kỳ qua webhook sự kiện `autoOrder` (config `autoOrderReportMin`, `autoOrderCauldron`).
 - `"nameProtect": {"TênThật": "BíDanh"}` trong config bot → che tên trong mọi log/webhook.
 - Test: `test/premium-logic.test.js`.
