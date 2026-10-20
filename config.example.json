@@ -33,7 +33,8 @@
     "packetTimeout": 120000,
     "entityTimeout": 90000
   },
-  "ai": { "enabled": true, "model": "gemini-2.5-flash", "cooldownMin": 30, "maxPerDay": 20 },
+  "beggarGuard": { "enabled": true, "action": "block", "commands": ["/block {player}"], "minScore": 1, "whitelist": [] },
+  "ai": { "enabled": true, "model": "gemini-3.8-flash", "cooldownMin": 30, "maxPerDay": 20, "serverMessages": "important", "maxServerPerDay": 30 },
   "bots": [
     {
       "id": "bot-1",

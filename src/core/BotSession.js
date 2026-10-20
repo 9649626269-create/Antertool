@@ -27,6 +27,7 @@ const AutoSellHandler = require('./AutoSellHandler');
 const TeleportHandler = require('./TeleportHandler');
 const LoginHandler = require('./LoginHandler');
 const AutoLoginFlow = require('./AutoLoginFlow');
+const BeggarGuard = require('./BeggarGuard');
 const StatsReader = require('./StatsReader');
 const AutoOrder = require('./AutoOrder');
 const { protectNames } = require('./PremiumLogic');
@@ -60,6 +61,7 @@ class BotSession extends EventEmitter {
     this.loginHandler = new LoginHandler(this);
     this.statsReader = new StatsReader(this);   // đọc /stats <người chơi> (port từ CheckStatsKingMC)
     this.autoLogin = new AutoLoginFlow(this);   // Auto Login & Antibot & Auto Join (cfg.autoLogin, mặc định tắt)
+    this.beggarGuard = new BeggarGuard(this);   // chặn người chơi xin tiền/xin đồ/"em là newbie" (cfg.beggarGuard, mặc định BẬT)
     this._logBuffer = new RingBuffer(800);
     this.settings = { ...DEFAULTS };
     this.state = {
@@ -804,12 +806,13 @@ class BotSession extends EventEmitter {
         // ── SessionCheck verify: xử lý trước, nhưng KHÔNG return — vẫn log chat bình thường ──
         this.sessionVerifier.onMessage(text, pos);
         this.autoLogin.onMessage(text);
+        this.beggarGuard.onMessage(text, pos);
         this.statsReader.onMessage(text);
         if (this._sellCap) this._captureSellRevenue(text, pos);
         if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         if (this.autoOrder?.active) this.autoOrder.onMessage(text);
         this.log('chat', text);
-        if (pos !== 'chat') this._tp.note(text, nowMs()); // tin hệ thống trong lúc chờ teleport (không tính chat người chơi)
+        if (pos !== 'chat') { this._tp.note(text, nowMs()); this.emit('serverNotice', { id: this.cfg.id, kind: 'system', text }); } // tin hệ thống trong lúc chờ teleport (không tính chat người chơi)
         if (!this._loginConfirmed && this._isLoginSuccessText(text)) this._onLoginConfirmed();
         this.tryChatShard(text);
       } catch (e) {
@@ -824,6 +827,7 @@ class BotSession extends EventEmitter {
       try {
         const t = typeof text === 'string' ? text : resolveText(text?.json ?? text);
         this._logHud(t, type === 'subtitle' ? 'Subtitle' : 'Title');
+        if (t && t.trim()) this.emit('serverNotice', { id: this.cfg.id, kind: 'title', text: t });
       } catch (e) { dbg('BotSession', e); }
     });
     mc.on('scoreboardUpdated', () => {
@@ -2513,6 +2517,13 @@ class BotSession extends EventEmitter {
     }
     return true;
   }
+  _persistBeggarCfg() {
+    const data = { beggarGuard: this.cfg.beggarGuard };
+    const mgr = this._manager;
+    const c = mgr?._config?.bots?.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
+    if (c) Object.assign(c, data);
+    mgr?.persistence?.markDirty();
+  }
   _persistAutoLoginCfg() {
     const data = { autoLogin: this.cfg.autoLogin };
     const mgr = this._manager;
@@ -2924,6 +2935,30 @@ class BotSession extends EventEmitter {
         else if (!al.joinNow()) this.log('warn', 'AutoLogin đang chạy dở — chờ xong rồi thử lại');
       } else {
         this.log('sys', al.status() + ' | Lệnh: autologin on|off|now');
+      }
+    });
+    r.register('beggar', 'Chặn người ăn xin: beggar on|off|status|list|forget <tên>|test <tin nhắn>', (args) => {
+      const g = this.beggarGuard;
+      const sub = String(args[0] || 'status').toLowerCase();
+      if (sub === 'on' || sub === 'off') {
+        g.setEnabled(sub === 'on');
+        this._persistBeggarCfg();
+        this.log('ok', `BeggarGuard ${sub === 'on' ? 'BẬT' : 'TẮT'}`);
+      } else if (sub === 'list') {
+        const l = g.list();
+        this.log('sys', l.length ? `Đã chặn ${l.length} người: ${l.join(', ')}` : 'Chưa chặn ai');
+      } else if (sub === 'forget') {
+        const name = String(args[1] || '').trim();
+        if (!name) { this.log('warn', 'Cú pháp: beggar forget <tên> (chỉ xoá khỏi danh sách của tool; muốn bỏ chặn trên server hãy tự gõ lại /block <tên>)'); return; }
+        const had = g.forget(name);
+        this.log(had ? 'ok' : 'warn', had ? `Đã xoá ${name} khỏi danh sách chặn của tool` : `${name} không có trong danh sách`);
+      } else if (sub === 'test') {
+        const text = args.slice(1).join(' ').trim();
+        if (!text) { this.log('warn', 'Cú pháp: beggar test <tin nhắn>, ví dụ: beggar test Steve: cho em xin ít tiền với em là newbie'); return; }
+        const ev = g.evaluate(text, [...this.mc ? Object.keys(this.mc.players || {}) : [], ...String(args[1] || '').replace(/[:»>]+$/, '').split(/\s+/).filter(Boolean)]);
+        this.log('sys', `Test: ${ev.beggar ? 'ĂN XIN → sẽ chặn ' + ev.sender : 'KHÔNG chặn'} | điểm ${ev.score}${ev.hits.length ? ' (' + ev.hits.join(' | ') + ')' : ''}${ev.reason ? ' | ' + ev.reason : ''}`);
+      } else {
+        this.log('sys', g.status() + ' | Lệnh: beggar on|off|list|forget <tên>|test <tin>');
       }
     });
     r.register('shard', 'Bật/Tắt Auto Shard', () => {

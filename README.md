@@ -48,9 +48,28 @@ Cài đặt:
 2. Đặt `GEMINI_API_KEY=...` trong biến môi trường hoặc file `.env` cạnh `config.json` (đã nằm trong `.gitignore`). Docker/Render: dùng `--env-file`/Environment. Đừng dán khoá vào chat hay commit lên GitHub.
 3. Thử: `npm run ai:test` (gửi 1 lỗi giả, in kết luận).
 
-Tuỳ chọn trong `config.json`: `"ai": { "enabled": true, "model": "gemini-2.5-flash", "cooldownMin": 30, "maxPerDay": 20, "timeoutMs": 30000 }`. `GEMINI_MODEL` (môi trường) ưu tiên hơn `ai.model`; nếu báo 404 thì tên model đã đổi — xem danh sách model trong AI Studio. `AI_DIAGNOSE=0` tắt hẳn.
+Tuỳ chọn trong `config.json`: `"ai": { "enabled": true, "model": "gemini-3.8-flash", "cooldownMin": 30, "maxPerDay": 20, "timeoutMs": 60000, "serverMessages": "important", "maxServerPerDay": 30 }`. `GEMINI_MODEL` và `GEMINI_TIMEOUT_MS` (môi trường/.env) ưu tiên hơn `ai.model` / `ai.timeoutMs`; nếu báo 404 thì tên model đã đổi — xem danh sách model trong AI Studio. `AI_DIAGNOSE=0` tắt hẳn.
 Chống tốn quota: cùng một lỗi chỉ phân tích 1 lần / `cooldownMin` phút, tối đa `maxPerDay` lần/ngày; hết hạn mức (429) hoặc lỗi mạng chỉ ghi cảnh báo, bot không bị ảnh hưởng.
+**Thông báo từ server:** AI cũng phân tích lý do bị kick / mất kết nối (luôn luôn) và các tin hệ thống/title của server (chỉ tin đáng chú ý). Mỗi thông báo được kèm 4 mục: ý nghĩa, mức độ, việc nên làm, và **dấu hiệu giả mạo/lừa đảo** (người chơi giả làm admin, link lạ, đòi mật khẩu). Nội dung thông báo được coi là dữ liệu không tin cậy, không bao giờ làm theo chỉ dẫn nằm trong đó. Chế độ qua `"ai": {"serverMessages": ...}` hoặc `AI_SERVER_MESSAGES`:
+- `important` (mặc định): chỉ tin chứa từ khoá (bảo trì, restart, kick/ban, lỗi, cảnh báo, xác minh/captcha, whitelist, hết hạn, mất kết nối, hack/cheat...). Thêm từ khoá riêng bằng `"serverKeywords": ["khuyến mãi"]`.
+- `all`: mọi tin hệ thống. Cẩn thận: nhiều server gửi cả chat người chơi dưới dạng tin hệ thống nên chat có thể bị gửi lên Google, và dễ hết hạn mức.
+- `off`: tắt phần này.
+Hạn mức riêng: `maxServerPerDay` (mặc định 30/ngày), cùng nội dung chỉ phân tích 1 lần / `cooldownMin` phút, không tính vào hạn mức lỗi. Thử bằng thông báo giả (không cần bot đang chạy): `node scripts/ai-test.js --server`, `--kick "lý do"` hoặc `--fake` (tin giả mạo admin).
+
 Lưu ý riêng tư: free tier của Google có thể dùng nội dung để cải thiện sản phẩm — chat người chơi không bao giờ được gửi, nhưng stack trace có thể chứa tên bot/đường dẫn.
+
+## Chặn người ăn xin (`beggarGuard`)
+`src/core/BeggarGuard.js` — khi người chơi trong chat xin tiền / xin đồ / nói kiểu "em là newbie", "em mới chơi", "em nghèo", "cho em xin ít tiền", "give me money"..., bot **tự gõ `/block <tên>`** để chặn họ. **Mặc định BẬT.**
+- Chấm điểm từng tin sau khi bỏ dấu/chữ hoa: mẫu xin rõ ràng (xin tiền, cho em xin, ai cho em...) = 2 điểm, mẫu yếu (em là newbie, mới chơi, nghèo...) = 1 điểm. Chặn khi đủ `minScore` (mặc định 1 — chặn cả "em là newbie"; đặt 2 nếu chỉ muốn chặn khi xin rõ ràng).
+- Chỉ chặn khi xác định được **người gửi là người chơi đang online** (tên nằm trước dấu `» : > ➤` trong dòng chat, hoặc theo `senderPattern` nếu chat của server có định dạng lạ). Tin hệ thống/quảng cáo không bao giờ bị chặn nhầm.
+- Không chặn: chính bot, chủ bot (`ownerUsername`), các bot khác trong dàn, whitelist spawner và `beggarGuard.whitelist`.
+- Mỗi người chỉ bị gõ lệnh **một lần** cho mỗi bot (lưu trong `beggars.json`) — nhiều plugin coi `/block` là công tắc, gõ lần hai sẽ bỏ chặn. Có khoảng nghỉ ngẫu nhiên giữa các lệnh và giới hạn `maxPerMinute` để server không phạt spam; chỉ chạy khi bot đã đăng nhập xong.
+- Lệnh trong tool: `beggar on|off|status|list|forget <tên>|test <tin>`. `beggar test Steve: cho em xin ít tiền, em là newbie` cho biết tin đó có bị coi là ăn xin không (không cần server). `forget` chỉ xoá khỏi danh sách của tool; muốn bỏ chặn trên server hãy tự gõ lại `/block <tên>`.
+```json
+"beggarGuard": { "enabled": true, "action": "block", "commands": ["/block {player}"], "minScore": 1,
+                 "whitelist": ["TenBanBe"], "extraPatterns": ["nhan\\s+qua\\s+mien\\s+phi"], "senderPattern": "", "delayMs": 2500, "maxPerMinute": 4 }
+```
+`action: "notify"` = chỉ ghi log `Ăn xin: <tên> ...`, không chặn. `commands` có thể có tối đa 3 lệnh (vd. thêm `/mute {player}`); `{player}` được thay bằng tên. Đặt trong `config.json` cấp toàn cục hoặc từng bot.
 
 ## Chạy
 ```bash

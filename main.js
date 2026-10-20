@@ -109,6 +109,7 @@ const aiDiag = new AiDiagnoser({
   redact: s => { try { return manager.telegramLogs._redact(s); } catch (e) { return s; } },
   log: (level, msg) => { try { manager.runtimeLog(level, msg); } catch (e) { dbg('main', e); } },
 });
+manager.onServerNotice = (id, kind, text, host) => { aiDiag.analyzeServerNotice(kind, text, id, { host }); }; // kick/mất kết nối/tin hệ thống đáng chú ý -> AI
 
 const WebDashboard = require('./src/web/WebDashboard');
 const dashboard = new WebDashboard(manager, {

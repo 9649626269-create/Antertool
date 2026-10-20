@@ -24,6 +24,7 @@ const SECTIONS = [
     bot: [
       { name: 'checkstats', usage: 'checkstats <người chơi>', desc: 'xem stats của người chơi khác: gõ /stats <tên>, đọc GUI, làm sạch tên + lore, bỏ item trang trí' },
       { name: 'autologin', usage: 'autologin on|off|status|now', desc: 'Auto Login & Antibot & Auto Join: tự đăng nhập (/l), vượt GUI antibot, mở /menu và click vào server; now = vào server ngay' },
+      { name: 'beggar', usage: 'beggar on|off|status|list|forget <tên>|test <tin>', desc: 'chặn người ăn xin (xin tiền/xin đồ/"em là newbie"): tự gõ /block <tên> một lần cho mỗi người; test = thử một tin nhắn mà không cần server' },
       { name: 'status', usage: 'status', desc: 'hiện trạng thái bot' },
       { name: 'ping', usage: 'ping', desc: 'hiện ping' },
       { name: 'pos', usage: 'pos', desc: 'hiện toạ độ' },

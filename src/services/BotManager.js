@@ -119,6 +119,11 @@ class BotManager {
     this.fileLogs.configure(fl);
   }
   _wireBotLog(bot) {
+    // Thông báo từ server (kick / mất kết nối / tin hệ thống / title) -> móc onServerNotice (AI phân tích). Không bao giờ làm hỏng bot.
+    const notice = (kind, text) => { try { if (this.onServerNotice) this.onServerNotice(bot.cfg.id, kind, text, bot.cfg.host); } catch (e) { dbg('BotManager', e); } };
+    bot.on('kicked', ev => notice('kick', ev && ev.reason));
+    bot.on('disconnected', ev => notice('disconnect', ev && ev.reason));
+    bot.on('serverNotice', ev => notice(ev && ev.kind, ev && ev.text));
     bot.on('log', ev => {
       try { this.fileLogs.write(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); }
       try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); } // log runtime -> Telegram (không bao giờ làm hỏng bot)
@@ -165,6 +170,7 @@ class BotManager {
       skipValidation: cfg.skipValidation !== undefined ? cfg.skipValidation : false,
       viewDistance: cfg.viewDistance || null,
       autoLogin: cfg.autoLogin || this._config.autoLogin || null,   // Auto Login & Antibot & Auto Join (xem AutoLoginFlow.js)
+      beggarGuard: cfg.beggarGuard || this._config.beggarGuard || null,   // chặn người ăn xin (xem BeggarGuard.js)
       id: cfg.id,
       theme: cfg.theme || 'teal',
       authMode: cfg.authMode || 'offline', // 'offline' (mặc định, /dn qua chat) hoặc 'microsoft' (acc Premium thật)
@@ -238,6 +244,7 @@ class BotManager {
       skipValidation: data.skipValidation !== undefined ? data.skipValidation : false,
       viewDistance: data.viewDistance || null,
       autoLogin: data.autoLogin || this._config.autoLogin || null,
+      beggarGuard: data.beggarGuard || this._config.beggarGuard || null,
       authMode: data.authMode || 'offline',
       theme: data.theme || 'teal',
       macros: data.macros || this._config.macros || {},
