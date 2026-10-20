@@ -7,7 +7,6 @@ const chalk = require('chalk');
 const BotManager = require('./src/services/BotManager');
 const Notifier = require('./src/core/Notifier');
 const TelegramNotifier = require('./src/core/TelegramNotifier');
-const AiDiagnoser = require('./src/core/AiDiagnoser');
 const HelpCatalog = require('./src/core/HelpCatalog');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 let config;
@@ -103,13 +102,6 @@ const manager = new BotManager({
   io,
   onBotLog: printBotLog,
 });
-// AI phân tích lỗi nặng bằng Gemini (chỉ gợi ý, không tự sửa code). Tự tắt nếu chưa có GEMINI_API_KEY. Xem README mục "AI phân tích lỗi".
-const aiDiag = new AiDiagnoser({
-  config,
-  redact: s => { try { return manager.telegramLogs._redact(s); } catch (e) { return s; } },
-  log: (level, msg) => { try { manager.runtimeLog(level, msg); } catch (e) { dbg('main', e); } },
-});
-manager.onServerNotice = (id, kind, text, host) => { aiDiag.analyzeServerNotice(kind, text, id, { host }); }; // kick/mất kết nối/tin hệ thống đáng chú ý -> AI
 
 const WebDashboard = require('./src/web/WebDashboard');
 const dashboard = new WebDashboard(manager, {
@@ -309,6 +301,11 @@ async function shutdown(code = 0) {
     const webOk = webWanted ? await dashboard.start() : false;
     console.log(colors.accent(`⬡  Antares Manager started — ${manager.bots.length} bots loaded, none auto-started`));
     manager.runtimeLog('ok', `Antertool khởi động — ${manager.bots.length} bot đã nạp (chưa tự chạy) · Node ${process.version} · ${process.platform}/${process.arch}`);
+    if (manager.fileLogs.enabled) {
+      const logErr = manager.fileLogs.probe();
+      if (logErr) console.log(colors.warn(`   Log file: KHÔNG ghi được vào ${manager.fileLogs.dir} (${logErr}). Termux: chạy "termux-setup-storage" để cấp quyền /sdcard, hoặc đổi "fileLogDir"/ANTER_LOG_DIR.`));
+      else console.log(colors.muted(`   Log file: ${manager.fileLogs.dir}`));
+    }
     if (webOk) console.log(colors.accent(`   Dashboard: http://localhost:${dashboard.port}`));
     else if (!webWanted) console.log(colors.muted('   Dashboard: TẮT — gõ "web on" để bật'));
     else console.log(colors.warn('   Dashboard: không mở được (xem lỗi phía trên) — CLI vẫn dùng bình thường, thử "web on" sau'));
@@ -620,7 +617,6 @@ async function shutdown(code = 0) {
     console.error(colors.err('[FATAL]'), e.message);
     console.error(e.stack);
     try { manager.runtimeLog('err', '[FATAL] ' + (e && e.stack ? e.stack : e)); await manager.flushTelegramLogs(2500); } catch (e) { dbg('main', e); }
-    try { await Promise.race([aiDiag.diagnose('FATAL', e), new Promise(r => setTimeout(r, 15000))]); await manager.flushTelegramLogs(2500); } catch (e2) { dbg('main', e2); } // tool sắp thoát: chờ tối đa 15s để lưu kết luận AI
     process.exit(1);
   }
 })();
@@ -629,10 +625,8 @@ process.on('SIGTERM', () => shutdown());
 process.on('uncaughtException', err => {
   console.error(colors.err('[UNCAUGHT]'), err.message || err);
   try { manager.runtimeLog('err', '[UNCAUGHT] ' + ((err && err.stack) || err)); } catch (e) { dbg('main', e); }
-  aiDiag.diagnose('UNCAUGHT', err);   // không await: không chặn tiến trình
 });
 process.on('unhandledRejection', (reason) => {
   console.error(colors.err('[UNHANDLED]'), reason?.message || reason);
   try { manager.runtimeLog('err', '[UNHANDLED] ' + ((reason && reason.stack) || reason)); } catch (e) { dbg('main', e); }
-  aiDiag.diagnose('UNHANDLED', reason);
 });

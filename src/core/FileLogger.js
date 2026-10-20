@@ -47,6 +47,8 @@ class FileLogger {
     this._busy = false; this._timer = null;
     this._cur = null;        // { day, part, size, file }
     this._pruned = '';       // ngày đã dọn file cũ gần nhất
+    this._lastErr = '';      // lỗi ghi file đã báo gần nhất (chỉ báo lại khi lỗi/thư mục đổi)
+    this.onError = typeof opts.onError === 'function' ? opts.onError : (msg => { try { console.error('\x1b[33m[FileLogger]\x1b[0m ' + msg); } catch (e) { /* bỏ qua */ } });
     this._onExit = () => this.flushSync();
     process.on('exit', this._onExit);
   }
@@ -63,6 +65,24 @@ class FileLogger {
       this.levels = new Set(lv);
     }
     return this;
+  }
+  // Lỗi ghi file (thiếu quyền /sdcard, ổ đầy...): báo ra console ĐÚNG 1 lần cho mỗi lỗi — trước đây im lặng nên không biết vì sao không có file log
+  _fail(e) {
+    dbg('FileLogger', e);
+    this._cur = null;
+    const key = this.dir + '|' + (e && (e.code || e.message));
+    if (key === this._lastErr) return;
+    this._lastErr = key;
+    try { this.onError(`Không ghi được log vào "${this.dir}": ${e && e.code ? e.code + ' — ' : ''}${(e && e.message) || e}`); } catch (e2) { dbg('FileLogger', e2); }
+  }
+  // Thử tạo thư mục + ghi/xoá 1 file nháp. Trả về null nếu ổn, hoặc chuỗi lỗi. Dùng lúc khởi động để báo sớm.
+  probe() {
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+      const f = path.join(this.dir, '.write-test-' + process.pid);
+      fs.writeFileSync(f, 'ok'); fs.unlinkSync(f);
+      return null;
+    } catch (e) { return `${e.code ? e.code + ' — ' : ''}${e.message}`; }
   }
   get ext() { return this.format === 'json' ? 'jsonl' : 'log'; }
 
@@ -150,7 +170,7 @@ class FileLogger {
     return (async () => {
       for (const b of blocks) {
         try { for (const w of this._plan(b.day, b.entries)) await fs.promises.appendFile(w.file, w.text); }
-        catch (e) { dbg('FileLogger', e); this._cur = null; }
+        catch (e) { this._fail(e); }
       }
     })().finally(() => { this._busy = false; if (this._q.length) this._arm(); });
   }
@@ -159,7 +179,7 @@ class FileLogger {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     for (const b of this._take()) {
       try { for (const w of this._plan(b.day, b.entries)) fs.appendFileSync(w.file, w.text); }
-      catch (e) { dbg('FileLogger', e); this._cur = null; }
+      catch (e) { this._fail(e); }
     }
   }
   async flush() { if (this._timer) { clearTimeout(this._timer); this._timer = null; } await this._flush(); this.flushSync(); }

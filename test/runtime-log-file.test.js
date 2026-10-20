@@ -38,6 +38,28 @@ const BotManager = require('../src/services/BotManager');
   assert.ok(/\[WARN  \] \[bot-1\] Bị kick, thử đăng nhập lại bằng \*\*\*/.test(txt), txt);
   assert.ok(!txt.includes('matkhau-bi-mat') && !txt.includes('Người chơi X'), 'không lộ mật khẩu / không ghi chat mặc định');
 
+  // ANTER_LOG_DIR đặt trong .env cạnh config.json phải được dùng (trước đây bị bỏ qua)
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'rtlog-env-'));
+  fs.writeFileSync(path.join(dir2, 'config.json'), JSON.stringify({ bots: [] }));
+  fs.writeFileSync(path.join(dir2, '.env'), 'ANTER_LOG_DIR=outlogs\n');
+  const mgr2 = new BotManager({ configPath: path.join(dir2, 'config.json') });
+  await mgr2.init();
+  assert.strictEqual(mgr2.fileLogs.dir, path.join(dir2, 'outlogs'), 'ANTER_LOG_DIR trong .env');
+  mgr2.runtimeLog('err', 'tu .env');
+  assert.ok(fs.readdirSync(path.join(dir2, 'outlogs')).length === 1, 'file log nằm ở thư mục từ .env');
+  assert.strictEqual(mgr2.fileLogs.probe(), null, 'probe ổn khi ghi được');
+  // thư mục không ghi được -> probe trả lỗi + ghi file báo lỗi đúng 1 lần
+  const blocker = path.join(dir2, 'la-file'); fs.writeFileSync(blocker, 'x');
+  const errs = [];
+  mgr2.fileLogs.onError = m => errs.push(m);
+  mgr2.fileLogs.configure({ dir: path.join(blocker, 'sub') });
+  assert.ok(mgr2.fileLogs.probe(), 'probe báo lỗi khi không tạo được thư mục');
+  mgr2.runtimeLog('err', 'a'); mgr2.runtimeLog('err', 'b');
+  assert.strictEqual(errs.length, 1, 'báo lỗi ghi file 1 lần: ' + errs.join('|'));
+  assert.ok(errs[0].includes(blocker), errs[0]);
+  mgr2.fileLogs.close();
+  fs.rmSync(dir2, { recursive: true, force: true });
+
   fs.rmSync(dir, { recursive: true, force: true });
   mgr.fileLogs.close();
   console.log('runtime-log-file.test OK');

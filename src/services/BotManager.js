@@ -11,6 +11,7 @@ const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
 const TelegramLogger = require('../core/TelegramLogger');
 const FileLogger = require('../core/FileLogger');
+const { readDotEnv } = require('../core/dotenv');
 const { resolveBotPassword } = require('../core/secrets');
 const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
 class BotManager {
@@ -44,7 +45,7 @@ class BotManager {
     });
     // Log runtime -> FILE trên máy (logs/runtime-YYYY-MM-DD.log): còn đọc được sau khi tool sập. Cấu hình: xem _applyFileLogConfig
     this.fileLogs = new FileLogger({
-      dir: process.env.ANTER_LOG_DIR || require('path').join(require('path').dirname(this.configPath), 'logs'),
+      dir: this._envLogDir() || require('path').join(require('path').dirname(this.configPath), 'logs'),
       tz: () => this._scheduleTz(),
       redact: s => this.telegramLogs._redact(s), // dùng chung bộ che mật khẩu/token với log Telegram
     });
@@ -110,20 +111,21 @@ class BotManager {
     }
   }
   // Log ra file (config.json, gốc): fileLogs (true) · fileLogLevels ("all" | ["warn","err",...]) · fileLogChat (false: có ghi chat người chơi không)
-  //   fileLogKeepDays (7) · fileLogMaxMB (10: quá thì sang file .1, .2) · fileLogFormat ("text" | "json") · fileLogDir (mặc định logs/ cạnh config.json; hoặc biến ANTER_LOG_DIR)
+  //   fileLogKeepDays (7) · fileLogMaxMB (10: quá thì sang file .1, .2) · fileLogFormat ("text" | "json") · fileLogDir (mặc định logs/ cạnh config.json; hoặc ANTER_LOG_DIR trong môi trường / .env)
+  // ANTER_LOG_DIR: biến môi trường thật, hoặc dòng ANTER_LOG_DIR=... trong file .env cạnh config.json (ưu tiên biến môi trường). Đường dẫn tương đối tính từ thư mục config.json.
+  _envLogDir() {
+    const base = require('path').dirname(this.configPath);
+    const v = process.env.ANTER_LOG_DIR || readDotEnv(base).ANTER_LOG_DIR;
+    return v ? require('path').resolve(base, String(v)) : '';
+  }
   _applyFileLogConfig() {
     const c = this._config || {};
     const fl = { enabled: c.fileLogs !== false, levels: c.fileLogLevels ?? 'all', includeChat: c.fileLogChat === true,
       keepDays: c.fileLogKeepDays ?? 7, maxMB: c.fileLogMaxMB ?? 10, format: c.fileLogFormat ?? 'text' };
-    if (!process.env.ANTER_LOG_DIR && c.fileLogDir) fl.dir = require('path').resolve(require('path').dirname(this.configPath), String(c.fileLogDir));
+    if (!this._envLogDir() && c.fileLogDir) fl.dir = require('path').resolve(require('path').dirname(this.configPath), String(c.fileLogDir));
     this.fileLogs.configure(fl);
   }
   _wireBotLog(bot) {
-    // Thông báo từ server (kick / mất kết nối / tin hệ thống / title) -> móc onServerNotice (AI phân tích). Không bao giờ làm hỏng bot.
-    const notice = (kind, text) => { try { if (this.onServerNotice) this.onServerNotice(bot.cfg.id, kind, text, bot.cfg.host); } catch (e) { dbg('BotManager', e); } };
-    bot.on('kicked', ev => notice('kick', ev && ev.reason));
-    bot.on('disconnected', ev => notice('disconnect', ev && ev.reason));
-    bot.on('serverNotice', ev => notice(ev && ev.kind, ev && ev.text));
     bot.on('log', ev => {
       try { this.fileLogs.write(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); }
       try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); } // log runtime -> Telegram (không bao giờ làm hỏng bot)
