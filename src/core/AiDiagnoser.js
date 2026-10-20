@@ -19,10 +19,13 @@ const { dbg } = require('./debug');
  *  "có dấu hiệu giả mạo/lừa đảo không". Nội dung thông báo được coi là dữ liệu không tin cậy (chống chèn lệnh vào prompt).
  *
  *  config.json (tuỳ chọn):  "ai": { "enabled": true, "model": "gemini-3.8-flash", "cooldownMin": 30, "maxPerDay": 20, "timeoutMs": 60000,
- *                                    "serverMessages": "important", "maxServerPerDay": 30, "serverKeywords": ["từ khoá thêm"] }
+ *                                    "serverMessages": "important", "maxServerPerDay": 30, "serverKeywords": ["từ khoá thêm"],
+ *                                    "thinking": "minimal", "maxOutputTokens": 700 }
+ *  "thinking": mức "suy nghĩ" của model — "minimal" (mặc định, nhanh nhất) | "low" | "medium" | "high" | "off" (không gửi tham số, dùng mặc định của Google — chậm).
+ *  Model Flash mặc định suy nghĩ rất lâu (có thể 30-60s cho 1 câu trả lời ngắn); tool chỉ cần tóm tắt nên để "minimal".
  *  Môi trường/.env: GEMINI_API_KEY, GEMINI_MODEL, GEMINI_TIMEOUT_MS, AI_SERVER_MESSAGES (ưu tiên hơn config.json).
  */
-const DEFAULTS = { model: 'gemini-3.8-flash', cooldownMin: 30, maxPerDay: 20, maxServerPerDay: 30, timeoutMs: 60000, maxChars: 4000 };
+const DEFAULTS = { model: 'gemini-3.8-flash', cooldownMin: 30, maxPerDay: 20, maxServerPerDay: 30, timeoutMs: 60000, maxChars: 4000, thinking: 'minimal', maxOutputTokens: 700 };
 // Cụm từ (không dấu, chữ thường) khiến một tin hệ thống của server được coi là "đáng chú ý" ở chế độ serverMessages="important".
 const DEFAULT_KEYWORDS = ['bi kick', 'kicked', 'bi cam', 'banned', 'bi ban', 'bao tri', 'maintenance', 'khoi dong lai', 'restart', 'sap tat',
   'shutdown', 'error', 'failed', 'that bai', 'canh bao', 'warning', 'antibot', 'anti-bot', 'xac minh', 'verify', 'captcha', 'whitelist',
@@ -63,6 +66,9 @@ class AiDiagnoser {
     this.maxPerDay = Math.max(1, Math.floor(Number(cfg.maxPerDay)) || DEFAULTS.maxPerDay);
     this.timeoutMs = Math.max(1000, Number(env.GEMINI_TIMEOUT_MS) || Number(cfg.timeoutMs) || DEFAULTS.timeoutMs);
     this.maxChars = DEFAULTS.maxChars;
+    const th = String(env.GEMINI_THINKING || cfg.thinking || DEFAULTS.thinking).trim().toLowerCase();
+    this.thinking = ['minimal', 'low', 'medium', 'high', 'off'].includes(th) ? th : DEFAULTS.thinking;
+    this.maxOutputTokens = Math.max(100, Math.floor(Number(cfg.maxOutputTokens)) || DEFAULTS.maxOutputTokens);
     const off = /^(0|false|off)$/i.test(String(env.AI_DIAGNOSE || '')) || cfg.enabled === false;
     this.enabled = !off && !!this.apiKey && !!this._fetch;
     this.maxServerPerDay = Math.max(1, Math.floor(Number(cfg.maxServerPerDay)) || DEFAULTS.maxServerPerDay);
@@ -106,13 +112,25 @@ class AiDiagnoser {
 
   /** Gọi Gemini, trả về văn bản hoặc null. Ném lỗi nếu HTTP/mạng hỏng (để người gọi quyết định). */
   async ask(prompt) {
+    try {
+      return await this._ask(prompt, this.thinking !== 'off');
+    } catch (e) {
+      // Model không hiểu tham số thinkingConfig (HTTP 400 nhắc tới thinking) -> thử lại 1 lần không có nó.
+      if (e && e.status === 400 && /think/i.test(e.message) && this.thinking !== 'off') return this._ask(prompt, false);
+      throw e;
+    }
+  }
+
+  async _ask(prompt, withThinking) {
     const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), this.timeoutMs) : null;
+    const generationConfig = { temperature: 0.3, maxOutputTokens: this.maxOutputTokens };
+    if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: this.thinking };
     try {
       const r = await this._fetch(`${ENDPOINT}${encodeURIComponent(this.model)}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey }, // key ở header, không để lộ trong URL
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
         ...(ctrl ? { signal: ctrl.signal } : {}),
       });
       if (!r.ok) {
@@ -124,7 +142,7 @@ class AiDiagnoser {
       }
       const j = await r.json();
       const parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
-      const out = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
+      const out = Array.isArray(parts) ? parts.filter(p => !p.thought).map(p => p.text || '').join('').trim() : '';
       return out || null;
     } finally {
       if (timer) clearTimeout(timer);

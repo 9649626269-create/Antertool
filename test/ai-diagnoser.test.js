@@ -122,6 +122,23 @@ const mk = (o = {}) => new AiDiagnoser({ env: { GEMINI_API_KEY: 'k-123456', ...(
   for (let i = 0; i < 4; i++) await ds6.analyzeServerNotice('kick', 'lý do ' + 'x'.repeat(i + 1) + 'abc'.repeat(i));
   assert.strictEqual(sv6.length, 2);
   assert.ok(await ds6.diagnose('U', new Error('lỗi code riêng')));   // hạn mức lỗi vẫn còn
+  // generationConfig: mặc định thinkingLevel=minimal + giới hạn token; thinking="off" thì không gửi thinkingConfig
+  const gc = JSON.parse(c1[0].init.body).generationConfig;
+  assert.strictEqual(gc.thinkingConfig.thinkingLevel, 'minimal');
+  assert.ok(gc.maxOutputTokens > 0);
+  const c8 = [];
+  await mk({ config: { ai: { thinking: 'off' } }, fetch: okFetch(c8) }).ask('hi');
+  assert.strictEqual(JSON.parse(c8[0].init.body).generationConfig.thinkingConfig, undefined);
+  // model không hiểu thinkingConfig (400) -> tự thử lại không có nó; phần "thought" không lẫn vào kết quả
+  const c9 = [];
+  const f9 = async (url, init) => {
+    c9.push(JSON.parse(init.body));
+    if (c9[c9.length - 1].generationConfig.thinkingConfig) return { ok: false, status: 400, json: async () => ({ error: { message: 'Unknown field thinkingLevel' } }) };
+    return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'nghĩ...', thought: true }, { text: 'KQ' }] } }] }) };
+  };
+  assert.strictEqual(await mk({ fetch: f9 }).ask('hi'), 'KQ');
+  assert.strictEqual(c9.length, 2);
+
   // 503 khi phân tích thông báo: không ném lỗi, ghi warn
   const l7 = [];
   const ds7 = mk({ log: (l, m) => l7.push([l, m]), fetch: async () => ({ ok: false, status: 503, json: async () => ({ error: { message: 'high demand' } }) }) });
