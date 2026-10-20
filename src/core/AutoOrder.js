@@ -27,6 +27,7 @@ class AutoOrder {
     this.clickCauldron = session.cfg.autoOrderCauldron ?? true;
     this.reportMin = Math.max(1, Number(session.cfg.autoOrderReportMin) || 5);
     this._restart = false;
+    this._suspended = false;     // tạm dừng bởi AutoLoginFlow (giữ nguyên bộ đếm stack/tiền)
   }
 
   get active() { return this.running; }
@@ -36,6 +37,7 @@ class AutoOrder {
     const name = String(item || '').trim().toLowerCase().replace(/^minecraft:/, '').replace(/\s+/g, '_');
     if (!name) return false;
     if (this.running) this.stop(true);
+    this._suspended = false;
     this.item = name;
     this.running = true;
     this.stacks.reset(); this.money = 0;
@@ -47,7 +49,26 @@ class AutoOrder {
     return true;
   }
 
+  /** Tạm dừng (đang đăng nhập/antibot) — resume() chạy tiếp, không reset thống kê. true nếu thực sự vừa dừng. */
+  suspend() {
+    if (!this.running) return false;
+    this.running = false; this._gen++; this.state = 'tạm dừng (đăng nhập)'; this._suspended = true;
+    try { const w = this.mc?.currentWindow; if (w) this.mc.closeWindow(w); } catch (e) { dbg('AutoOrder', e); }
+    return true;
+  }
+
+  resume() {
+    if (!this._suspended) return false;
+    this._suspended = false;
+    if (this.running || !this.item || !this.s.isOnline) return false;
+    this.running = true;
+    const gen = ++this._gen;
+    this._loop(gen).catch(e => { this.s.log('err', `AutoOrder lỗi: ${e.message}`); if (gen === this._gen) this.stop(true); });
+    return true;
+  }
+
   stop(quiet = false) {
+    this._suspended = false;
     if (!this.running) return;
     this.running = false; this._gen++; this.state = 'idle';
     try { const w = this.mc?.currentWindow; if (w) this.mc.closeWindow(w); } catch (e) { dbg('AutoOrder', e); }

@@ -75,6 +75,25 @@ function validateConfig(cfg) {
     }
   }
 
+  // autoLogin (toàn cục hoặc từng bot)
+  const checkAutoLogin = (al, where) => {
+    if (al === undefined || al === null) return;
+    if (!isObj(al)) { errors.push(`${where}.autoLogin phải là object`); return; }
+    if (al.enabled !== undefined && !isBool(al.enabled)) errors.push(`${where}.autoLogin.enabled phải là boolean`);
+    for (const k of ['password', 'loginCommand', 'registerCommand', 'menuCommand']) {
+      if (al[k] !== undefined && !isStr(al[k])) errors.push(`${where}.autoLogin.${k} phải là string`);
+    }
+    for (const k of ['loginPrompt', 'menuTriggers', 'antibotItemNames', 'antibotSuccess']) {
+      if (al[k] !== undefined && !(Array.isArray(al[k]) && al[k].every(isStr))) errors.push(`${where}.autoLogin.${k} phải là mảng string`);
+    }
+    for (const k of ['finalSlot', 'actionDelayMs', 'menuSendDelayMs', 'menuTimeoutMs', 'antibotTimeoutMs', 'postVerifyWaitMs',
+      'restoreSettleMs', 'globalTimeoutMs', 'maxLoginAttempts', 'triggerCooldownMs', 'startFallbackMs']) {
+      if (al[k] !== undefined && (!isNum(al[k]) || al[k] < 0)) errors.push(`${where}.autoLogin.${k} phải là số >= 0`);
+    }
+  };
+  checkAutoLogin(cfg.autoLogin, 'config');
+  if (Array.isArray(cfg.bots)) cfg.bots.forEach((b, i) => { if (isObj(b)) checkAutoLogin(b.autoLogin, `bots[${i}]`); });
+
   // macros
   if (cfg.macros !== undefined && !isObj(cfg.macros)) errors.push('macros phải là object');
 

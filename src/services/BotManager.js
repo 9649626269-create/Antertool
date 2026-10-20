@@ -164,6 +164,7 @@ class BotManager {
       sendClientSettings: cfg.sendClientSettings !== undefined ? cfg.sendClientSettings : true,
       skipValidation: cfg.skipValidation !== undefined ? cfg.skipValidation : false,
       viewDistance: cfg.viewDistance || null,
+      autoLogin: cfg.autoLogin || this._config.autoLogin || null,   // Auto Login & Antibot & Auto Join (xem AutoLoginFlow.js)
       id: cfg.id,
       theme: cfg.theme || 'teal',
       authMode: cfg.authMode || 'offline', // 'offline' (mặc định, /dn qua chat) hoặc 'microsoft' (acc Premium thật)
@@ -236,6 +237,7 @@ class BotManager {
       sendClientSettings: data.sendClientSettings !== undefined ? data.sendClientSettings : true,
       skipValidation: data.skipValidation !== undefined ? data.skipValidation : false,
       viewDistance: data.viewDistance || null,
+      autoLogin: data.autoLogin || this._config.autoLogin || null,
       authMode: data.authMode || 'offline',
       theme: data.theme || 'teal',
       macros: data.macros || this._config.macros || {},

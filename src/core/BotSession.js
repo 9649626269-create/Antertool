@@ -26,6 +26,8 @@ const ReconnectHandler = require('./ReconnectHandler');
 const AutoSellHandler = require('./AutoSellHandler');
 const TeleportHandler = require('./TeleportHandler');
 const LoginHandler = require('./LoginHandler');
+const AutoLoginFlow = require('./AutoLoginFlow');
+const StatsReader = require('./StatsReader');
 const AutoOrder = require('./AutoOrder');
 const { protectNames } = require('./PremiumLogic');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
@@ -56,6 +58,8 @@ class BotSession extends EventEmitter {
     this.autoOrder = new AutoOrder(this);
     this.teleportHandler = new TeleportHandler(this);
     this.loginHandler = new LoginHandler(this);
+    this.statsReader = new StatsReader(this);   // đọc /stats <người chơi> (port từ CheckStatsKingMC)
+    this.autoLogin = new AutoLoginFlow(this);   // Auto Login & Antibot & Auto Join (cfg.autoLogin, mặc định tắt)
     this._logBuffer = new RingBuffer(800);
     this.settings = { ...DEFAULTS };
     this.state = {
@@ -377,7 +381,7 @@ class BotSession extends EventEmitter {
   // B1: bot đã bị tắt / đang dừng -> mọi luồng start/reconnect phải bỏ qua
   get _shouldNotRun() { return this._disabled || this.isStopping; }
   // A1: đang có routine khác chiếm quyền điều khiển (macro / bảo vệ lồng / auto-sell spawn)
-  get _isBusy() { return !!(this.scriptRunner?.running || this._spawnerBusy || this._sellSpawnBusy || this._sellRecovering); }
+  get _isBusy() { return !!(this.scriptRunner?.running || this._spawnerBusy || this._sellSpawnBusy || this._sellRecovering || this.autoLogin?.inFlow); }
   get isOnline()        { return this.state.connState === CS.ONLINE; }
   get isConnected()     { return [CS.ONLINE, CS.SPAWNING, CS.AUTHENTICATING].includes(this.state.connState); }
   get isStopping()      { return this.state.connState === CS.STOPPING; }
@@ -529,6 +533,8 @@ class BotSession extends EventEmitter {
     if (this._macroSellCap) { try { this._finalizeMacroSellRevenue(true); } catch (e) { dbg('BotSession', e); } }
     if (this._sellCap) { try { this._finalizeSellRevenue(true); } catch (e) { dbg('BotSession', e); } } // còn doanh thu đang gom dở -> ghi nốt trước khi mất kết nối
     try { this.sessionVerifier.reset(); } catch (e) { dbg('BotSession', e); }
+    try { this.autoLogin?.reset(); } catch (e) { dbg('BotSession', e); }
+    try { this.statsReader?.reset(); } catch (e) { dbg('BotSession', e); }
     this._clearAllTimers();
     this._featuresActive = false;
     this._autoSellArmed = false;
@@ -680,6 +686,13 @@ class BotSession extends EventEmitter {
       if (cfg.sendClientSettings !== false && this._sendClientSettings(mc)) {
         this.log('sys', 'Đã gửi client settings (vanilla profile)');
       }
+      if (this.autoLogin.enabled) {
+        // AutoLoginFlow thay luồng /dn + menuRetry cũ: tự bắt tin yêu cầu đăng nhập / menu / antibot
+        this._loginCmdDone = true;
+        this.autoLogin.onConnected();
+        this.log('sys', `AutoLogin BẬT — chờ server yêu cầu đăng nhập (${this.autoLogin.o.loginCommand}), antibot và vào server tự động`);
+        return;
+      }
       this._setTimer('loginCmd', () => {
         if (!this.isConnected) return;
         try {
@@ -790,6 +803,8 @@ class BotSession extends EventEmitter {
         }
         // ── SessionCheck verify: xử lý trước, nhưng KHÔNG return — vẫn log chat bình thường ──
         this.sessionVerifier.onMessage(text, pos);
+        this.autoLogin.onMessage(text);
+        this.statsReader.onMessage(text);
         if (this._sellCap) this._captureSellRevenue(text, pos);
         if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         if (this.autoOrder?.active) this.autoOrder.onMessage(text);
@@ -820,6 +835,8 @@ class BotSession extends EventEmitter {
       } catch (e) { dbg('BotSession', e); }
     });
     mc.on('windowOpen', win => {
+      if (this.statsReader.handleWindow(win)) return; // đang chờ GUI /stats <người chơi> — không để WindowRouter/StatsParser ghi đè shard của chính bot
+      if (this.autoLogin?.ownsWindows()) return; // AutoLoginFlow đang tự click menu/antibot — không cho WindowRouter/SessionVerifier đè
       if (this._spawnerBusy || this._sellSpawnBusy || this.autoOrder?.active) return; // routine bảo vệ lồng / auto-sell spawn đang tự điều khiển GUI
       if (this.scriptRunner?._running) {
         // Macro đang chạy (winclick) — không để WindowRouter tự động
@@ -2052,6 +2069,7 @@ class BotSession extends EventEmitter {
   _spawnerProtectTick() {
     if (!this.isOnline || !this.mc?.entity?.position) return;
     if (this._spawnerBusy || !this.protectedSpawners.length) return;
+    if (this.autoLogin?.inFlow) return; // đang đăng nhập/antibot: không quét người lạ (như SpawnerProtect.isInLoginFlow bên Java)
     if (nowMs() < this._spawnerRetryAt) return;
     if (!this._spawnerArmed()) return;
     const threats = [...this._nearbyStrangers(), ...this._spawnerScanEntities()];
@@ -2810,6 +2828,13 @@ class BotSession extends EventEmitter {
     }
     return true;
   }
+  _persistAutoLoginCfg() {
+    const data = { autoLogin: this.cfg.autoLogin };
+    const mgr = this._manager;
+    const c = mgr?._config?.bots?.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
+    if (c) Object.assign(c, data);
+    mgr?.persistence?.markDirty();
+  }
   _persistSpawnHomeCfg() {
     const data = { spawnHomeEnabled: this.spawnHomeEnabled, spawnHomeCommand: this.spawnHomeCommand };
     Object.assign(this.cfg, data);
@@ -3188,6 +3213,32 @@ class BotSession extends EventEmitter {
       } else {
         const on = this.sessionVerifier._active;
         this.log('sys', `SessionCheck verify: ${on ? 'BẬT' : 'TẮT'} | Lệnh: sessioncheck on|off`);
+      }
+    });
+    r.register('checkstats', 'Xem stats của người chơi khác (đọc GUI /stats <tên>): checkstats <người chơi>', (args) => {
+      const name = String(args[0] || '').trim();
+      if (!name) { this.log('warn', 'Cú pháp: checkstats <người chơi>'); return; }
+      if (!this.requireOnline('checkstats')) return;
+      this.statsReader.request(name).then(r => {
+        this.log('ok', `Stats của ${r.player}${r.title ? ` [${r.title}]` : ''}:`);
+        for (const l of r.lines) this.log('sys', `  ${l}`);
+        this.emit('playerStats', { id: this.cfg.id, ...r });
+        this._emitIO('playerStats', { id: this.cfg.id, ...r });
+      }).catch(e => this.log('warn', `checkstats ${name}: ${e.message}`));
+    });
+    r.register('autologin', 'Auto Login & Antibot & Auto Join: autologin on|off|status|now', (args) => {
+      const sub = String(args[0] || 'status').toLowerCase();
+      const al = this.autoLogin;
+      if (sub === 'on' || sub === 'off') {
+        al.setEnabled(sub === 'on');
+        this._persistAutoLoginCfg();
+        this.log('ok', `AutoLogin ${sub === 'on' ? 'BẬT' : 'TẮT'} — có hiệu lực từ lần kết nối kế tiếp (gõ "reconnect" để áp dụng ngay)`);
+      } else if (sub === 'now' || sub === 'join') {
+        if (!al.enabled) this.log('warn', 'AutoLogin đang tắt — gõ: autologin on');
+        else if (!this.isOnline) this.log('warn', 'Bot chưa online');
+        else if (!al.joinNow()) this.log('warn', 'AutoLogin đang chạy dở — chờ xong rồi thử lại');
+      } else {
+        this.log('sys', al.status() + ' | Lệnh: autologin on|off|now');
       }
     });
     r.register('shard', 'Bật/Tắt Auto Shard', () => {

@@ -22,6 +22,8 @@ const SECTIONS = [
       { name: 'cmdall', usage: 'cmdall <lệnh>', desc: 'gửi lệnh tới TẤT CẢ bot đang online' },
     ],
     bot: [
+      { name: 'checkstats', usage: 'checkstats <người chơi>', desc: 'xem stats của người chơi khác: gõ /stats <tên>, đọc GUI, làm sạch tên + lore, bỏ item trang trí' },
+      { name: 'autologin', usage: 'autologin on|off|status|now', desc: 'Auto Login & Antibot & Auto Join: tự đăng nhập (/l), vượt GUI antibot, mở /menu và click vào server; now = vào server ngay' },
       { name: 'status', usage: 'status', desc: 'hiện trạng thái bot' },
       { name: 'ping', usage: 'ping', desc: 'hiện ping' },
       { name: 'pos', usage: 'pos', desc: 'hiện toạ độ' },

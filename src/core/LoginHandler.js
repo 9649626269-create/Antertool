@@ -50,6 +50,7 @@ class LoginHandler {
   continueAfterLogin() {
     const s = this.s;
     if (!s.isOnline || s._disabled || s._menuFlowStarted || s._menuDoneAt) return;
+    if (s.autoLogin?.enabled) return; // AutoLoginFlow tự lo đăng nhập → menu → vào server
     if (!s._loginCmdDone) return;
     if (s.cfg.botPassword && !s._loginConfirmed) {
       if (!s._timers.has('loginConfirmWait')) {

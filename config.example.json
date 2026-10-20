@@ -56,7 +56,14 @@
       "spawnerEspScanTicks": 20,
       "spawnerEspFilter": "BOTH",
       "sellFailMention": "",
-      "sellFailMaxHome": 10
+      "sellFailMaxHome": 10,
+      "autoLogin": {
+        "enabled": false,
+        "loginCommand": "/l",
+        "finalSlot": 24,
+        "actionDelayMs": 750,
+        "startFallbackMs": 20000
+      }
     }
   ],
   "macros": {

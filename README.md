@@ -23,6 +23,23 @@ Port từ gói `premium` (Java/Fabric) những phần chạy được ở bot he
 - Test: `test/premium-logic.test.js`.
 Không port: KillAura/CrystalAura/AutoTotem... (cần vật lý + render của client Minecraft, không có ở bot mineflayer).
 
+## Auto Login & Antibot & Auto Join (2026-10-20)
+Port từ `premium/AliceAutoReconnect.java` → `src/core/AutoLoginFlow.js` (máy trạng thái, tick 250ms). **Mặc định TẮT**; khi bật nó thay luồng `/dn` + `menuRetry` cũ.
+
+Luồng: server báo "đăng nhập bằng lệnh /dn" → gửi `/l <mật khẩu>` → tin "đăng nhập thành công…" → `/menu` → nếu GUI có ô antibot (tên chứa *xác minh / là người / verify*) thì click tới khi server báo "xác minh thành công" → click ô vào server (mặc định ô 24 = `settings.kingSmpSlot`) → chờ GUI đóng → báo `_onMenuDone` cho cổng vị trí. Trong lúc chạy: tạm dừng `autoorder` (giữ nguyên bộ đếm), `spawnerprotect`, tự về home; xong thì bật lại. Timeout tổng 3 phút.
+
+Bật: lệnh `autologin on` (rồi `reconnect`) hoặc trong `config.json` (cấp bot hoặc toàn cục):
+```json
+"autoLogin": { "enabled": true, "loginCommand": "/l", "finalSlot": 24, "actionDelayMs": 750, "startFallbackMs": 20000 }
+```
+Lệnh: `autologin on|off|status|now` (`now` = mở menu + vào server ngay). Mật khẩu lấy từ `autoLogin.password`, nếu trống dùng `botPassword` / `BOT_PASSWORD_<ID>`.
+
+Khoá tuỳ chọn khác: `registerCommand` (`/dk`, chỉ gửi khi `registered:false`), `menuCommand`, `loginPrompt`, `menuTriggers`, `antibotItemNames`, `antibotSuccess` (danh sách cụm chữ, không cần dấu), `menuSendDelayMs`, `menuTimeoutMs`, `antibotTimeoutMs`, `postVerifyWaitMs`, `restoreSettleMs`, `globalTimeoutMs`, `maxLoginAttempts` (5), `triggerCooldownMs` (15000), `startFallbackMs` (0 = tắt fallback auto-join), `pauseFeatures`.
+Khác bản Java: giới hạn số lần gửi lại lệnh login, chờ GUI nạp đủ item trước khi quyết định, cooldown tin kích hoạt menu, fallback tự vào server nếu không thấy tin nào. Test: `test/auto-login.test.js`.
+
+## Đọc stats người chơi — `checkstats` (2026-10-20)
+Port phần đọc dữ liệu stats của CheckStatsKingMC → `src/core/StatsReader.js`. Lệnh `checkstats <người chơi>`: bot gõ `/stats <tên>`, đọc GUI (tên + lore của từng ô, kể cả NBT/component), bỏ mã màu và chữ hoa nhỏ (`ᴍᴏɴᴇʏ` → `MONEY`), bỏ item trang trí (kính, barrier) và dòng hướng dẫn "nhấp/click", rồi in `TIÊU ĐỀ | giá trị` ra log + phát sự kiện `playerStats` (socket.io / `session.on`). Dùng trong code: `await session.statsReader.request('Notch')` → `{ player, title, items[], lines[] }`. Có timeout 15s, nhận tin "không tìm thấy người chơi", từ chối khi bot offline/bận (macro, bảo vệ lồng, đang đăng nhập). Trong lúc chờ GUI, `WindowRouter`/`StatsParser` bị chặn để không ghi đè shard của chính bot. Chưa port: `/bal`, order, AH, online, leaderboard, phần Discord/queue. Test: `test/stats-reader.test.js`.
+
 ## Chạy
 ```bash
 node load.js          # khuyên dùng: tự tải/cập nhật code từ GitHub rồi chạy
