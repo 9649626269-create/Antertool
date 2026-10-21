@@ -11,6 +11,7 @@ const CommandRegistry = require('./CommandRegistry');
 const HelpCatalog = require('./HelpCatalog');
 const { WindowRouter } = require('./WindowRouter');
 const RingBuffer = require('./RingBuffer');
+const BotActivity = require('./BotActivity');
 const SharedPool = require('./SharedPool');
 const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
@@ -248,14 +249,21 @@ class BotSession extends EventEmitter {
       this.emit('packetAnomaly', data);
       this._emitIO('packetAnomaly', data);
     });
+    this._spLastScanAt = 0;
+    BotActivity.initSessionActivity(this);
     this._registerCommands();
   }
   log(level, msg) {
     // NameProtect: config "nameProtect": {"tênThật": "bíDanh"} -> che tên trong mọi log/webhook từ log()
     const np = this.cfg.nameProtect;
     if (np && typeof np === 'object' && typeof msg === 'string') msg = protectNames(msg, Object.entries(np));
-    const entry = { id: this.cfg.id, time: nowMs(), level, msg };
+    const now = nowMs();
+    const entry = { id: this.cfg.id, time: now, level, msg };
     this._logBuffer.push(entry);
+    if (level !== 'chat') {
+      const histLvl = level === 'ok' ? 'ok' : (level === 'warn' ? 'warn' : (level === 'err' ? 'err' : 'info'));
+      BotActivity.pushHistory(this, histLvl, msg, now);
+    }
     this.emit('log', { level, id: this.cfg.id, msg, theme: this.theme, entry });
     this._emitIO('log', entry, `bot:${this.cfg.id}`);
   }
@@ -1810,6 +1818,15 @@ class BotSession extends EventEmitter {
   getSpawnerLevelInfo() {
     return { level: this._spLevel, name: SG.LEVELS[this._spLevel].name, settings: { ...this._sp }, tune: { ...this._spTune } };
   }
+  getProtectStatus() {
+    return {
+      on: !!this._spawnerProtectOn,
+      level: this._spLevel,
+      name: SG.LEVELS[this._spLevel]?.name || 'Cân bằng',
+      threats: 0,
+      lastScanAt: this._spLastScanAt || 0,
+    };
+  }
   _spSummary() {
     const L = SG.LEVELS[this._spLevel];
     const e = this._sp;
@@ -1916,6 +1933,7 @@ class BotSession extends EventEmitter {
     if (this.autoLogin?.inFlow) return; // đang đăng nhập/antibot: không quét người lạ (như SpawnerProtect.isInLoginFlow bên Java)
     if (nowMs() < this._spawnerRetryAt) return;
     if (!this._spawnerArmed()) return;
+    this._spLastScanAt = nowMs();
     const threats = [...this._nearbyStrangers(), ...this._spawnerScanEntities()];
     if (threats.length) this._spawnerDispatch(threats);
   }

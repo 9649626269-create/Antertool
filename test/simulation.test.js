@@ -296,6 +296,42 @@ function startSimServer() {
     );
   }
 
+  // Kiểm tra đăng ký gợi ý lệnh '/' (setMyCommands + setChatMenuButton) và luồng live _onTelegramEvent
+  const HelpCatalog = require('../src/core/HelpCatalog');
+  const cmdSpecs = HelpCatalog.getTelegramBotCommands();
+  assert.strictEqual(cmdSpecs.length, 29, 'TELEGRAM_BOT_COMMANDS phải có đủ 29 lệnh xem & điều khiển');
+  const syncRes = await mgr.telegram.syncCommands(cmdSpecs);
+  assert.strictEqual(syncRes.ok, true);
+  assert.ok(sim.calls.some(c => c.method === 'setMyCommands' && Array.isArray(c.body.commands) && c.body.commands.length === 29));
+  assert.ok(sim.calls.some(c => c.method === 'setChatMenuButton' && c.body.menu_button?.type === 'commands'));
+
+  // Kiểm tra điều khiển trực tiếp qua mgr._onTelegramEvent (kể cả khi gõ lệnh tắt không cần tên bot khi chỉ có 1 bot)
+  mgr.telegramControl.resetSecurityState();
+  await mgr._onTelegramEvent({
+    type: 'command',
+    cmd: 'sell',
+    arg: 'on',
+    from: { id: 555, first_name: 'Operator' },
+    chat: { id: 555, type: 'private' },
+    reply: (t, o) => mgr.telegram.send(t, o),
+  });
+  assert.strictEqual(bot._sellSpawnOn, true);
+
+  let cbAnswered = '';
+  await mgr._onTelegramEvent({
+    type: 'button',
+    cmd: 'p',
+    arg: `${bid}:s0`,
+    data: `p:${bid}:s0`,
+    from: { id: 555, first_name: 'Operator' },
+    chat: { id: 555, type: 'private' },
+    messageId: 500,
+    reply: (t, o) => mgr.telegram.send(t, o),
+    answer: (t) => { cbAnswered = t; },
+  });
+  assert.strictEqual(bot._sellSpawnOn, false);
+  assert.ok(cbAnswered.includes('Đã tắt bán'));
+
   await mgr.flushGracefulShutdown(1000);
   mgr.shutdown();
   sim.server.close();

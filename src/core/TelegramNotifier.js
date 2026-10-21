@@ -390,6 +390,50 @@ class TelegramNotifier {
     }, prio);
   }
 
+  /**
+   * Đăng ký danh sách gợi ý lệnh khi gõ '/' trên Telegram (setMyCommands + nút Menu).
+   */
+  async syncCommands(commands = []) {
+    if (!this.hasToken) return { ok: false, description: 'chưa có token' };
+    const clean = [];
+    for (const item of commands || []) {
+      if (!item || typeof item !== 'object') continue;
+      const command = String(item.command || '').trim().toLowerCase().replace(/^\/+/, '');
+      const description = String(item.description || '').trim().slice(0, 256);
+      if (/^[a-z0-9_]{1,32}$/.test(command) && description.length >= 3) {
+        clean.push({ command, description });
+      }
+      if (clean.length >= 100) break;
+    }
+    if (!clean.length) return { ok: false, description: 'danh sách lệnh trống' };
+    const r = await this._call('setMyCommands', { commands: clean });
+    if (this.chatId) {
+      await this._call('setMyCommands', {
+        commands: clean,
+        scope: { type: 'chat', chat_id: this.chatId },
+      }).catch(() => {});
+      await this._call('setChatMenuButton', {
+        chat_id: this.chatId,
+        menu_button: { type: 'commands' },
+      }).catch(() => {});
+    }
+    await this._call('setChatMenuButton', {
+      menu_button: { type: 'commands' },
+    }).catch(() => {});
+    return r;
+  }
+
+  async clearCommands() {
+    if (!this.hasToken) return { ok: false, description: 'chưa có token' };
+    const r = await this._call('deleteMyCommands', {});
+    if (this.chatId) {
+      await this._call('deleteMyCommands', {
+        scope: { type: 'chat', chat_id: this.chatId },
+      }).catch(() => {});
+    }
+    return r;
+  }
+
   async test() {
     if (!this.hasToken) return { ok: false, message: 'Chưa có token' };
     const me = await this._call('getMe');

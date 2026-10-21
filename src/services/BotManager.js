@@ -7,6 +7,7 @@ const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
 let DiscordTheme; try { DiscordTheme = require('../core/DiscordTheme'); } catch { DiscordTheme = Notifier.THEME; }
+const HelpCatalog = require('../core/HelpCatalog');
 const TelegramControl = require('../core/TelegramControl');
 const NotificationCenter = require('../core/NotificationCenter');
 const RevenueTracker = require('../core/RevenueTracker');
@@ -571,8 +572,12 @@ class BotManager {
     if (this._tgTimer) { clearInterval(this._tgTimer); this._tgTimer = null; }
     const c = this._config || {};
     if (!this.telegram.enabled) { this.telegram.stopPolling(); return; }
-    if (c.telegramCommands !== false) this.telegram.startPolling((ev) => this._onTelegramEvent(ev));
-    else this.telegram.stopPolling();
+    if (c.telegramCommands !== false) {
+      this.telegram.startPolling((ev) => this._onTelegramEvent(ev));
+      this.telegram.syncCommands(HelpCatalog.getTelegramBotCommands()).catch(e => dbg('BotManager', e));
+    } else {
+      this.telegram.stopPolling();
+    }
     const sec = c.telegramRefreshSec === undefined ? 1 : Math.max(0, Number(c.telegramRefreshSec) || 0);
     if (sec > 0 && c.telegramMode !== 'new') { // mode 'new' mà sửa liên tục thì thành spam tin mới -> chỉ chạy ở mode 'edit'
       this._tgTimer = setInterval(() => { try { this._tgTick(); } catch (e) { dbg('BotManager', e); } }, Math.max(1, sec) * 1000);
@@ -711,31 +716,40 @@ class BotManager {
     }
   }
   async _onTelegramEvent(ev) {
-    if (ev.type === 'button' && ev.cmd === 'lg') { // nút 🔄 trên file log: cập nhật ngay
-      const r = await this.telegramLogs.refresh();
-      ev.answer(r.ok ? 'Đã cập nhật file log' : r.message);
-      return;
+    if (!ev) return;
+    const res = await this.telegramControl.handleEvent(ev);
+    if (!res || res.silentIgnore) return;
+
+    if (ev.type === 'button') {
+      if (res.editMessage && ev.messageId && res.text) {
+        const isLivePanelMsg = Object.values(this._tgMsgs || {}).includes(ev.messageId);
+        const isOpeningBotMenu = ev.cmd === 'p' && String(ev.arg || '').endsWith(':m');
+        if (isLivePanelMsg && isOpeningBotMenu) {
+          if (typeof ev.reply === 'function') await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
+          else await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
+        } else {
+          await this.telegram.edit(ev.messageId, res.text, { keyboard: res.keyboard, priority: 1 });
+        }
+      } else if (res.text && !res.editMessage && !res.noReply) {
+        if (typeof ev.reply === 'function') await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
+        else await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
+      }
+      if (typeof ev.answer === 'function') {
+        await ev.answer(res.callbackText || '');
+      }
+    } else if (ev.type === 'command') {
+      if (!res.noReply && res.text) {
+        if (typeof ev.reply === 'function') await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
+        else await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
+      }
     }
-    if (ev.type === 'button' && ev.cmd === 'r') {
-      const bot = ev.arg === '*' ? null : this.bots.find(b => String(b.cfg.id) === ev.arg);
-      if (bot) await this.sendTelegramPanel(bot, { editId: ev.messageId });
-      else this.refreshTelegramPanels();
-      ev.answer('Đã làm mới');
-      return;
+
+    if (Array.isArray(res.refresh) && res.refresh.length) {
+      for (const botId of res.refresh) {
+        this.markPanelDirty(botId);
+      }
     }
-    if (ev.type !== 'command') return;
-    const now = Date.now();
-    if (ev.cmd === 'start' || ev.cmd === 'help') { ev.reply(TelegramPanel.HELP_TEXT); return; }
-    if (ev.cmd === 'logs' || ev.cmd === 'log') { await this._tgLogsCommand(ev); return; }
-    if (ev.cmd === 'status') {
-      ev.reply(TelegramPanel.buildStatusList(this.bots.map(b => this._botPanelInfo(b, now)), this.revenue.clock(now)));
-      return;
-    }
-    if (ev.cmd === 'panel') {
-      const list = ev.arg ? this.bots.filter(b => String(b.cfg.id) === ev.arg) : this.bots.filter(b => this._panelRelevant(b));
-      if (!list.length) { ev.reply(ev.arg ? `Không có bot "${TelegramNotifier.escapeHtml(ev.arg)}".` : 'Chưa có bot nào bật autosell_spawn.'); return; }
-      for (const b of list) this.sendTelegramPanel(b, { fresh: true }); // gửi bảng mới (và nhớ làm bảng chính)
-    }
+    return res;
   }
 
   // ===== Log runtime -> Telegram: lệnh =====

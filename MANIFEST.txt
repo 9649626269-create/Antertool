@@ -16,3 +16,12 @@ Files:
 [MODIFIED] test/discord-embed.test.js — Mở rộng kiểm tra cho DiscordTheme, toàn bộ sự kiện, giới hạn độ dài, cắt surrogate an toàn, che bí mật, tính bất biến của Telegram và lệnh `webhook preview`
 [MODIFIED] test/notification-center.test.js — Cập nhật kiểm tra tương thích Discord với DiscordTheme & Notifier.finish
 [MODIFIED] test/telegram.test.js — Đồng bộ kiểm tra bảng Telegram với bộ ký hiệu Symbols v2
+
+- src/core/TelegramNotifier.js:
+  + Bổ sung syncCommands() và clearCommands() gọi setMyCommands + setChatMenuButton (hiển thị gợi ý 29 lệnh khi gõ '/' và nút Menu trong Telegram).
+- src/services/BotManager.js:
+  + Tự động đồng bộ danh sách lệnh '/' (syncCommands) khi khởi động Telegram và chuyển toàn bộ sự kiện lệnh/nút bấm (_onTelegramEvent) qua TelegramControl.handleEvent().
+- src/core/TelegramControl.js:
+  + Hỗ trợ điều khiển trực tiếp khi bấm gợi ý '/' không kèm tên bot (tự chọn bot nếu dàn có 1 bot, hoặc mở danh sách chọn bot nếu có nhiều bot) và hỗ trợ quyền điều khiển mặc định trong nhóm chat đã cấu hình khi chưa đặt RBAC riêng.
+- src/core/HelpCatalog.js:
+  + Mở rộng TELEGRAM_BOT_COMMANDS lên đầy đủ 29 lệnh xem & điều khiển từ xa trên Telegram.
