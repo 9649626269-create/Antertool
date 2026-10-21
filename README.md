@@ -2,6 +2,42 @@
 
 Bộ quản lý nhiều bot Minecraft (mineflayer) kèm web dashboard, macro, proxy, Telegram/Discord.
 
+## Thông báo Discord Webhook — Thiết kế mới (`DiscordTheme`)
+Hệ thống thông báo Discord Webhook được thiết kế lại đồng bộ qua module trung tâm `src/core/DiscordTheme.js` và `src/core/Notifier.js`:
+
+- **Bảng màu theo mức độ (Severity)**:
+  - `success` (`0x6ef16f` — xanh lá): `test` (Kiểm Tra Kết Nối Webhook), `reconnectRecovered`, `moneyGoal`, `protectResult`, `featuresReady`, `scheduleIn`, `connected`.
+  - `info` (`0x38bdf8` — xanh dương): `autoSell`, `schedule`, `sellCycle`, `macro`, `system`.
+  - `warning` (`0xf59e0b` — vàng hổ phách): `homeReturn`, `scheduleOut`, `testMention`, `proxy`, `posLost`.
+  - `critical` (`0xef4444` — đỏ): `disconnect`, `reconnectFailed`, `spawnerThreat`, `sellFailed`.
+  - `report` (`0xcf8338` — cam): `revenue` (Báo Cáo Tổng Kết Auto-Sell Spawn), `revenueMacro`, `revenueSummary`, `autoOrder`.
+- **Bố cục chuẩn cho mọi Embed**:
+  - Tiêu đề dạng Title Case tiếng Việt có gắn ký hiệu emoji theo từng loại sự kiện.
+  - Dòng `author` gồm tên người chơi/bot (`Steve_01 (bot-1)`) và avatar đầu nhân vật từ `mc-heads.net`, kèm ảnh `thumbnail` góc phải.
+  - Hàng trường ngang (`inline: true`) gọn gàng: `Người chơi`, `Server`, `Thời gian treo` cùng các trường chi tiết theo sự kiện.
+  - Định dạng nâng cao: mốc thời gian tương đối của Discord (`<t:unix:R>`), trích dẫn (`>`) cho lý do bị kick, khối mã (` ``` `) cho lệnh và bảng tổng hợp, thanh tiến độ (`▰▰▰▱▱ 60%`) cho túi đồ/lượt thử/số lồng, định dạng tiền tệ thống nhất (`$41.35K`), chân trang `Antertool` và `timestamp` ISO.
+  - Tự động che mọi thông tin nhạy cảm (URL webhook, token Telegram, thông tin xác thực proxy, mật khẩu đăng nhập) và cắt chuỗi an toàn theo Unicode code point (không bao giờ cắt đôi surrogate pair, luôn nằm trong giới hạn 256/4096/1024/25/6000/1900 của Discord).
+- **Lệnh Console cho Discord Webhook**:
+  ```
+  webhook set <url>                  # lưu URL webhook Discord chung
+  webhook test                       # gửi tin kiểm tra kết nối
+  webhook preview [sự_kiện]          # gửi bộ mẫu thử giao diện của tất cả (hoặc 1) sự kiện lên Discord
+  webhook events [a,b,c]             # xem hoặc chọn các loại sự kiện được bật
+  webhook mention <ID|@tên|off>      # đặt người/role được tag cho disconnect, reconnectFailed, spawnerThreat
+  webhook mention test               # gửi tin thử kiểm tra tag người nhận
+  webhook revenue set <url>          # đặt webhook riêng cho báo cáo doanh thu
+  webhook revenue test | off         # thử hoặc tắt webhook doanh thu riêng
+  webhook revenue report             # gửi ngay báo cáo tổng hợp doanh thu cả dàn bot
+  webhook revenue every <30m|1h|off> # hẹn giờ tự gửi báo cáo tổng hợp doanh thu
+  webhook off                        # tắt webhook chung
+  ```
+
+## Thông báo & Điều khiển từ xa qua Telegram (v2)
+- Bảng `Auto sell spawner` cập nhật tại chỗ, hiển thị trạng thái, hoạt động hiện tại kèm thanh tiến độ (`▰▰▰▱▱`), đếm ngược vòng bán kế tiếp, trạng thái bảo vệ lồng, toạ độ/ping/proxy, doanh thu và 8 mục lịch sử gần nhất trong `<blockquote expandable>`.
+- Bảng ký hiệu chuẩn (`src/core/Symbols.js`) hỗ trợ 2 chế độ `unicode` và `ascii`, hoàn toàn không sử dụng ký tự emoji màu.
+- Trung tâm thông báo `src/core/NotificationCenter.js` gộp tin trùng trong cửa sổ 30s, chống bão tin (digest), phân biệt sự kiện rung/im lặng và giữ nguyên 100% nội dung đầu ra Telegram.
+- Điều khiển từ xa `src/core/TelegramControl.js` hỗ trợ phân quyền RBAC (`admin` / `viewer`), xác nhận hành động nguy hiểm bằng token 12-hex một lần hết hạn sau 30s, danh sách đen lệnh nhạy cảm (`/login`, `/register`, `/changepassword`, `/pay`), giới hạn tốc độ 5 lệnh/10s và khoá tạm 10 phút sau 5 lần bị từ chối.
+
 ## Changelog cải thiện (2026-10-19)
 - Thêm `package-lock.json` — khóa dependency, Dockerfile dùng `npm ci`.
 - Chuyển magic number sell/teleport vào `constants.js` (`SELL`, `TP`).

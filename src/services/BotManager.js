@@ -6,6 +6,9 @@ const EnvironmentDetector = require('../core/EnvironmentDetector');
 const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
+const DiscordTheme = require('../core/DiscordTheme');
+const TelegramControl = require('../core/TelegramControl');
+const NotificationCenter = require('../core/NotificationCenter');
 const RevenueTracker = require('../core/RevenueTracker');
 const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
@@ -48,6 +51,16 @@ class BotManager {
       dir: this._envLogDir() || FileLogger.resolveDefaultLogDir(require('path').dirname(this.configPath)),
       tz: () => this._scheduleTz(),
       redact: s => this.telegramLogs._redact(s), // dùng chung bộ che mật khẩu/token với log Telegram
+    });
+    this.telegramControl = new TelegramControl(this);
+    this.notifications = new NotificationCenter({
+      getTelegram: () => this.telegram,
+      getDiscord: () => this.notifier,
+      getConfig: () => this._config || {},
+      getTz: () => this._scheduleTz(),
+      redact: s => this.telegramLogs._redact(s),
+      getBots: () => this.bots,
+      onIncidentPanelRefresh: b => { if (this._panelRelevant(b)) this.sendTelegramPanel(b); },
     });
     this.dashboard = null;
     this._config = null;
@@ -606,23 +619,54 @@ class BotManager {
   _botPanelInfo(bot, now = Date.now()) {
     const id = bot.cfg.id;
     const up = this.revenue.uptime(id, now);
+    const allBotIds = this.bots.map(b => String(b.cfg.id));
+    const tz = this._scheduleTz();
+    const pos = bot.mc?.entity?.position || bot.state?.position || null;
+    const protect = typeof bot.getProtectStatus === 'function' ? bot.getProtectStatus() : undefined;
+    const hasProxy = !!(bot.proxy || bot.cfg?.useProxy);
     return {
-      botId: id, account: bot.cfg.username || '', connState: bot.state.connState, disabled: !!bot._disabled,
-      sellOn: !!bot._sellSpawnOn, intervalMs: bot._sellSpawnIntervalMs(), now,
-      stats: this.revenue.stats(id, now), totalUptimeMs: up.totalMs, sessionMs: up.sessionMs,
+      botId: id,
+      allBotIds,
+      shortId: TelegramPanel.botShortId(id, allBotIds),
+      account: bot.cfg.username || '',
+      connState: bot.state.connState,
+      disabled: !!bot._disabled,
+      scheduledOut: !!bot._scheduledOut,
+      reconnects: bot.state?.reconnects || 0,
+      sellOn: !!bot._sellSpawnOn,
+      sellBusy: !!bot._sellSpawnBusy,
+      intervalMs: bot._sellSpawnIntervalMs(),
+      now,
+      tz,
+      stats: this.revenue.stats(id, now),
+      totalUptimeMs: up.totalMs,
+      sessionMs: up.sessionMs,
+      session: bot,
+      nextSellAt: bot._nextSellAt || 0,
+      protect,
+      pos,
+      ping: bot.state?.ping,
+      proxy: hasProxy,
+      proxyStatus: hasProxy ? 'có' : 'không',
+      macros: bot.scriptRunner?.list?.() || [],
       sellFailAgoMs: bot._sellFailAlertedAt ? now - bot._sellFailAlertedAt : null,
-      clock: this.revenue.clock(now, true),
+      clock: TelegramPanel.fmtClock(now, tz, true),
     };
+  }
+  markPanelDirty(botId) {
+    const bot = this.findBot(botId);
+    if (bot && this._panelRelevant(bot)) this.sendTelegramPanel(bot);
   }
   // Gửi/sửa bảng của 1 bot. opts.editId = sửa đúng tin đó (nút Làm mới); opts.fresh = luôn gửi tin mới.
   sendTelegramPanel(bot, opts = {}) {
     if (!this.telegram.enabled) return Promise.resolve(false);
     const id = String(bot.cfg.id);
+    const nowOverride = opts.now;
     // Xếp hàng theo từng bot: 2 yêu cầu sát nhau không tạo ra 2 bảng trùng (cái sau thấy message_id của cái trước)
     const run = async () => {
       this._tgBusy.add(id);
       try {
-        const info = this._botPanelInfo(bot);
+        const info = this._botPanelInfo(bot, nowOverride ?? Date.now());
         const { text, keyboard } = TelegramPanel.buildPanel(info);
         const editMode = this._config?.telegramMode !== 'new';
         const prev = opts.editId || (editMode && !opts.fresh ? this._tgMsgs[id] : null);
@@ -863,14 +907,26 @@ class BotManager {
       daily: list[0].daily.map((d, i) => ({ label: d.label, amount: sum(s => s.daily[i]?.amount) })),
     };
   }
+  _discordPrimaryUsername() {
+    for (const b of this.bots) {
+      const u = String(b?.cfg?.username || '');
+      if (/^\w{1,16}$/.test(u)) return u;
+    }
+    return '';
+  }
+  _discordAuthor(label = Notifier.BRAND) {
+    return DiscordTheme.buildAuthor(label, this._discordPrimaryUsername());
+  }
+  _discordThumb() {
+    return DiscordTheme.buildThumbnail(this._discordPrimaryUsername());
+  }
   // Tổng hợp cả dàn bot — cùng bố cục với báo cáo từng bot (bảng chi tiết từng bot nằm ở phần mô tả)
   buildRevenueSummaryEmbed(now = Date.now()) {
-    const fmt = RevenueTracker.formatMoney;
     const money = RevenueTracker.formatMoneyDollar;
     const rows = [];
     for (const b of this.bots) {
       const list = [this.revenue.stats(b.cfg.id, now), this.revenue.stats(b.cfg.id + '#macro', now)].filter(Boolean);
-      if (list.length) rows.push({ id: String(b.cfg.id), s: this._mergeRevStats(list) });
+      if (list.length) rows.push({ id: String(b.cfg.id), username: String(b.cfg.username || ''), s: this._mergeRevStats(list) });
     }
     if (!rows.length) return null;
     rows.sort((a, b) => b.s.today - a.s.today);
@@ -881,21 +937,27 @@ class BotManager {
     const MAX = 25;
     const idW = Math.min(14, Math.max(4, ...rows.slice(0, MAX).map(r => r.id.length)));
     const cut = (t, n) => (t.length > n ? t.slice(0, n - 1) + '…' : t.padEnd(n, ' '));
-    const lines = [`${cut('Bot', idW)} ${pad('1h', 7)} ${pad('Hôm nay', 8)} ${pad('/giờ', 7)}`];
+    const lines = [`${cut('Bot', idW)} ${pad('1h', 8)} ${pad('Hôm nay', 9)} ${pad('/giờ', 8)}`];
     for (const r of rows.slice(0, MAX)) {
-      lines.push(`${cut(r.id, idW)} ${pad(fmt(r.s.last1h), 7)} ${pad(fmt(r.s.today), 8)} ${pad(r.s.avgPerHour == null ? '—' : fmt(r.s.avgPerHour), 7)}`);
+      lines.push(`${cut(r.id, idW)} ${pad(money(r.s.last1h), 8)} ${pad(money(r.s.today), 9)} ${pad(r.s.avgPerHour == null ? '—' : money(r.s.avgPerHour), 8)}`);
     }
     if (rows.length > MAX) lines.push(`… và ${rows.length - MAX} bot khác`);
     const hosts = [...new Set(this.bots.map(b => String(b.cfg.host || '').trim()).filter(Boolean))];
     const server = hosts.length === 1 ? hosts[0] : (hosts.length ? `${hosts.length} server` : '—');
     const upMs = Math.max(0, ...this.bots.map(b => this.revenue.uptime(b.cfg.id, now).totalMs));
     const online = this.bots.filter(b => b.isOnline).length;
-    const status = [`${online}/${this.bots.length} bot đang hoạt động`];
+    const topUser = rows.find(r => /^\w{1,16}$/.test(r.username))?.username || this._discordPrimaryUsername();
+    const status = [
+      `${online}/${this.bots.length} bot đang hoạt động`,
+      `Tiến độ dàn: ${DiscordTheme.progressBar(online, Math.max(1, this.bots.length))} • ${DiscordTheme.discordTimestamp(now, 'R')}`,
+    ];
     if (avgH == null) status.push('Cần ≥2 vòng bán liên tiếp để tính tốc độ');
-    return {
-      title: `Báo Cáo Tổng Kết Doanh Thu (${rows.length} Bot)`,
-      description: '```\n' + lines.join('\n') + '\n```',
-      color: Notifier.COLOR.report,
+    return Notifier.finish({
+      title: DiscordTheme.formatEmbedTitle(`Báo Cáo Tổng Kết Doanh Thu (${rows.length} Bot)`, 'revenueSummary'),
+      description: DiscordTheme.codeBlock(lines.join('\n')),
+      color: DiscordTheme.COLOR.report,
+      author: DiscordTheme.buildAuthor(`${Notifier.BRAND} • ${this.bots.length} Bot`, topUser),
+      thumbnail: DiscordTheme.buildThumbnail(topUser),
       fields: [
         { name: 'Số bot', value: String(this.bots.length), inline: true },
         { name: 'Server', value: server, inline: true },
@@ -906,7 +968,7 @@ class BotManager {
         { name: 'Trạng thái', value: status.join('\n'), inline: false },
       ],
       timestamp: new Date(now).toISOString(),
-    };
+    }, 'revenueSummary');
   }
   sendRevenueSummary() {
     const embed = this.buildRevenueSummaryEmbed();
@@ -1010,17 +1072,21 @@ class BotManager {
     return count;
   }
   _notifyRest(sched, count) {
-    this.notifier?.send('schedule', {
-      title: 'Bắt Đầu Giờ Nghỉ',
-      description: `Đã out ${count} bot. Sẽ tự vô lại lúc ${sched.inTime}.`,
-      color: 0xfacc15,
+    const theme = DiscordTheme.getTheme('scheduleOut');
+    const tot = Math.max(1, this.bots.length || count || 1);
+    this.notifier?.send('schedule', Notifier.finish({
+      title: DiscordTheme.formatEmbedTitle('Bắt Đầu Giờ Nghỉ', 'scheduleOut'),
+      description: `Đã out ${count} bot (${DiscordTheme.progressBar(count, tot)}). Sẽ tự vô lại lúc \`${sched.inTime}\`.`,
+      color: theme.color,
+      author: this._discordAuthor(),
+      thumbnail: this._discordThumb(),
       fields: [
         { name: 'Giờ nghỉ', value: String(sched.outTime), inline: true },
         { name: 'Vô lại lúc', value: String(sched.inTime), inline: true },
         { name: 'Số bot', value: String(count), inline: true },
       ],
       timestamp: new Date().toISOString(),
-    });
+    }, 'scheduleOut'));
   }
   _doScheduledIn(sched) {
     let count = 0;
@@ -1033,16 +1099,31 @@ class BotManager {
         count++;
       }
     }
-    this.notifier?.send('schedule', {
-      title: 'Hết Giờ Nghỉ',
-      description: `Đang vô lại ${count} bot.`,
-      color: 0x4ade80,
+    const theme = DiscordTheme.getTheme('scheduleIn');
+    const tot = Math.max(1, this.bots.length || count || 1);
+    this.notifier?.send('schedule', Notifier.finish({
+      title: DiscordTheme.formatEmbedTitle('Hết Giờ Nghỉ', 'scheduleIn'),
+      description: `Đang vô lại ${count} bot (${DiscordTheme.progressBar(count, tot)}) • ${DiscordTheme.discordTimestamp(Date.now(), 'R')}.`,
+      color: theme.color,
+      author: this._discordAuthor(),
+      thumbnail: this._discordThumb(),
       fields: [
         { name: 'Vô lại lúc', value: String(sched.inTime), inline: true },
         { name: 'Số bot', value: String(count), inline: true },
+        { name: 'Trạng thái', value: 'Đang kết nối lại', inline: true },
       ],
       timestamp: new Date().toISOString(),
-    });
+    }, 'scheduleIn'));
+  }
+  async flushGracefulShutdown(timeoutMs = 3000) {
+    let timer;
+    try {
+      await Promise.race([
+        Promise.allSettled([this.telegram?._queue, this.notifier?._queue]),
+        new Promise(r => { timer = setTimeout(r, timeoutMs); if (timer.unref) timer.unref(); }),
+      ]);
+    } catch (e) { dbg('BotManager', e); } finally { clearTimeout(timer); }
+    try { this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); }
   }
   shutdown() {
     for (const bot of this.bots) bot.shutdown();

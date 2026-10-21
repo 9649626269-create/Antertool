@@ -12,6 +12,7 @@ const path = require('path');
 
 const TelegramNotifier = require('../src/core/TelegramNotifier');
 const Notifier = require('../src/core/Notifier');
+const DiscordTheme = require('../src/core/DiscordTheme');
 const { NotificationCenter, EVENT_CATALOG, renderEventMessage } = require('../src/core/NotificationCenter');
 const { migrateTelegramConfig, normalizeTelegramConfig } = require('../src/core/ConfigValidator');
 const { sym, setSymbolSet } = require('../src/core/Symbols');
@@ -430,14 +431,32 @@ function startControlledTelegramServer() {
   });
 
   for (const key of legacyKeys) {
-    const title = `🚨 bot-1: Sự kiện ${key}`;
-    const desc = `Chi tiết **${key}** cho Discord`;
-    const color = 0xf87171;
-    const headline = key === 'sellFailed' ? '🚨 KHÔNG BÁN ĐƯỢC' : null;
-    const embed = { title, description: desc, color, timestamp: fixedIso };
-    // Đường cũ (Notifier.send(eventKey, embed, content))
+    const theme = DiscordTheme.getTheme(key);
+    assert.ok(theme && theme.emoji && theme.color, `Theme must exist for ${key}`);
+    const title = DiscordTheme.formatEmbedTitle(`bot-1: Sự kiện ${key}`, key, { botId: 'bot-1' });
+    const desc = `Chi tiết **${key}** cho Discord • ${DiscordTheme.discordTimestamp(now, 'R')}`;
+    const color = theme.color;
+    const headline = key === 'sellFailed' ? '🚨 KHÔNG BÁN ĐƯỢC' : (theme.headline || null);
+    const embed = Notifier.finish({
+      title,
+      description: desc,
+      color,
+      author: DiscordTheme.buildAuthor('Steve_01 (bot-1)', 'Steve_01'),
+      thumbnail: DiscordTheme.buildThumbnail('Steve_01'),
+      fields: [
+        { name: 'Người chơi', value: 'Steve_01 (bot-1)', inline: true },
+        { name: 'Server', value: 'donutsmp.net', inline: true },
+        { name: 'Thời gian treo', value: '01:20:00', inline: true },
+      ],
+      timestamp: fixedIso,
+    }, key);
+    assert.ok(embed.author && embed.author.name === 'Steve_01 (bot-1)');
+    assert.strictEqual(embed.footer.text, 'Antertool');
+    assert.ok(DiscordTheme.codePointLength(embed.title) <= 256);
+    assert.ok(DiscordTheme.codePointLength(embed.description) <= 4096);
+    // Đường trực tiếp (Notifier.send(eventKey, embed, content))
     fakeDiscordOld.send(key, embed, headline);
-    // Đường mới qua NotificationCenter
+    // Đường qua NotificationCenter
     ncDiscord.emit({
       key,
       bot: 'bot-1',

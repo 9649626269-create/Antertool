@@ -6,13 +6,12 @@
 // Thêm lệnh mới: thêm 1 dòng vào đúng phân khu bên dưới.
 // Lệnh bot đăng ký trong BotSession mà CHƯA có ở đây sẽ tự rơi vào phân khu "khac".
 
-// con: lệnh gõ ở console.  bot: lệnh gửi cho bot (cmd <id> <lệnh>); name = tên lệnh đã đăng ký.
 const SECTIONS = [
   {
     key: 'bot', title: 'Bot', desc: 'thêm/xoá, bật/tắt, gửi lệnh, xem trạng thái',
     aliases: ['bots', 'acc'],
     con: [
-      { name: 'list', usage: 'list', desc: 'liệt kê tất cả bot (trạng thái, 💰 Money, ✨ Shards)' },
+      { name: 'list', usage: 'list', desc: 'liệt kê tất cả bot (trạng thái, Money, Shards)' },
       { name: 'start', usage: 'start <id>', desc: 'khởi động một bot' },
       { name: 'stop', usage: 'stop <id>', desc: 'dừng một bot' },
       { name: 'addbot', usage: 'addbot <tên> mk <mật khẩu> [ip] [port] [ver] [owner]', desc: 'thêm bot mới. vd: addbot 123 mk 123  |  addbot 123 mk 123 play.abc.vn 25565 1.21.1 Steve' },
@@ -44,6 +43,7 @@ const SECTIONS = [
       { name: 'webhook', usage: 'webhook revenue set <url> | test | off', desc: 'webhook RIÊNG cho báo cáo doanh thu autosell_spawn' },
       { name: 'webhook', usage: 'webhook mention <ID|@tên|off> | test', desc: 'tag người nhận ở cuối thông báo kick/hết reconnect/cảnh báo lồng' },
       { name: 'webhook', usage: 'webhook revenue report | every <30m|1h|off>', desc: 'gửi ngay / tự gửi định kỳ báo cáo TỔNG HỢP doanh thu của tất cả bot' },
+      { name: 'webhook', usage: 'webhook preview [sự_kiện]', desc: 'gửi mẫu thử toàn bộ (hoặc 1) sự kiện Discord để xem trước bố cục' },
     ],
     bot: [
       { name: 'autosell_spawn', usage: 'autosell_spawn on|off|now|scan|status', desc: 'bật/tắt, chạy 1 vòng ngay, quét lồng quanh bot, xem trạng thái' },
@@ -116,14 +116,16 @@ const SECTIONS = [
     aliases: ['webhook', 'schedule', 'discord', 'lich', 'telegram', 'tg'],
     con: [
       { name: 'webhook', usage: 'webhook set <url>', desc: 'lưu webhook Discord (báo disconnect, reconnect, goal, bảo vệ lồng)' },
-      { name: 'webhook', usage: 'webhook test | off', desc: 'gửi thử / tắt webhook' },
+      { name: 'webhook', usage: 'webhook test | preview [sự_kiện] | off', desc: 'gửi thử kết nối / xem trước mẫu thông báo / tắt webhook' },
       { name: 'webhook', usage: 'webhook events [a,b,c]', desc: 'xem/đặt loại sự kiện được báo' },
       { name: 'webhook', usage: 'webhook mention <ID|@tên|off> | test', desc: 'tag người nhận ở cuối thông báo kick/hết reconnect/cảnh báo lồng (dùng ID số để ping)' },
       { name: 'telegram', usage: 'telegram set <token> [chatId] | chatid | test | off', desc: 'bảng Auto sell spawner + cảnh báo qua Telegram (chatid: tự tìm chat_id sau khi nhắn /start cho bot)' },
       { name: 'telegram', usage: 'telegram panel | every <1s|10s|10m|off> | mode edit|new | events [a,b,c] | commands on|off', desc: 'gửi bảng ngay / nhịp cập nhật (mặc định 1s) / sửa tại chỗ hay tin mới / loại sự kiện / lệnh /status /panel' },
+      { name: 'telegram', usage: 'telegram users [add|remove] [admin|viewer] <userId>', desc: 'quản lý quyền admin và viewer điều khiển từ xa qua Telegram' },
+      { name: 'telegram', usage: 'telegram mute <30m|1h|off> | control on|off | symbols unicode|ascii', desc: 'tắt tiếng thông báo tạm thời / bật tắt điều khiển từ xa / đổi bộ ký hiệu' },
       { name: 'telegram', usage: 'telegram logs [on|off]', desc: 'log runtime (log của TẤT CẢ bot + khởi động/tắt/lỗi) gửi lên Telegram thành 1 file log_all.txt tự cập nhật tại chỗ (có stats server từng bot ở đầu file); không có đối số = xem trạng thái' },
       { name: 'telegram', usage: 'telegram logs level <all|info|warn|err|a,b,c> | chat on|off | bots <all|id1,id2>', desc: 'lọc theo mức (sys,ok,warn,err,afk,shard,proxy,health,chat) / bật chat người chơi / chỉ bot chỉ định' },
-      { name: 'telegram', usage: 'telegram logs every <10s|30s|1m|1h> | keep <n> | now | silent on|off | send [id] [n] | test', desc: 'chu kỳ cập nhật file log (2s–24h) / số dòng mới nhất giữ trong file (50–5000) / cập nhật ngay / tin đầu có rung hay không / gửi thêm file n dòng gần nhất / gửi file thử. Trong Telegram: nút 🔄, /logs now, /logs [id] [n]' },
+      { name: 'telegram', usage: 'telegram logs every <10s|30s|1m|1h> | keep <n> | now | silent on|off | send [id] [n] | test', desc: 'chu kỳ cập nhật file log (2s–24h) / số dòng mới nhất giữ trong file (50–5000) / cập nhật ngay / tin đầu có rung hay không / gửi thêm file n dòng gần nhất / gửi file thử. Trong Telegram: nút làm mới, /logs now, /logs [id] [n]' },
       { name: 'schedule', usage: 'schedule on <HH:MM out> <HH:MM in>', desc: 'lịch tự out/vào cả dàn bot, vd: schedule on 23:00 06:00' },
       { name: 'schedule', usage: 'schedule off', desc: 'tắt lịch (không có đối số = xem)' },
     ],
@@ -147,7 +149,27 @@ const SECTIONS = [
   },
 ];
 
-// Lệnh đã đăng ký nhưng không liệt kê riêng (là lối vào help hoặc tên gọi khác)
+// Danh sách lệnh đăng ký với BotFather / setMyCommands (không có emoji)
+const TELEGRAM_BOT_COMMANDS = Object.freeze([
+  { command: 'status', description: 'Tổng quan trạng thái và doanh thu cả dàn bot' },
+  { command: 'bots', description: 'Danh sách bot và nút mở menu điều khiển' },
+  { command: 'panel', description: 'Gửi bảng Auto sell spawner' },
+  { command: 'activity', description: 'Xem hoạt động hiện tại và lịch sử gần đây' },
+  { command: 'sell', description: 'Bật/tắt/chạy ngay hoặc chỉnh chu kỳ bán lồng' },
+  { command: 'sellall', description: 'Bật/tắt/chạy bán lồng cho toàn bộ bot' },
+  { command: 'protect', description: 'Cấu hình bảo vệ lồng spawn' },
+  { command: 'events', description: 'Bật/tắt và chỉnh âm báo cho từng loại sự kiện' },
+  { command: 'mute', description: 'Tắt tiếng thông báo tạm thời (vd 30m, 1h, off)' },
+  { command: 'logs', description: 'Cập nhật hoặc tải file log runtime' },
+  { command: 'diag', description: 'Chẩn đoán hàng đợi và kết nối Telegram' },
+  { command: 'whoami', description: 'Xem User ID, Chat ID và quyền hiện tại' },
+  { command: 'help', description: 'Xem hướng dẫn đầy đủ các lệnh Telegram' },
+]);
+
+function getTelegramBotCommands() {
+  return TELEGRAM_BOT_COMMANDS.map(c => ({ ...c }));
+}
+
 const HIDDEN_BOT_CMDS = new Set(['help', 'h', 'autosellspawn', 'begger']);
 
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').trim();
@@ -181,7 +203,6 @@ const COMMAND_ALIASES = {
   e: 'exit',
 };
 
-// Tìm theo tên lệnh -> [{ sec, scope:'con'|'bot', e }]
 function findCommands(q, scope, regNames) {
   let n = norm(q);
   if (COMMAND_ALIASES[n]) n = COMMAND_ALIASES[n];
@@ -193,9 +214,6 @@ function findCommands(q, scope, regNames) {
   return out;
 }
 
-// Trả về { found, lines } — lines là mảng { t, ... } để nơi gọi tự tô màu:
-//   title{text} | menu{key,text} | head{text} | cmd{usage,desc} | note{text} | warn{text} | gap
-// opts: { scope:'console'|'bot', query, registry:[{name,desc}]|null, customs:[{name,cmd}] }
 function buildHelp({ scope = 'console', query = '', registry = null, customs = [] } = {}) {
   const regNames = registry ? new Set(registry.map(c => c.name.toLowerCase())) : null;
   const known = new Set(SECTIONS.flatMap(s => s.bot.map(e => e.name)));
@@ -253,7 +271,6 @@ function buildHelp({ scope = 'console', query = '', registry = null, customs = [
   const sec = resolveSection(q);
   if (sec && hasScope(sec, scope, regNames)) return { found: true, lines: sectionLines(sec) };
   if (sec) {
-    // phân khu chỉ có lệnh console (vd Hệ thống, Thông báo) khi đang xem trợ giúp của bot
     return { found: true, lines: [{ t: 'warn', text: `Phân khu "${sec.title}" chỉ có lệnh ở console — gõ  help ${sec.key}  ở console (không qua cmd).` }] };
   }
 
@@ -277,4 +294,13 @@ function buildHelp({ scope = 'console', query = '', registry = null, customs = [
   return { found: false, lines: [{ t: 'warn', text: `Không có phân khu hay lệnh "${query}". Phân khu: ${keys}, all` }] };
 }
 
-module.exports = { SECTIONS, HIDDEN_BOT_CMDS, buildHelp, resolveSection, findCommands, norm };
+module.exports = {
+  SECTIONS,
+  HIDDEN_BOT_CMDS,
+  TELEGRAM_BOT_COMMANDS,
+  getTelegramBotCommands,
+  buildHelp,
+  resolveSection,
+  findCommands,
+  norm,
+};

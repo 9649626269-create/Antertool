@@ -1,6 +1,7 @@
 'use strict';
 const https = require('https');
 const http = require('http');
+const DiscordTheme = require('./DiscordTheme');
 
 /**
  * Notifier — gửi thông báo tới 1 Discord webhook dùng chung cho cả dàn bot.
@@ -30,10 +31,9 @@ const NEW_EVENTS = ['featuresReady', 'homeReturn', 'sellFailed', 'autoOrder'];
 const DEFAULT_EVENTS = Object.keys(EVENT_LABELS);
 // Các sự kiện "báo động" có dòng tiêu đề + tag người nhận (kiểu: ❌ BOT BỊ KICK @ai-đó)
 const DEFAULT_MENTION_EVENTS = ['disconnect', 'reconnectFailed', 'spawnerThreat'];
-// Phong cách embed: tiêu đề Viết Hoa Từng Chữ, field nằm ngang (inline), chân embed "Antertool • Hôm nay lúc HH:mm"
-// (Discord tự ghép timestamp vào cạnh footer.text). Màu lấy theo mẫu: xanh = kết nối/ổn, cam = báo cáo tổng kết.
-const BRAND = 'Antertool';
-const COLOR = { ok: 0x6ef16f, report: 0xcf8338 };
+
+const BRAND = DiscordTheme.BRAND;
+const COLOR = DiscordTheme.COLOR;
 
 class Notifier {
   constructor(cfg = {}) {
@@ -76,39 +76,91 @@ class Notifier {
   static get NEW_EVENTS() { return NEW_EVENTS; }
   static get BRAND() { return BRAND; }
   static get COLOR() { return COLOR; }
-  // Mọi embed đều có chân "Antertool" + timestamp (Discord hiện "Antertool • Hôm nay lúc 00:13"); không ghi đè nếu embed đã tự đặt.
-  static finish(embed) {
-    const e = { ...embed };
-    if (!e.footer || !e.footer.text) e.footer = { ...(e.footer || {}), text: BRAND };
-    if (!e.timestamp) e.timestamp = new Date().toISOString();
-    return e;
+  static get THEME() { return DiscordTheme; }
+
+  // Mọi embed đều có author, chân "Antertool" + timestamp, và kiểm tra giới hạn an toàn theo code point.
+  // Không ghi đè nếu embed đã tự đặt footer/timestamp/author.
+  static finish(embed, eventKey = null) {
+    const e = { ...(embed || {}) };
+    const inferredKey = DiscordTheme.inferEventKey(e.title, eventKey);
+    const theme = DiscordTheme.getTheme(inferredKey);
+    if (e.title && !DiscordTheme.formatEmbedTitle) {
+      e.title = String(e.title);
+    }
+    if (!e.author || !e.author.name) {
+      e.author = DiscordTheme.buildAuthor(BRAND);
+    }
+    if (!e.footer || !e.footer.text) {
+      e.footer = { ...(e.footer || {}), text: BRAND };
+    }
+    if (!e.timestamp) {
+      e.timestamp = new Date().toISOString();
+    }
+    if (e.color === undefined || e.color === null) {
+      e.color = theme.color;
+    }
+    return DiscordTheme.enforceEmbedLimits(e);
   }
+
   // headline (tuỳ chọn): dòng chữ nằm TRÊN embed, ví dụ "❌ BOT BỊ KICK"; sự kiện nằm trong mentionEvents thì thêm tag phía sau.
   send(eventKey, embed, headline) {
     if (!this.isEventOn(eventKey)) return Promise.resolve(false);
     let content = '';
     if (headline) content = [headline, this.mentionEvents.has(eventKey) ? this.mention : ''].filter(Boolean).join(' ');
-    this._queue = this._queue.then(() => this._post(embed, content)).catch(() => false);
+    const finished = Notifier.finish(embed, eventKey);
+    this._queue = this._queue.then(() => this._post(finished, content)).catch(() => false);
     return this._queue;
   }
+
   testMention() {
+    const now = Date.now();
+    const theme = DiscordTheme.getTheme('testMention');
     return this._post({
-      title: 'Bot Bị Kick (Tin Thử)', description: 'Đây là tin thử — xem dòng tiêu đề phía trên có tag đúng người chưa.',
-      color: 0xf97316,
-      fields: [{ name: 'Trạng thái', value: 'Tin thử, không phải sự cố thật', inline: true }, { name: 'Nguồn', value: BRAND, inline: true }],
+      title: DiscordTheme.formatEmbedTitle('Bot Bị Kick (Tin Thử)', 'testMention'),
+      description: [
+        DiscordTheme.blockquote('Server đang bảo trì định kỳ (tin thử nghiệm)'),
+        `Đây là tin thử — xem dòng tiêu đề phía trên có tag đúng người chưa (${DiscordTheme.discordTimestamp(now, 'R')}).`,
+      ].join('\n'),
+      color: theme.color,
+      author: DiscordTheme.buildAuthor(BRAND),
+      fields: [
+        { name: 'Trạng thái', value: 'Tin thử, không phải sự cố thật', inline: true },
+        { name: 'Tag người nhận', value: this.mention || '(chưa đặt)', inline: true },
+        { name: 'Nguồn', value: BRAND, inline: true },
+      ],
     }, ['❌ BOT BỊ KICK (test)', this.mention].filter(Boolean).join(' '));
   }
+
   test(embed) {
+    const theme = DiscordTheme.getTheme('test');
     return this._post(embed || {
-      title: 'Kiểm Tra Kết Nối Webhook',
+      title: DiscordTheme.formatEmbedTitle('Kiểm Tra Kết Nối Webhook', 'test'),
       description: `${BRAND} đã kết nối thành công tới Discord!`,
-      color: COLOR.ok,
+      color: theme.color,
+      author: DiscordTheme.buildAuthor(BRAND),
       fields: [
         { name: 'Trạng thái', value: 'Hoạt động bình thường', inline: true },
         { name: 'Nguồn', value: `Minecraft ${BRAND}`, inline: true },
+        { name: 'Thời gian', value: DiscordTheme.discordTimestamp(Date.now(), 'R'), inline: true },
       ],
     });
   }
+
+  // Gửi lần lượt các mẫu embed thử nghiệm qua hàng đợi tuần tự (dùng cho lệnh console `webhook preview`)
+  preview(opts = {}) {
+    if (!this.url) return Promise.resolve({ ok: false, sent: 0, total: 0 });
+    const items = DiscordTheme.buildPreviewPayloads(opts);
+    if (!items.length) return Promise.resolve({ ok: false, sent: 0, total: 0 });
+    let sent = 0;
+    for (const item of items) {
+      this._queue = this._queue
+        .then(() => this._post(item.embed, item.content))
+        .then(ok => { if (ok) sent++; return ok; })
+        .catch(() => false);
+    }
+    return this._queue.then(() => ({ ok: sent === items.length, sent, total: items.length }));
+  }
+
   _post(embed, content = '') {
     if (!this.url) return Promise.resolve(false);
     return new Promise((resolve) => {
@@ -116,7 +168,11 @@ class Notifier {
         const u = new URL(this.url);
         const lib = u.protocol === 'http:' ? http : https;
         const body = { embeds: [Notifier.finish(embed)] };
-        if (content) { body.content = content.substring(0, 1900); body.allowed_mentions = this._allowedMentions(body.content); }
+        if (content) {
+          const safeContent = DiscordTheme.truncateCodePoints(DiscordTheme.redactSecrets(content), 1900, '…');
+          body.content = safeContent;
+          body.allowed_mentions = this._allowedMentions(body.content);
+        }
         const data = JSON.stringify(body);
         const req = lib.request(u, {
           method: 'POST',
@@ -131,4 +187,5 @@ class Notifier {
     });
   }
 }
+
 module.exports = Notifier;

@@ -1,5 +1,5 @@
 'use strict';
-// Bảng Telegram "Auto sell spawner": định dạng, trạng thái 🟢/🟡/🔴, đếm giờ chạy, gửi/sửa tin, nhận lệnh, tích hợp BotManager.
+// Bảng Telegram "Auto sell spawner" v2: định dạng, trạng thái theo bảng ký hiệu Symbols, đếm giờ chạy, gửi/sửa tin, nhận lệnh, tích hợp BotManager.
 // Dùng server Telegram GIẢ chạy trên localhost + mineflayer/vec3 giả — không cần mạng, không cần cài thư viện.
 const assert = require('assert');
 const http = require('http');
@@ -18,6 +18,7 @@ const TelegramNotifier = require('../src/core/TelegramNotifier');
 const P = require('../src/core/TelegramPanel');
 const RevenueTracker = require('../src/core/RevenueTracker');
 const BotManager = require('../src/services/BotManager');
+const { sym, setSymbolSet } = require('../src/core/Symbols');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const H = 3600000, M = 60000;
 
@@ -41,7 +42,7 @@ function startMock() {
       if (method === 'getUpdates') {
         const give = state.updates.splice(0);
         if (give.length || !body.timeout) return out({ ok: true, result: give });
-        return setTimeout(() => out({ ok: true, result: state.updates.splice(0) }), 150); // giả lập long polling
+        return setTimeout(() => out({ ok: true, result: state.updates.splice(0) }), 150);
       }
       out({ ok: false, description: 'unknown' });
     });
@@ -50,6 +51,7 @@ function startMock() {
 }
 
 (async () => {
+  setSymbolSet('unicode');
   // ---------- 1) định dạng ----------
   assert.strictEqual(P.fmtMoney(950), '950');
   assert.strictEqual(P.fmtMoney(1250), '1.25K');
@@ -81,19 +83,19 @@ function startMock() {
   // ---------- 2) trạng thái ----------
   const now = 10 * H;
   const base = { botId: 'bot-1', account: 'acc', connState: 'ONLINE', sellOn: true, intervalMs: 5 * M, now, sessionMs: 2 * H, stats: { last: now - 2 * M }, totalUptimeMs: 3 * H };
-  assert.strictEqual(P.computeStatus(base).icon, '🟢');
+  assert.strictEqual(P.computeStatus(base).icon, sym('on'));
   assert.strictEqual(P.computeStatus(base).label, 'ổn định');
-  assert.strictEqual(P.computeStatus({ ...base, connState: 'DISCONNECTED' }).icon, '🔴');
-  assert.strictEqual(P.computeStatus({ ...base, connState: 'RECONNECTING' }).icon, '🟠');
-  assert.strictEqual(P.computeStatus({ ...base, connState: 'SPAWNING' }).icon, '🟡');
-  assert.strictEqual(P.computeStatus({ ...base, disabled: true }).icon, '⚫');
-  assert.strictEqual(P.computeStatus({ ...base, sellOn: false }).icon, '⚪');
-  assert.strictEqual(P.computeStatus({ ...base, sellFailAgoMs: 5 * M }).icon, '🟡');
-  assert.strictEqual(P.computeStatus({ ...base, sellFailAgoMs: 2 * H }).icon, '🟢', 'lỗi cũ hơn 30 phút không còn tính');
-  assert.strictEqual(P.computeStatus({ ...base, stats: { last: now - 30 * M } }).icon, '🟡', 'quá lâu không có vòng bán mới');
-  assert.strictEqual(P.computeStatus({ ...base, stats: { last: now - 30 * M }, sessionMs: 3 * M }).icon, '🟢', 'mới vào server thì chưa kết luận chậm');
-  assert.strictEqual(P.computeStatus({ ...base, stats: null }).icon, '🟡', 'online lâu mà chưa có vòng bán nào');
-  assert.strictEqual(P.computeStatus({ ...base, stats: null, sessionMs: 2 * M }).icon, '🟢');
+  assert.strictEqual(P.computeStatus({ ...base, connState: 'DISCONNECTED' }).icon, sym('fail'));
+  assert.strictEqual(P.computeStatus({ ...base, connState: 'RECONNECTING' }).icon, sym('retry'));
+  assert.strictEqual(P.computeStatus({ ...base, connState: 'SPAWNING' }).icon, sym('busy'));
+  assert.strictEqual(P.computeStatus({ ...base, disabled: true }).icon, sym('off'));
+  assert.strictEqual(P.computeStatus({ ...base, sellOn: false }).icon, sym('off'));
+  assert.strictEqual(P.computeStatus({ ...base, sellFailAgoMs: 5 * M }).icon, sym('warn'));
+  assert.strictEqual(P.computeStatus({ ...base, sellFailAgoMs: 2 * H }).icon, sym('on'), 'lỗi cũ hơn 30 phút không còn tính');
+  assert.strictEqual(P.computeStatus({ ...base, stats: { last: now - 30 * M } }).icon, sym('warn'), 'quá lâu không có vòng bán mới');
+  assert.strictEqual(P.computeStatus({ ...base, stats: { last: now - 30 * M }, sessionMs: 3 * M }).icon, sym('on'), 'mới vào server thì chưa kết luận chậm');
+  assert.strictEqual(P.computeStatus({ ...base, stats: null }).icon, sym('warn'), 'online lâu mà chưa có vòng bán nào');
+  assert.strictEqual(P.computeStatus({ ...base, stats: null, sessionMs: 2 * M }).icon, sym('on'));
 
   // ---------- 3) nội dung bảng ----------
   const stats = {
@@ -104,39 +106,38 @@ function startMock() {
   const panel = P.buildPanel({ ...base, stats, clock: '14:05' });
   const lines = panel.text.split('\n');
   assert.ok(panel.text.includes('Auto sell spawner'));
-  assert.ok(panel.text.includes('Tên Bot: <b>bot-1</b>'));
-  assert.ok(panel.text.includes('Tên Acc: <b>acc</b>'));
-  assert.ok(panel.text.includes('Tình Trạng : <b>ổn định</b> 🟢'));
-  assert.ok(panel.text.includes('Tổng Thu Nhập: <b>1.25B</b>'));
-  assert.ok(panel.text.includes('<b>31.2M</b>/day'));
-  assert.ok(panel.text.includes('1h/<b>1.3M</b>'));
-  assert.ok(panel.text.includes('Thu nhập vừa qua: <b>2.01M</b> <i>(2m 00s trước)</i>'));
-  assert.ok(panel.text.includes('Tổng Thời Gian Hoạt Động: <b>3h 00m 00s</b>'));
-  assert.ok(panel.text.includes('Hôm nay <b>12.3M</b>'));
-  assert.strictEqual(lines.filter(l => /^─+$/.test(l)).length, 2, 'đúng 2 đường kẻ như mẫu');
-  assert.strictEqual(panel.keyboard[0][0].callback_data, 'r:bot-1');
+  assert.ok(panel.text.includes('Bot: <b>bot-1</b>'));
+  assert.ok(panel.text.includes('Acc: <b>acc</b>'));
+  assert.ok(panel.text.includes(`${sym('on')} Tình trạng: <b>ổn định</b>`));
+  assert.ok(panel.text.includes('Tổng <b>1.25B</b>'));
+  assert.ok(panel.text.includes('<b>31.2M</b>/ngày'));
+  assert.ok(panel.text.includes('1h <b>1.3M</b>'));
+  assert.ok(panel.text.includes('+<b>2.01M</b> <i>(2m 00s trước)</i>'));
+  assert.ok(panel.text.includes('Uptime <b>3h 00m 00s</b>'));
+  assert.strictEqual(lines.filter(l => /^─+$/.test(l)).length, 1, 'đúng 1 đường kẻ ngăn cách');
+  assert.ok(panel.keyboard[0][0].callback_data.endsWith(':r'));
   // chưa có doanh thu: không vỡ, có placeholder
   const empty = P.buildPanel({ ...base, stats: null, clock: '14:05' });
-  assert.ok(empty.text.includes('Tổng Thu Nhập: <b>0</b>'));
+  assert.ok(empty.text.includes('Tổng <b>0</b>'));
   assert.ok(empty.text.includes('chờ vòng bán đầu tiên'));
   // tên có ký tự HTML phải được escape (không làm Telegram từ chối tin)
   assert.ok(P.buildPanel({ ...base, botId: 'a<b>&c', account: '<x>' }).text.includes('a&lt;b&gt;&amp;c'));
-  // id quá dài -> nút làm mới tất cả
-  assert.strictEqual(P.buildPanel({ ...base, botId: 'x'.repeat(80) }).keyboard[0][0].callback_data, 'r:*');
+  // id quá dài -> callback_data vẫn <= 64 bytes nhờ shortId 5 ký tự
+  assert.ok(Buffer.byteLength(P.buildPanel({ ...base, botId: 'x'.repeat(80) }).keyboard[0][0].callback_data) <= 64);
   // /status
   const list = P.buildStatusList([{ ...base, stats }, { ...base, botId: 'bot-2', connState: 'DISCONNECTED', stats: null }], '14:05');
-  assert.ok(list.includes('🟢 <b>bot-1</b>') && list.includes('🔴 <b>bot-2</b>') && list.includes('Σ cả dàn'));
+  assert.ok(list.includes(`${sym('on')} <b>bot-1</b>`) && list.includes(`${sym('fail')} <b>bot-2</b>`) && list.includes('Tổng cả dàn'));
 
   // ---------- 4) đếm giờ chạy + vòng bán gần nhất ----------
   const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tg-')), 'revenue.json');
   let rt = new RevenueTracker(f);
   rt.markOnline('b', 1000);
   assert.deepStrictEqual(rt.uptime('b', 1000 + 2 * H), { totalMs: 2 * H, sessionMs: 2 * H, online: true });
-  rt.markOnline('b', 1000 + H); // gọi lại khi đang online: không reset phiên
+  rt.markOnline('b', 1000 + H);
   assert.strictEqual(rt.uptime('b', 1000 + 2 * H).sessionMs, 2 * H);
   rt.markOffline('b', 1000 + 2 * H);
   assert.deepStrictEqual(rt.uptime('b', 1000 + 5 * H), { totalMs: 2 * H, sessionMs: 0, online: false });
-  rt.markOnline('b', 1000 + 6 * H); // phiên 2 cộng dồn
+  rt.markOnline('b', 1000 + 6 * H);
   assert.strictEqual(rt.uptime('b', 1000 + 7 * H).totalMs, 3 * H);
   assert.strictEqual(rt.stats('b'), null, 'chỉ có giờ chạy, chưa có doanh thu -> stats null');
   rt.record('b', 500000, { now: 5e9, intervalMs: 300000, hits: 3 });
@@ -144,11 +145,9 @@ function startMock() {
   const st = rt.stats('b', 5e9 + 6 * M);
   assert.strictEqual(st.lastAmount, 700000);
   assert.strictEqual(st.lastAt, 5e9 + 5 * M);
-  // reset doanh thu giữ bộ đếm giờ chạy
   rt.reset('b');
   assert.strictEqual(rt.stats('b'), null);
   assert.ok(rt.uptime('b', 1000 + 7 * H).totalMs >= 3 * H - 1);
-  // tắt đột ngột: lần chạy sau chốt phiên ở nhịp tim cuối
   rt.touch('b', 1000 + 8 * H);
   rt.flush();
   rt = new RevenueTracker(f);
@@ -225,12 +224,12 @@ function startMock() {
   const got = [];
   const tg2 = new TelegramNotifier({ apiBase: mock.base, token: '123456789:' + 'B'.repeat(35), chatId: '555' });
   mock.state.updates.push(
-    { update_id: 10, message: { chat: { id: 999 }, text: '/status' } },                 // người lạ: bị bỏ qua
-    { update_id: 11, message: { chat: { id: 555 }, text: '/status@anter_bot' } },        // đúng chat, có đuôi @bot
+    { update_id: 10, message: { chat: { id: 999 }, text: '/status' } },
+    { update_id: 11, message: { chat: { id: 555 }, text: '/status@anter_bot' } },
     { update_id: 12, message: { chat: { id: 555 }, text: '/panel bot-1' } },
-    { update_id: 13, message: { chat: { id: 555 }, text: 'chào' } },                     // không phải lệnh
+    { update_id: 13, message: { chat: { id: 555 }, text: 'chào' } },
     { update_id: 14, callback_query: { id: 'cb1', data: 'r:bot-1', message: { chat: { id: 555 }, message_id: 42 } } },
-    { update_id: 15, callback_query: { id: 'cb2', data: 'r:bot-1', message: { chat: { id: 999 }, message_id: 43 } } }, // nút của chat lạ
+    { update_id: 15, callback_query: { id: 'cb2', data: 'r:bot-1', message: { chat: { id: 999 }, message_id: 43 } } },
   );
   tg2.startPolling(async (ev) => { got.push(ev); if (ev.type === 'button') await ev.answer('ok'); });
   await sleep(400);
@@ -261,10 +260,10 @@ function startMock() {
   assert.strictEqual(await mgr.sendTelegramPanel(b1), true);
   assert.strictEqual(mock.calls.at(-1).method, 'sendMessage', 'lần đầu: gửi bảng mới');
   const txt = mock.calls.at(-1).body.text;
-  assert.ok(txt.includes('Tên Bot: <b>bot-1</b>') && txt.includes('Tên Acc: <b>acc_bot-1</b>') && txt.includes('ổn định</b> 🟢'));
-  assert.ok(txt.includes('Tổng Thu Nhập: <b>6.5M</b>'));
-  assert.ok(txt.includes('Thu nhập vừa qua: <b>2.5M</b>'));
-  assert.ok(/Tổng Thời Gian Hoạt Động: <b>2h 0\dm \d\ds<\/b>/.test(txt), txt);
+  assert.ok(txt.includes('Bot: <b>bot-1</b>') && txt.includes('Acc: <b>acc_bot-1</b>') && txt.includes(`${sym('on')} Tình trạng: <b>ổn định</b>`));
+  assert.ok(txt.includes('Tổng <b>6.5M</b>'));
+  assert.ok(txt.includes('+<b>2.5M</b>'));
+  assert.ok(/Uptime <b>2h 0\dm \d\ds<\/b>/.test(txt), txt);
   const mid = mgr._tgMsgs['bot-1'];
   assert.ok(mid, 'nhớ message_id của bảng');
   assert.strictEqual(mgr.persistence.get('telegramMessages')['bot-1'], mid, 'lưu vào config để lần chạy sau còn sửa đúng bảng');
@@ -299,7 +298,7 @@ function startMock() {
   // lệnh /status, nút làm mới
   mock.calls.length = 0;
   await mgr._onTelegramEvent({ type: 'command', cmd: 'status', arg: '', reply: (t) => tg.send(t) });
-  await sleep(100); // reply là fire-and-forget (không chặn bot)
+  await sleep(100);
   assert.ok(mock.calls.at(-1).body.text.includes('Trạng thái 2 bot'));
   mock.calls.length = 0;
   let answered = null;
@@ -314,7 +313,6 @@ function startMock() {
   await tick(); await tick(); await tick();
   assert.deepStrictEqual(mock.calls.map(x => x.method), ['sendMessage', 'sendMessage', 'editMessageText']);
   assert.ok(mock.calls[0].body.text.includes('bot-1') && mock.calls[1].body.text.includes('bot-3') && mock.calls[2].body.text.includes('bot-1'), 'xoay vòng bot-1, bot-3, bot-1');
-  // mỗi lần sửa có giây chạy (bảng "sống")
   assert.ok(/\d\d:\d\d:\d\d/.test(mock.calls[2].body.text), 'dòng cập nhật có giây');
   // bot đang bận (lần gửi trước chưa xong) thì nhịp này bỏ qua nó
   mgr._tgBusy.add('bot-1'); mock.calls.length = 0;
@@ -330,10 +328,10 @@ function startMock() {
   for (const b of [b1, b3]) { b.isOnline = false; b.state.connState = 'DISCONNECTED'; }
   mock.calls.length = 0;
   await tick(); await tick();
-  assert.strictEqual(mock.calls.length, 2, 'mỗi bot offline sửa đúng 1 lần để hiện 🔴');
-  assert.ok(mock.calls.every(x => x.body.text.includes('🔴')));
+  assert.strictEqual(mock.calls.length, 2, 'mỗi bot offline sửa đúng 1 lần để hiện ✗');
+  assert.ok(mock.calls.every(x => x.body.text.includes(`${sym('fail')} Tình trạng: <b>mất kết nối</b>`)));
   await tick(); await tick();
-  assert.strictEqual(mock.calls.length, 2, 'đã hiện 🔴 rồi thì không sửa nữa');
+  assert.strictEqual(mock.calls.length, 2, 'đã hiện mất kết nối rồi thì không sửa nữa');
   for (const b of [b1, b3]) { b.isOnline = true; b.state.connState = 'ONLINE'; }
   // mode new: không chạy nhịp (tránh spam tin mới)
   mgr._config.telegramMode = 'new'; mock.calls.length = 0;

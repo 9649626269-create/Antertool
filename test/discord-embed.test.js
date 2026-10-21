@@ -1,6 +1,11 @@
 'use strict';
-// Embed Discord theo mẫu: "Kiểm Tra Kết Nối Webhook" (xanh) + "Báo Cáo Tổng Kết ..." (cam) với field ngang,
-// chân "Antertool • giờ". Dùng webhook GIẢ chạy trên localhost + mineflayer/vec3 giả — không cần mạng.
+// Kiểm tra toàn diện hệ thống thông báo Discord Webhook mới (DiscordTheme + Notifier + BotSession + BotManager):
+// - Bảng chủ đề DiscordTheme phủ kín mọi eventKey (Notifier.EVENT_LABELS + NotificationCenter.EVENT_CATALOG)
+// - Bố cục chuẩn: tiêu đề Title Case kèm emoji, author (tên bot + icon mc-heads), thumbnail, inline fields, footer "Antertool", ISO timestamp
+// - Định dạng phong phú: <t:unix:R>, blockquote lý do kick, code block lệnh/log, thanh tiến độ (▰▰▰▱▱ 60%), tiền tệ ($41.35K)
+// - Giới hạn ký tự Discord (256/4096/1024/25/6000/1900), cắt an toàn theo code point (không vỡ surrogate pair), che bí mật
+// - Giữ nguyên 100% logic allowed_mentions, mentionEvents, và đầu ra Telegram (telegramAlert byte-identical)
+// - Kiểm tra lệnh `webhook preview` (Notifier.preview)
 const assert = require('assert');
 const http = require('http');
 const fs = require('fs');
@@ -14,67 +19,136 @@ Module._load = function (request, ...rest) {
   if (request === 'vec3') return { Vec3: class { } };
   return origLoad.call(this, request, ...rest);
 };
+
+const DiscordTheme = require('../src/core/DiscordTheme');
 const Notifier = require('../src/core/Notifier');
+const { EVENT_CATALOG } = require('../src/core/NotificationCenter');
 const RevenueTracker = require('../src/core/RevenueTracker');
 const BotSession = require('../src/core/BotSession');
 const BotManager = require('../src/services/BotManager');
 const { CS } = require('../src/core/constants');
 
-// Giới hạn embed của Discord
+// Kiểm tra nghiêm ngặt mọi giới hạn embed của Discord + không có lone surrogate
 function checkLimits(e) {
   let total = 0;
-  const lim = (t, n, what) => { const l = [...String(t || '')].length; assert.ok(l <= n, `${what} dài ${l} > ${n}`); total += l; };
-  lim(e.title, 256, 'title'); lim(e.description, 4096, 'description'); lim(e.footer?.text, 2048, 'footer');
+  const checkNoLoneSurrogates = (s, what) => {
+    const str = String(s || '');
+    for (let i = 0; i < str.length; i++) {
+      const code = str.charCodeAt(i);
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        const next = i + 1 < str.length ? str.charCodeAt(i + 1) : 0;
+        assert.ok(next >= 0xDC00 && next <= 0xDFFF, `${what} chứa high surrogate lẻ tại vị trí ${i}`);
+        i++;
+      } else if (code >= 0xDC00 && code <= 0xDFFF) {
+        assert.fail(`${what} chứa low surrogate lẻ tại vị trí ${i}`);
+      }
+    }
+  };
+  const lim = (t, n, what) => {
+    checkNoLoneSurrogates(t, what);
+    const l = [...String(t || '')].length;
+    assert.ok(l <= n, `${what} dài ${l} > ${n}`);
+    total += l;
+  };
+  lim(e.title, 256, 'title');
+  lim(e.description, 4096, 'description');
+  lim(e.author?.name, 256, 'author.name');
+  lim(e.footer?.text, 2048, 'footer');
+  assert.ok(e.author && e.author.name, 'mọi embed phải có author.name');
+  assert.ok(e.footer && e.footer.text, 'mọi embed phải có footer.text');
   assert.ok((e.fields || []).length <= 25, 'tối đa 25 field');
-  for (const f of e.fields || []) { assert.ok(f.name && f.value, 'field không được rỗng'); lim(f.name, 256, 'field.name'); lim(f.value, 1024, 'field.value'); }
+  for (const f of e.fields || []) {
+    assert.ok(f.name && f.value, 'field không được rỗng');
+    lim(f.name, 256, 'field.name');
+    lim(f.value, 1024, 'field.value');
+  }
   assert.ok(total <= 6000, `embed tổng ${total} > 6000`);
-  assert.ok(Number.isInteger(e.color) && e.color >= 0 && e.color <= 0xffffff);
+  assert.ok(Number.isInteger(e.color) && e.color >= 0 && e.color <= 0xffffff, 'color phải là số nguyên 24-bit');
   assert.ok(!Number.isNaN(Date.parse(e.timestamp)), 'timestamp ISO hợp lệ');
 }
+
 const F = (e, name) => (e.fields.find(f => f.name === name) || {}).value;
 
 function startHook() {
   const got = [];
   const server = http.createServer((req, res) => {
-    let raw = ''; req.on('data', c => raw += c);
-    req.on('end', () => { got.push(JSON.parse(raw)); res.statusCode = 204; res.end(); });
+    let raw = '';
+    req.on('data', c => raw += c);
+    req.on('end', () => {
+      got.push(JSON.parse(raw));
+      res.statusCode = 204;
+      res.end();
+    });
   });
-  return new Promise(r => server.listen(0, '127.0.0.1', () => r({ server, got, url: `http://127.0.0.1:${server.address().port}/api/webhooks/1/x` })));
+  return new Promise(r => server.listen(0, '127.0.0.1', () => r({
+    server,
+    got,
+    url: `http://127.0.0.1:${server.address().port}/api/webhooks/1/x`,
+  })));
 }
 
 (async () => {
-  // 1) định dạng tiền / giờ
+  // 1) Định dạng tiền / giờ / thanh tiến độ / timestamp / blockquote / codeBlock
   const R = RevenueTracker;
   assert.strictEqual(R.formatMoneyDollar(41350), '$41.35K');
   assert.strictEqual(R.formatMoneyDollar(4450000), '$4.45M');
   assert.strictEqual(R.formatMoneyDollar(950), '$950');
   assert.strictEqual(R.formatMoneyDollar(0), '$0');
   assert.strictEqual(R.formatMoneyDollar(2.5e9), '$2.50B');
+  assert.strictEqual(DiscordTheme.formatMoney(41350), '$41.35K');
   assert.strictEqual(R.formatClock(33000), '00:00:33');
   assert.strictEqual(R.formatClock(3725000), '01:02:05');
   assert.strictEqual(R.formatClock(100 * 3600000), '100:00:00');
   assert.strictEqual(R.formatClock(-5), '00:00:00');
 
-  // 2) test webhook: đúng như mẫu
+  assert.strictEqual(DiscordTheme.progressBar(3, 5), '▰▰▰▱▱ 60%');
+  assert.strictEqual(DiscordTheme.progressBar(5, 5), '▰▰▰▰▰ 100%');
+  assert.strictEqual(DiscordTheme.progressBar(0, 5), '▱▱▱▱▱ 0%');
+  assert.strictEqual(DiscordTheme.discordTimestamp(1700000000000, 'R'), '<t:1700000000:R>');
+  assert.strictEqual(DiscordTheme.blockquote('Lỗi kết nối\nDòng 2'), '> Lỗi kết nối\n> Dòng 2');
+  assert.strictEqual(DiscordTheme.codeBlock('/home treolong'), '```\n/home treolong\n```');
+
+  // 2) Kiểm tra mọi eventKey trong Notifier.EVENT_LABELS và NotificationCenter.EVENT_CATALOG đều có theme hợp lệ
+  const allEventKeys = new Set([
+    ...Object.keys(Notifier.EVENT_LABELS),
+    ...Object.keys(EVENT_CATALOG),
+    'test', 'testMention', 'revenueMacro', 'revenueSummary', 'scheduleOut', 'scheduleIn',
+  ]);
+  for (const key of allEventKeys) {
+    const entry = DiscordTheme.EVENT_THEMES[key];
+    assert.ok(entry, `Thiếu cấu hình DiscordTheme cho sự kiện "${key}"`);
+    assert.ok(entry.emoji && entry.emoji.length > 0, `Sự kiện "${key}" phải có emoji`);
+    assert.ok(['success', 'info', 'warning', 'critical', 'report'].includes(entry.severity), `Severity không hợp lệ cho "${key}"`);
+    assert.strictEqual(entry.color, DiscordTheme.SEVERITY_COLORS[entry.severity], `Màu của "${key}" phải khớp với severity "${entry.severity}"`);
+  }
+  assert.strictEqual(Notifier.COLOR.ok, 0x6ef16f, 'Giữ nguyên màu xanh chuẩn 0x6ef16f');
+  assert.strictEqual(Notifier.COLOR.report, 0xcf8338, 'Giữ nguyên màu cam báo cáo chuẩn 0xcf8338');
+
+  // 3) Kiểm tra kết nối webhook (test)
   const hook = await startHook();
   const n = new Notifier({ webhookUrl: hook.url });
   assert.strictEqual(await n.test(), true);
   let e = hook.got.at(-1).embeds[0];
-  assert.strictEqual(e.title, 'Kiểm Tra Kết Nối Webhook');
+  assert.strictEqual(e.title, '✅ Kiểm Tra Kết Nối Webhook');
   assert.strictEqual(e.description, 'Antertool đã kết nối thành công tới Discord!');
   assert.strictEqual(F(e, 'Trạng thái'), 'Hoạt động bình thường');
   assert.ok(F(e, 'Nguồn').includes('Antertool'));
+  assert.ok(F(e, 'Thời gian').startsWith('<t:'));
   assert.ok(e.fields.every(f => f.inline));
+  assert.strictEqual(e.author.name, 'Antertool');
   assert.strictEqual(e.footer.text, 'Antertool');
   assert.strictEqual(e.color, Notifier.COLOR.ok);
   checkLimits(e);
 
-  // embed tự đặt footer/timestamp thì không bị ghi đè; embed trần được bổ sung
-  const fin = Notifier.finish({ title: 't', footer: { text: 'X' }, timestamp: '2026-01-01T00:00:00.000Z', color: 1 });
-  assert.strictEqual(fin.footer.text, 'X'); assert.strictEqual(fin.timestamp, '2026-01-01T00:00:00.000Z');
+  // embed tự đặt footer/timestamp/author thì không bị ghi đè; embed trần được bổ sung đầy đủ
+  const fin = Notifier.finish({ title: 't', author: { name: 'CustomBot' }, footer: { text: 'X' }, timestamp: '2026-01-01T00:00:00.000Z', color: 1 });
+  assert.strictEqual(fin.footer.text, 'X');
+  assert.strictEqual(fin.author.name, 'CustomBot');
+  assert.strictEqual(fin.timestamp, '2026-01-01T00:00:00.000Z');
   assert.strictEqual(Notifier.finish({ title: 't' }).footer.text, 'Antertool');
+  assert.strictEqual(Notifier.finish({ title: 't' }).author.name, 'Antertool');
 
-  // 3) báo cáo doanh thu của 1 bot
+  // 4) Báo cáo doanh thu của 1 bot (spawn & macro)
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dce-'));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ bots: [] }));
   const mgr = new BotManager({ configPath: path.join(dir, 'config.json') });
@@ -90,7 +164,7 @@ function startHook() {
   mgr.revenue.record('bot-1', 3350, { now: t0 - 5 * M, intervalMs: 5 * M, hits: 5 });
 
   e = bot._buildRevenueEmbed({ sum: 3350, done: 4, total: 5, hits: 4 });
-  assert.strictEqual(e.title, 'Báo Cáo Tổng Kết Auto-Sell Spawn');
+  assert.strictEqual(e.title, '💰 Báo Cáo Tổng Kết Auto-Sell Spawn');
   assert.deepStrictEqual(e.fields.map(f => f.name), ['Người chơi', 'Server', 'Thời gian treo', 'Tổng thu nhập', 'Tốc độ trung bình', 'Số lượt bán', 'Trạng thái']);
   assert.deepStrictEqual(e.fields.map(f => !!f.inline), [true, true, true, true, true, true, false], '3 field/hàng rồi tới Trạng thái cả hàng');
   assert.strictEqual(F(e, 'Người chơi'), 'Steve_01 (bot-1)');
@@ -101,18 +175,23 @@ function startHook() {
   assert.strictEqual(F(e, 'Số lượt bán'), '2');
   const st = F(e, 'Trạng thái');
   assert.ok(st.startsWith('Đang hoạt động'), st);
-  assert.ok(st.includes('+$3.35K') && st.includes('4/5 lồng') && st.includes('1 lồng lỗi'), st);
+  assert.ok(st.includes('+$3.35K') && st.includes('4/5 lồng') && st.includes('▰▰▰▰▱ 80%') && st.includes('1 lồng lỗi'), st);
   assert.strictEqual(e.color, Notifier.COLOR.report);
+  assert.strictEqual(e.author.name, 'Steve_01 (bot-1)');
+  assert.strictEqual(e.author.icon_url, 'https://mc-heads.net/avatar/Steve_01/100');
   assert.strictEqual(e.thumbnail.url, 'https://mc-heads.net/avatar/Steve_01/100');
   assert.strictEqual(e.footer.text, 'Antertool');
   checkLimits(e);
 
-  // chưa có dữ liệu / offline / tên lạ: không vỡ
+  // chưa có dữ liệu / offline / tên lạ: không vỡ, không gắn ảnh đầu
   const bot2 = new BotSession({ id: 'b2', host: 'h.example', port: 25570, username: 'tên có dấu', autoSellSpawnRevenue: false }, 'teal', null);
   e = bot2._buildRevenueEmbed(null);
-  assert.strictEqual(F(e, 'Tổng thu nhập'), '$0'); assert.strictEqual(F(e, 'Tốc độ trung bình'), '—');
-  assert.strictEqual(F(e, 'Server'), 'h.example:25570'); assert.ok(F(e, 'Trạng thái').startsWith('Ngoại tuyến'));
+  assert.strictEqual(F(e, 'Tổng thu nhập'), '$0');
+  assert.strictEqual(F(e, 'Tốc độ trung bình'), '—');
+  assert.strictEqual(F(e, 'Server'), 'h.example:25570');
+  assert.ok(F(e, 'Trạng thái').startsWith('Ngoại tuyến'));
   assert.strictEqual(e.thumbnail, undefined, 'tên không hợp lệ thì không gắn ảnh đầu');
+  assert.strictEqual(e.author.icon_url, undefined, 'tên không hợp lệ thì không gắn icon_url');
   checkLimits(e);
 
   // gửi thật qua Notifier: payload tới webhook đúng cấu trúc
@@ -120,61 +199,150 @@ function startHook() {
   assert.strictEqual(bot._sendRevenueReport({ sum: 3350, done: 5, total: 5, hits: 5 }), true);
   await mgr.notifier._queue;
   const sent = hook.got.at(-1).embeds[0];
-  assert.strictEqual(sent.title, 'Báo Cáo Tổng Kết Auto-Sell Spawn'); checkLimits(sent);
+  assert.strictEqual(sent.title, '💰 Báo Cáo Tổng Kết Auto-Sell Spawn');
+  checkLimits(sent);
 
-  // macro
+  // macro revenue report
   bot._macroRevPending = { amount: 0, cycles: 0 };
   mgr.revenue.record('bot-1#macro', 1200000, { now: t0, intervalMs: 5 * M, hits: 1 });
   e = bot._buildRevenueEmbed({ sum: 1200000, hits: 1, macro: 'sell', viaBalance: false }, 'macro');
-  assert.strictEqual(e.title, 'Báo Cáo Tổng Kết Auto-Sell (Macro)');
-  assert.strictEqual(F(e, 'Tổng thu nhập'), '$1.20M'); assert.ok(F(e, 'Trạng thái').includes('macro "sell"'));
+  assert.strictEqual(e.title, '📈 Báo Cáo Tổng Kết Auto-Sell (Macro)');
+  assert.strictEqual(F(e, 'Tổng thu nhập'), '$1.20M');
+  assert.ok(F(e, 'Trạng thái').includes('macro "sell"'));
   checkLimits(e);
 
-  // 4) cảnh báo (kick, ...): bỏ emoji + id khỏi tiêu đề, có người chơi/server, màu giữ nguyên
-  e = bot._alertEmbed('🟠 bot-1: bị kick', 'lý do\n⏰ 10:00:00 PM', 0xf97316);
-  assert.strictEqual(e.title, 'Bị kick'); assert.strictEqual(e.color, 0xf97316);
-  assert.strictEqual(F(e, 'Người chơi'), 'Steve_01 (bot-1)'); assert.strictEqual(F(e, 'Server'), 'donutsmp.net');
-  assert.strictEqual(e.footer.text, 'Antertool'); checkLimits(e);
-  assert.strictEqual(bot._alertEmbed('⚠️ bot-1: đã bật spawnerprotect + autosell_spawn', 'x', 1).title, 'Đã bật spawnerprotect + autosell_spawn');
-  assert.strictEqual(bot._alertEmbed('Cảnh báo lạ không có id', 'x', 1).title, 'Cảnh báo lạ không có id');
-  // _notify đi tới webhook với headline (tag) giữ nguyên
+  // 5) Cảnh báo & sự kiện bot: tiêu đề Title Case + emoji, blockquote, <t:unix:R>, progress bar, code block
+  e = bot._alertEmbed('🟠 bot-1: bị kick', 'Bạn đã bị kick khỏi server\n⏰ 10:00:00 PM\n🔄 Reconnecting in 15s... (lần thứ 2/5)', 0xf97316, 'disconnect');
+  assert.strictEqual(e.title, '🔌 Bị Kick');
+  assert.strictEqual(e.color, DiscordTheme.COLOR.critical);
+  assert.strictEqual(F(e, 'Người chơi'), 'Steve_01 (bot-1)');
+  assert.strictEqual(F(e, 'Server'), 'donutsmp.net');
+  assert.ok(F(e, 'Thời gian treo'), 'có field Thời gian treo');
+  assert.ok(F(e, 'Lần thử').includes('▰▰▱▱▱ 40%'));
+  assert.ok(F(e, 'Kết nối lại').startsWith('<t:'));
+  assert.ok(e.description.includes('> Bạn đã bị kick khỏi server'), 'lý do kick nằm trong blockquote');
+  assert.ok(e.description.includes('<t:'), 'có Discord relative timestamp');
+  assert.strictEqual(e.author.name, 'Steve_01 (bot-1)');
+  assert.strictEqual(e.footer.text, 'Antertool');
+  checkLimits(e);
+
+  assert.strictEqual(bot._alertEmbed('⚠️ bot-1: đã bật spawnerprotect + autosell_spawn', 'x', 1).title, '✅ Đã Bật spawnerprotect + autosell_spawn');
+  assert.strictEqual(bot._alertEmbed('Cảnh báo lạ không có id', 'x', 1).title, 'ℹ️ Cảnh Báo Lạ Không Có Id');
+
+  // Kiểm tra _notify giữ nguyên 100% đầu ra Telegram (byte-identical) đồng thời gửi embed mới lên Discord
+  const tgCaptured = [];
+  const origTgAlert = mgr.telegramAlert.bind(mgr);
+  mgr.telegramAlert = (b, key, title, desc, hl) => {
+    tgCaptured.push({ id: b.cfg.id, key, title, desc, hl });
+    return origTgAlert(b, key, title, desc, hl);
+  };
+
   hook.got.length = 0;
   mgr.notifier.setMention('123456789012345678');
-  bot._notify('disconnect', '🟠 bot-1: bị kick', 'x', 0xf97316, '❌ BOT BỊ KICK');
+  bot._notify('disconnect', '🟠 bot-1: bị kick', 'Mất kết nối máy chủ\n⏰ 10:00:00 PM', 0xf97316, '❌ BOT BỊ KICK');
   await mgr.notifier._queue;
   const k = hook.got.at(-1);
   assert.strictEqual(k.content, '❌ BOT BỊ KICK <@123456789012345678>');
-  assert.strictEqual(k.embeds[0].title, 'Bị kick');
+  assert.deepStrictEqual(k.allowed_mentions, { parse: [], users: ['123456789012345678'], roles: [] });
+  assert.strictEqual(k.embeds[0].title, '🔌 Bị Kick');
+  assert.strictEqual(tgCaptured.at(-1).title, '🟠 bot-1: bị kick', 'Telegram nhận nguyên vẹn chuỗi title gốc');
+  assert.strictEqual(tgCaptured.at(-1).desc, 'Mất kết nối máy chủ\n⏰ 10:00:00 PM', 'Telegram nhận nguyên vẹn chuỗi description gốc');
+  assert.strictEqual(tgCaptured.at(-1).hl, '❌ BOT BỊ KICK', 'Telegram nhận nguyên vẹn chuỗi headline gốc');
 
-  // 5) tổng hợp cả dàn
+  // Kiểm tra tất cả các loại sự kiện khác qua _alertEmbed
+  const sampleAlerts = [
+    ['reconnectFailed', '🔴 bot-1: hết lượt reconnect', 'Đã thử 5 lần không thành công (lý do gần nhất: ECONNREFUSED). Sẽ tự thử lại sau 15 phút.', 0xef4444],
+    ['reconnectRecovered', '🟢 bot-1: đã kết nối lại ổn định', 'Sau 2 lần thử.', 0x22c55e],
+    ['moneyGoal', '🎯 bot-1: đã đủ tiền', 'Mục tiêu 50,000,000, hiện có 52,000,000. Tự chạy macro "chuyen_tien".', 0xfbbf24],
+    ['autoSell', '🎒 bot-1: túi đồ đầy', '33/36 ô (92%) — tự chạy macro "autosell".', 0x38bdf8],
+    ['spawnerThreat', '⚠️ bot-1: người lạ gần lồng', 'Người lạ: Alex_VN (4.2m)\nĐang bảo vệ 5 lồng.', 0xf59e0b],
+    ['protectResult', '✅ bot-1: xử lý bảo vệ lồng', 'Người lạ: Alex_VN\nĐã đập 5/5 lồng.', 0x22c55e],
+    ['featuresReady', '✅ bot-1: đã bật spawnerprotect + autosell_spawn', '✅ spawnerprotect: 5 lồng\n⏱️ 4s sau khi vào menu', 0x22c55e],
+    ['homeReturn', '🏠 bot-1: lệch khỏi vị trí treo lồng — gõ /home treolong', 'Bot không còn ở gần lồng.\nĐã tự gõ /home treolong để quay về.', 0x38bdf8],
+    ['sellFailed', '🚨 bot-1: autosell_spawn thất bại sau 10 lần gõ /home treolong', 'Đã gõ /home treolong 10 lần, sau mỗi lần đều bán lại nhưng vẫn không xong (3/5 lồng).', 0xef4444],
+    ['autoOrder', '📦 bot-1: AutoOrder', 'blaze_rod: 12 stack · 5.4M · 01:12:00 · giao hàng', 0x55ffaa],
+  ];
+  for (const [evKey, rawT, rawD, rawC] of sampleAlerts) {
+    const emb = bot._alertEmbed(rawT, rawD, rawC, evKey);
+    checkLimits(emb);
+    assert.strictEqual(emb.color, DiscordTheme.getTheme(evKey).color, `Màu của ${evKey} phải chuẩn theo theme`);
+    assert.ok(emb.title.startsWith(DiscordTheme.getTheme(evKey).emoji), `Tiêu đề của ${evKey} phải bắt đầu bằng emoji theme`);
+  }
+
+  // 6) Báo cáo tổng hợp cả dàn (buildRevenueSummaryEmbed)
   const bot3 = new BotSession({ id: 'bot-2', host: 'donutsmp.net', port: 25565, username: 'Alex_02', autoSellSpawnRevenue: false }, 'teal', null);
-  bot3._manager = mgr; bot3.state.connState = CS.ONLINE; mgr.bots.push(bot3);
+  bot3._manager = mgr;
+  bot3.state.connState = CS.ONLINE;
+  mgr.bots.push(bot3);
   mgr.revenue.markOnline('bot-2', t0 - 3600000);
   mgr.revenue.record('bot-2', 5e6, { now: t0 - 10 * M, intervalMs: 5 * M, hits: 3 });
   mgr.revenue.record('bot-2', 4e6, { now: t0 - 5 * M, intervalMs: 5 * M, hits: 3 });
   e = mgr.buildRevenueSummaryEmbed(t0);
-  assert.strictEqual(e.title, 'Báo Cáo Tổng Kết Doanh Thu (2 Bot)');
+  assert.strictEqual(e.title, '📊 Báo Cáo Tổng Kết Doanh Thu (2 Bot)');
   assert.deepStrictEqual(e.fields.map(f => f.name), ['Số bot', 'Server', 'Thời gian treo', 'Tổng thu nhập', 'Tốc độ trung bình', 'Số lượt bán', 'Trạng thái']);
   assert.strictEqual(F(e, 'Server'), 'donutsmp.net');
   assert.ok(F(e, 'Tổng thu nhập').startsWith('$') && F(e, 'Tổng thu nhập').endsWith('M'), F(e, 'Tổng thu nhập'));
   assert.strictEqual(F(e, 'Trạng thái').split('\n')[0], '2/2 bot đang hoạt động');
-  assert.ok(e.description.startsWith('```'));
-  checkLimits(Notifier.finish(e));
+  assert.ok(F(e, 'Trạng thái').includes('▰▰▰▰▰ 100%'));
+  assert.ok(e.description.startsWith('```') && e.description.includes('$'));
+  checkLimits(e);
 
-  // 6) lịch nghỉ
+  // 7) Lịch nghỉ (_notifyRest & _doScheduledIn)
   hook.got.length = 0;
   mgr._notifyRest({ outTime: '02:00', inTime: '08:00' }, 2);
   mgr._doScheduledIn({ inTime: '08:00' });
   await mgr.notifier._queue;
   const [rest, back] = hook.got.map(x => x.embeds[0]);
-  assert.strictEqual(rest.title, 'Bắt Đầu Giờ Nghỉ'); assert.strictEqual(F(rest, 'Số bot'), '2'); checkLimits(rest);
-  assert.strictEqual(back.title, 'Hết Giờ Nghỉ'); checkLimits(back);
+  assert.strictEqual(rest.title, '🌙 Bắt Đầu Giờ Nghỉ');
+  assert.strictEqual(rest.color, DiscordTheme.COLOR.warning);
+  assert.strictEqual(F(rest, 'Số bot'), '2');
+  checkLimits(rest);
+  assert.strictEqual(back.title, '☀️ Hết Giờ Nghỉ');
+  assert.strictEqual(back.color, DiscordTheme.COLOR.success);
+  checkLimits(back);
 
-  // 7) test tag
+  // 8) Kiểm tra tin thử mention (testMention)
   hook.got.length = 0;
   mgr.notifier.setMention('123456789012345678');
   assert.strictEqual(await mgr.notifier.testMention(), true);
+  const mentionPayload = hook.got.at(-1);
+  assert.strictEqual(mentionPayload.content, '❌ BOT BỊ KICK (test) <@123456789012345678>');
+  assert.strictEqual(mentionPayload.embeds[0].title, '🔔 Bot Bị Kick (Tin Thử)');
+  checkLimits(mentionPayload.embeds[0]);
+
+  // 9) Kiểm tra cắt chuỗi an toàn theo code point (surrogate-safe) & giới hạn 6000 ký tự + che thông tin nhạy cảm (secrets)
+  const astralPair = '🔥'.repeat(300) + '\uD800' + 'Lý do rất dài ';
+  const hugeFields = Array.from({ length: 30 }, (_, i) => ({
+    name: `Trường số ${i} ` + '🚀'.repeat(150),
+    value: `Giá trị ${i}: https://discord.com/api/webhooks/999888777/SecretWebhookToken_1234567890 socks5://admin:SuperPass@1.2.3.4:1080 /login MyPass999 ` + '💎'.repeat(600),
+    inline: true,
+  }));
+  const clamped = Notifier.finish({
+    title: '🚨 ' + astralPair,
+    description: astralPair.repeat(20) + '\n{"botPassword":"HiddenBotPassword123"}',
+    fields: hugeFields,
+  });
+  checkLimits(clamped);
+  const clampedJson = JSON.stringify(clamped);
+  assert.ok(!clampedJson.includes('SecretWebhookToken_1234567890'), 'Không được lộ Discord webhook token');
+  assert.ok(!clampedJson.includes('admin:SuperPass'), 'Không được lộ thông tin xác thực proxy');
+  assert.ok(!clampedJson.includes('MyPass999'), 'Không được lộ mật khẩu sau /login');
+  assert.ok(!clampedJson.includes('HiddenBotPassword123'), 'Không được lộ botPassword');
+
+  // 10) Kiểm tra lệnh `webhook preview` (Notifier.preview)
+  hook.got.length = 0;
+  const prevSingle = await mgr.notifier.preview({ onlyKey: 'disconnect' });
+  assert.strictEqual(prevSingle.ok, true);
+  assert.strictEqual(prevSingle.sent, 1);
   checkLimits(hook.got.at(-1).embeds[0]);
+
+  hook.got.length = 0;
+  const prevAll = await mgr.notifier.preview();
+  assert.strictEqual(prevAll.ok, true);
+  assert.ok(prevAll.sent >= 12, `Phải gửi đủ các mẫu sự kiện (đã gửi ${prevAll.sent})`);
+  for (const item of hook.got) {
+    checkLimits(item.embeds[0]);
+  }
 
   hook.server.close();
   try { mgr.shutdown(); } catch { }

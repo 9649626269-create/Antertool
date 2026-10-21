@@ -2,9 +2,13 @@ HƯỚNG DẪN ÁP DỤNG BẢN CẬP NHẬT (APPLY)
 ======================================
 
 1. Giải nén đè lên thư mục gốc của repo hiện có:
-   unzip -o telegram_notify_control.zip -d <repo-root>
+   unzip -o Antertool-Update-Notification.zip -d <repo-root>
 
 2. Chạy kiểm tra cú pháp và toàn bộ bộ test:
    cd <repo-root>
    npm run lint
    npm test
+
+3. (Tuỳ chọn) Xem trước giao diện các mẫu thông báo Discord trong console:
+   webhook preview
+   webhook preview disconnect

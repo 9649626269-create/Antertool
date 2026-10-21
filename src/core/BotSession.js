@@ -16,6 +16,7 @@ const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const ScriptRunner = require('./ScriptRunner');
 const Notifier = require('./Notifier');
+const DiscordTheme = require('./DiscordTheme');
 const { anglesTo, aimCheck, EYE_STAND } = require('./VectorUtil');
 const { resolvePlayerPose, describePose, supportsPoseMeta } = require('./MotionUtil');
 const SG = require('./SpawnMonitor');
@@ -286,13 +287,14 @@ class BotSession extends EventEmitter {
   }
   // Gửi thông báo Discord webhook (dùng chung, cấu hình ở BotManager) —
   // im lặng bỏ qua nếu chưa cấu hình webhook hoặc loại sự kiện này bị tắt.
-  _notify(eventKey, title, description, color = 0x64748b, headline = null) {
+  // Giữ nguyên 100% title/description/headline truyền sang Telegram (telegramAlert).
+  _notify(eventKey, title, description, color = 0x64748b, headline = null, discordOpts = null) {
     try { this._manager?.telegramAlert?.(this, eventKey, title, description, headline); } catch { /* Telegram lỗi không được làm hỏng bot */ }
     const n = this._manager?.notifier;
     if (!n?.isEventOn(eventKey)) return;
-    n.send(eventKey, this._alertEmbed(title, description, color), headline);
+    n.send(eventKey, this._alertEmbed(title, description, color, eventKey, discordOpts), headline);
   }
-  // ----- Phong cách embed Discord (người chơi / server / ảnh đầu / chân "Antertool • giờ") -----
+  // ----- Phong cách embed Discord (người chơi / server / thời gian treo / author + ảnh đầu / chân "Antertool • giờ") -----
   _playerLabel() {
     const id = String(this.cfg.id), name = String(this.cfg.username || id);
     return name.toLowerCase() === id.toLowerCase() ? name : `${name} (${id})`;
@@ -301,30 +303,179 @@ class BotSession extends EventEmitter {
     const port = Number(this.cfg.port);
     return `${this.cfg.host || '—'}${port && port !== 25565 ? ':' + port : ''}`;
   }
+  _uptimeClock() {
+    try {
+      const up = this._rev?.uptime?.(this.cfg.id);
+      if (up && up.totalMs >= 0) return RevenueTracker.formatClock(up.totalMs);
+    } catch (e) { dbg('BotSession', e); }
+    return '00:00:00';
+  }
+  _embedAuthor() {
+    return DiscordTheme.buildAuthor(this._playerLabel(), this.cfg.username);
+  }
   // Ảnh đầu nhân vật làm thumbnail; tên không hợp lệ (vd. có dấu cách) thì bỏ qua cho khỏi lỗi
   _headThumb() {
-    const name = String(this.cfg.username || '');
-    return /^\w{1,16}$/.test(name) ? { url: `https://mc-heads.net/avatar/${name}/100` } : undefined;
+    return DiscordTheme.buildThumbnail(this.cfg.username);
   }
-  // Tiêu đề call-site dạng "🟠 bot-1: bị kick" -> "Bị kick" (emoji + id đã có trong màu / field "Người chơi")
-  _alertTitle(title) {
-    let t = String(title || '').replace(/^[^\p{L}\p{N}]+/u, '');
-    const pre = `${this.cfg.id}: `;
-    if (t.startsWith(pre)) t = t.slice(pre.length);
-    return t ? t.charAt(0).toLocaleUpperCase('vi') + t.slice(1) : String(title || '');
+  // Tiêu đề call-site dạng "🟠 bot-1: bị kick" -> "🔌 Bị Kick" (emoji theo theme + Title Case tiếng Việt)
+  _alertTitle(title, eventKey = null) {
+    return DiscordTheme.formatEmbedTitle(title, eventKey, { botId: this.cfg.id });
   }
-  _alertEmbed(title, description, color) {
+  _alertEmbed(title, description, color, eventKey = null, discordOpts = null) {
+    const key = DiscordTheme.inferEventKey(title, eventKey);
+    const theme = DiscordTheme.getTheme(key, discordOpts?.severity);
+    const resolvedColor = (key && DiscordTheme.EVENT_THEMES[key])
+      ? theme.color
+      : (Number.isInteger(color) ? color : theme.color);
+    const now = nowMs();
+    const fields = [
+      { name: 'Người chơi', value: this._playerLabel(), inline: true },
+      { name: 'Server', value: this._serverLabel(), inline: true },
+      { name: 'Thời gian treo', value: this._uptimeClock(), inline: true },
+    ];
+
+    let richDesc = String(description ?? '');
+    if (key === 'disconnect') {
+      const lines = richDesc.split(/\r?\n/).filter(Boolean);
+      const outLines = [];
+      const reasonLines = [];
+      for (const l of lines) {
+        if (l.startsWith('⏰')) {
+          outLines.push(`${l} • ${DiscordTheme.discordTimestamp(discordOpts?.kickAt || now, 'R')}`);
+        } else if (l.startsWith('🔄')) {
+          const m = /in\s+(\d+)s.*?\(lần thứ\s+(\d+)\/([^)]+)\)/i.exec(l);
+          if (m) {
+            const delaySec = Number(m[1]) || 0;
+            const att = Number(m[2]) || 1;
+            const maxStr = m[3];
+            const reconnAt = (discordOpts?.kickAt || now) + delaySec * 1000;
+            const barStr = /^\d+$/.test(maxStr)
+              ? DiscordTheme.progressBar(att, Math.max(att, Number(maxStr)))
+              : `${att}/${maxStr}`;
+            outLines.push(`${l} • ${DiscordTheme.discordTimestamp(reconnAt, 'R')} • ${barStr}`);
+            fields.push(
+              { name: 'Lần thử', value: `${barStr} (${att}/${maxStr})`, inline: true },
+              { name: 'Kết nối lại', value: DiscordTheme.discordTimestamp(reconnAt, 'R'), inline: true },
+            );
+          } else {
+            outLines.push(l);
+          }
+        } else {
+          reasonLines.push(l);
+        }
+      }
+      if (reasonLines.length) {
+        outLines.unshift(DiscordTheme.blockquote(reasonLines.join('\n')));
+      }
+      richDesc = outLines.join('\n');
+    } else if (key === 'reconnectFailed') {
+      const mTries = /Đã thử\s+(\d+)\s+lần/i.exec(richDesc);
+      const mReason = /\(lý do gần nhất:\s*([\s\S]+?)\)\./i.exec(richDesc);
+      const tries = mTries ? Number(mTries[1]) : (this._reconnectMaxRetries || 5);
+      const retryAt = now + 15 * 60000;
+      const barStr = DiscordTheme.progressBar(tries, Math.max(1, tries));
+      const parts = [];
+      if (mReason && mReason[1]) parts.push(DiscordTheme.blockquote(mReason[1]));
+      parts.push(richDesc);
+      parts.push(`Tiến độ thử: ${barStr} • Tự thử lại ${DiscordTheme.discordTimestamp(retryAt, 'R')}`);
+      richDesc = parts.join('\n');
+      fields.push(
+        { name: 'Số lần thử', value: `${barStr} (${tries}/${tries})`, inline: true },
+        { name: 'Thử lại lúc', value: DiscordTheme.discordTimestamp(retryAt, 'R'), inline: true },
+      );
+    } else if (key === 'reconnectRecovered') {
+      const mTries = /Sau\s+(\d+)\s+lần/i.exec(richDesc);
+      const tries = mTries ? Number(mTries[1]) : 1;
+      const maxR = Math.max(tries, this._reconnectMaxRetries && this._reconnectMaxRetries < 999 ? this._reconnectMaxRetries : 5);
+      const barStr = DiscordTheme.progressBar(tries, maxR);
+      richDesc = `${richDesc} (${barStr}) • Ổn định ${DiscordTheme.discordTimestamp(now, 'R')}`;
+      fields.push({ name: 'Số lần thử', value: `${tries} lần (${barStr})`, inline: true });
+    } else if (key === 'moneyGoal') {
+      const goalVal = Number(this.moneyGoal) || 0;
+      const curVal = Number(this.state?.money) || goalVal;
+      const barStr = DiscordTheme.progressBar(curVal || 1, goalVal || 1);
+      const parts = [
+        richDesc,
+        `Số dư: **${DiscordTheme.formatMoney(curVal)}** / Mục tiêu: **${DiscordTheme.formatMoney(goalVal)}** (${barStr})`,
+      ];
+      if (this.moneyGoalMacro) {
+        parts.push(DiscordTheme.codeBlock(`macro ${this.moneyGoalMacro}`));
+      }
+      richDesc = parts.join('\n');
+      fields.push(
+        { name: 'Số dư', value: DiscordTheme.formatMoney(curVal), inline: true },
+        { name: 'Mục tiêu', value: DiscordTheme.formatMoney(goalVal), inline: true },
+      );
+      if (this.moneyGoalMacro) fields.push({ name: 'Macro', value: `\`${this.moneyGoalMacro}\``, inline: true });
+    } else if (key === 'autoSell') {
+      const mInv = /(\d+)\/(\d+)\s*ô/i.exec(richDesc);
+      const used = mInv ? Number(mInv[1]) : 36;
+      const tot = mInv ? Number(mInv[2]) : 36;
+      const barStr = DiscordTheme.progressBar(used, tot);
+      const macroName = this.autoSellMacro || 'autosell';
+      richDesc = `${richDesc}\nTiến độ túi đồ: ${barStr}\n${DiscordTheme.codeBlock(`macro ${macroName}`)}`;
+      fields.push(
+        { name: 'Túi đồ', value: `${barStr} (${used}/${tot} ô)`, inline: true },
+        { name: 'Macro', value: `\`${macroName}\``, inline: true },
+      );
+    } else if (key === 'spawnerThreat' || key === 'protectResult') {
+      const lines = richDesc.split(/\r?\n/).filter(Boolean);
+      if (lines.length) {
+        lines[0] = DiscordTheme.blockquote(lines[0]);
+      }
+      const mMine = /Đã đập\s+(\d+)\/(\d+)\s*lồng/i.exec(richDesc);
+      if (mMine) {
+        const done = Number(mMine[1]), tot = Number(mMine[2]);
+        const barStr = DiscordTheme.progressBar(done, Math.max(1, tot));
+        lines.push(`Tiến độ bảo vệ: ${barStr} • ${DiscordTheme.discordTimestamp(now, 'R')}`);
+        fields.push({ name: 'Tiến độ đào', value: `${barStr} (${done}/${tot} lồng)`, inline: true });
+      } else {
+        lines.push(`⏱️ Phát hiện ${DiscordTheme.discordTimestamp(now, 'R')}`);
+      }
+      richDesc = lines.join('\n');
+    } else if (key === 'featuresReady') {
+      richDesc = `${richDesc}\n⏱️ Sẵn sàng ${DiscordTheme.discordTimestamp(now, 'R')}`;
+    } else if (key === 'homeReturn') {
+      const cmd = (this.spawnHomeCommand || '/home treolong').startsWith('/')
+        ? (this.spawnHomeCommand || '/home treolong')
+        : `/${this.spawnHomeCommand}`;
+      richDesc = `${richDesc}\n${DiscordTheme.codeBlock(cmd)}\n⏱️ ${DiscordTheme.discordTimestamp(now, 'R')}`;
+      fields.push({ name: 'Lệnh', value: `\`${cmd}\``, inline: true });
+    } else if (key === 'sellFailed') {
+      const mCage = /\((\d+)\/(\d+)\s*lồng\)/i.exec(richDesc);
+      const mHome = /Đã gõ\s+(\/[^\s]+(?:\s+[^\s]+)?)\s+(\d+)\s+lần/i.exec(richDesc);
+      const done = mCage ? Number(mCage[1]) : 0;
+      const tot = mCage ? Number(mCage[2]) : (this.sellSpawnList?.length || 1);
+      const maxH = mHome ? Number(mHome[2]) : (this.sellFailMaxHome || 10);
+      const cmdStr = mHome ? mHome[1] : (this.spawnHomeCommand || '/home treolong');
+      const cageBar = DiscordTheme.progressBar(done, Math.max(1, tot));
+      const homeBar = DiscordTheme.progressBar(maxH, Math.max(1, maxH));
+      richDesc = `${richDesc}\n${DiscordTheme.codeBlock(cmdStr)}`;
+      fields.push(
+        { name: 'Tiến độ lồng', value: `${cageBar} (${done}/${tot})`, inline: true },
+        { name: 'Số lần thử /home', value: `${homeBar} (${maxH}/${maxH})`, inline: true },
+      );
+    } else if (key === 'autoOrder') {
+      const item = this.autoOrder?.item || 'item';
+      const stacks = this.autoOrder?.stacks?.stacks ?? 0;
+      const earned = DiscordTheme.formatMoney(this.autoOrder?.money || 0);
+      richDesc = `${richDesc} • Thu nhập: **${earned}**\n${DiscordTheme.codeBlock(`/order ${item.replace(/_/g, ' ')}`)}`;
+      fields.push(
+        { name: 'Vật phẩm', value: `\`${item}\``, inline: true },
+        { name: 'Đã giao', value: `${stacks} stack`, inline: true },
+        { name: 'Thu nhập', value: earned, inline: true },
+      );
+    }
+
     return Notifier.finish({
-      title: this._alertTitle(title),
-      description,
-      color,
-      fields: [
-        { name: 'Người chơi', value: this._playerLabel(), inline: true },
-        { name: 'Server', value: this._serverLabel(), inline: true },
-      ],
+      title: this._alertTitle(title, key),
+      description: richDesc,
+      color: resolvedColor,
+      author: this._embedAuthor(),
+      fields,
       thumbnail: this._headThumb(),
       timestamp: new Date().toISOString(),
-    });
+    }, key);
   }
   // Thông báo kick kiểu: "❌ BOT BỊ KICK @tag" + lý do + ⏰ giờ + 🔄 sắp reconnect sau bao lâu (lần mấy).
   // Chờ tối đa 2.5s để biết thời gian reconnect (do scheduleReconnect tính) rồi mới gửi 1 tin duy nhất.
@@ -1200,27 +1351,31 @@ class BotSession extends EventEmitter {
   // Embed báo cáo doanh thu — bố cục: [Người chơi | Server | Thời gian treo] / [Tổng thu nhập | Tốc độ trung bình | Số lượt bán] / Trạng thái
   _buildRevenueEmbed(cap, kind = 'spawn') {
     const macro = kind === 'macro';
+    const eventKey = macro ? 'revenueMacro' : 'revenue';
+    const theme = DiscordTheme.getTheme(eventKey);
     const money = RevenueTracker.formatMoneyDollar; // $41.35K, $4.45M
     const s = macro ? this.getMacroRevenueStats() : this.getRevenueStats();
     const noRate = !s || s.avgPerHour == null;
     const up = this._rev.uptime(this.cfg.id); // thời gian online cộng dồn (cùng nguồn với bảng Telegram)
-    // Trạng thái: dòng đầu = bot đang chạy hay không; các dòng sau = vòng vừa xong (giữ cảnh báo lồng lỗi) / ghi chú
-    const status = [this.isOnline ? 'Đang hoạt động' : 'Ngoại tuyến'];
+    // Trạng thái: dòng đầu = bot đang chạy hay không; các dòng sau = vòng vừa xong (giữ cảnh báo lồng lỗi + thanh tiến độ) / ghi chú
+    const headState = this.isOnline ? 'Đang hoạt động' : 'Ngoại tuyến';
+    const status = [s && s.lastAt ? `${headState} • ${DiscordTheme.discordTimestamp(s.lastAt, 'R')}` : headState];
     if (cap) {
       if (macro) {
-        status.push(`Lần bán vừa xong: +${money(cap.sum)} · macro "${cap.macro}"${cap.viaBalance ? ' (đo theo số dư)' : ''}`);
+        status.push(`Lần bán vừa xong: +${money(cap.sum)} · macro "${cap.macro}" (\`macro ${cap.macro}\`)${cap.viaBalance ? ' (đo theo số dư)' : ''}`);
       } else {
         const total = cap.total || cap.done;
         const fail = Math.max(0, total - cap.done);
-        status.push(`Vòng vừa xong: +${money(cap.sum)} (${cap.done}/${total} lồng)`);
+        status.push(`Vòng vừa xong: +${money(cap.sum)} (${cap.done}/${total} lồng) • ${DiscordTheme.progressBar(cap.done, Math.max(1, total))}`);
         if (fail) status.push(`⚠️ ${fail} lồng lỗi`);
       }
     }
     if (noRate) status.push('Cần ≥2 vòng bán liên tiếp để tính tốc độ');
     else if (s.observedMs < 3600000) status.push(`Tốc độ là ước tính — mới đo ${this._fmtDuration(s.observedMs)}`);
     return Notifier.finish({
-      title: macro ? 'Báo Cáo Tổng Kết Auto-Sell (Macro)' : 'Báo Cáo Tổng Kết Auto-Sell Spawn',
-      color: Notifier.COLOR.report,
+      title: DiscordTheme.formatEmbedTitle(macro ? 'Báo Cáo Tổng Kết Auto-Sell (Macro)' : 'Báo Cáo Tổng Kết Auto-Sell Spawn', eventKey),
+      color: theme.color,
+      author: this._embedAuthor(),
       fields: [
         { name: 'Người chơi', value: this._playerLabel(), inline: true },
         { name: 'Server', value: this._serverLabel(), inline: true },
@@ -1232,7 +1387,7 @@ class BotSession extends EventEmitter {
       ],
       thumbnail: this._headThumb(),
       timestamp: new Date().toISOString(),
-    });
+    }, eventKey);
   }
   // Gửi qua webhook RIÊNG nếu có, không thì qua webhook chung (sự kiện "revenue")
   _sendRevenueReport(cap, kind = 'spawn') {

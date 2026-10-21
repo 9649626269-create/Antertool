@@ -1,6 +1,7 @@
 'use strict';
 /**
- * ConfigValidator — kiểm tra schema cơ bản cho config.json khi load.
+ * ConfigValidator — kiểm tra schema cơ bản cho config.json khi load,
+ * kèm chuẩn hoá & di trú cấu hình Telegram v2.
  * Không dùng thư viện ngoài (ajv/zod) để giữ dependency nhẹ.
  * Trả về { ok: true } hoặc { ok: false, errors: string[] }.
  */
@@ -9,6 +10,129 @@ function isObj(v) { return v !== null && typeof v === 'object' && !Array.isArray
 function isStr(v) { return typeof v === 'string'; }
 function isNum(v) { return typeof v === 'number' && isFinite(v); }
 function isBool(v) { return typeof v === 'boolean'; }
+
+const DEFAULT_CRIT_EVENTS = Object.freeze([
+  'disconnect',
+  'reconnectFailed',
+  'sellFailed',
+  'spawnerThreat',
+]);
+
+const DEFAULT_CMD_DENYLIST = Object.freeze([
+  'login', 'l', 'dn',
+  'register', 'reg', 'dk',
+  'changepassword', 'cp',
+  'unregister', 'pay',
+]);
+
+const TELEGRAM_DEFAULTS = Object.freeze({
+  telegramAdmins: [],
+  telegramAllowedUsers: [],
+  telegramControlEnabled: true,
+  telegramConfirmDanger: true,
+  telegramCmdDenylist: [...DEFAULT_CMD_DENYLIST],
+  telegramCommandTtlSec: 120,
+  telegramDiscardBacklog: true,
+  telegramRefreshSec: 1,
+  telegramMinGapSec: 30,
+  telegramMode: 'edit',
+  telegramEvents: [
+    'disconnect',
+    'reconnectFailed',
+    'reconnectRecovered',
+    'sellFailed',
+    'spawnerThreat',
+    'protectResult',
+    'connected',
+  ],
+  telegramLoudEvents: [...DEFAULT_CRIT_EVENTS],
+  telegramSellCycleNotify: false,
+  telegramMuteUntil: 0,
+  telegramMuteCrit: false,
+  telegramRecentLimit: 8,
+  telegramTimezone: 'Asia/Ho_Chi_Minh',
+  telegramSymbols: 'unicode',
+});
+
+function parseCsvList(val) {
+  if (Array.isArray(val)) return val.map(x => String(x).trim()).filter(Boolean);
+  if (typeof val === 'string') return val.split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+  return [];
+}
+
+function parseBoolEnv(val) {
+  if (typeof val === 'boolean') return val;
+  const s = String(val ?? '').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true;
+  if (['0', 'false', 'no', 'off'].includes(s)) return false;
+  return undefined;
+}
+
+/**
+ * Di trú idempotent cấu hình Telegram v2: chỉ điền các khoá còn thiếu,
+ * không bao giờ ghi đè giá trị người dùng đã đặt.
+ */
+function migrateTelegramConfig(cfg) {
+  if (!isObj(cfg)) return cfg;
+  for (const [k, defVal] of Object.entries(TELEGRAM_DEFAULTS)) {
+    if (cfg[k] === undefined) {
+      cfg[k] = Array.isArray(defVal) ? [...defVal] : defVal;
+    }
+  }
+  return cfg;
+}
+
+/**
+ * Chuẩn hoá cấu hình Telegram theo thứ tự ưu tiên: env > config.json > mặc định.
+ * Giữ nguyên toàn bộ các khoá khác của người dùng.
+ */
+function normalizeTelegramConfig(cfg = {}, env = process.env) {
+  const out = { ...(isObj(cfg) ? cfg : {}) };
+  migrateTelegramConfig(out);
+  const e = env || {};
+
+  if (e.TELEGRAM_BOT_TOKEN !== undefined && String(e.TELEGRAM_BOT_TOKEN).trim() !== '') {
+    out.telegramToken = String(e.TELEGRAM_BOT_TOKEN).trim();
+  }
+  if (e.TELEGRAM_CHAT_ID !== undefined && String(e.TELEGRAM_CHAT_ID).trim() !== '') {
+    out.telegramChatId = String(e.TELEGRAM_CHAT_ID).trim();
+  }
+  if (e.TELEGRAM_ADMINS !== undefined && String(e.TELEGRAM_ADMINS).trim() !== '') {
+    out.telegramAdmins = parseCsvList(e.TELEGRAM_ADMINS);
+  }
+  if (e.TELEGRAM_ALLOWED_USERS !== undefined && String(e.TELEGRAM_ALLOWED_USERS).trim() !== '') {
+    out.telegramAllowedUsers = parseCsvList(e.TELEGRAM_ALLOWED_USERS);
+  }
+  if (e.TELEGRAM_CONTROL_ENABLED !== undefined) {
+    const b = parseBoolEnv(e.TELEGRAM_CONTROL_ENABLED);
+    if (b !== undefined) out.telegramControlEnabled = b;
+  }
+  if (e.TELEGRAM_CONFIRM_DANGER !== undefined) {
+    const b = parseBoolEnv(e.TELEGRAM_CONFIRM_DANGER);
+    if (b !== undefined) out.telegramConfirmDanger = b;
+  }
+  if (e.TELEGRAM_REFRESH_SEC !== undefined && String(e.TELEGRAM_REFRESH_SEC).trim() !== '') {
+    const n = Number(e.TELEGRAM_REFRESH_SEC);
+    if (Number.isFinite(n) && n >= 0) out.telegramRefreshSec = n;
+  }
+  if (e.TELEGRAM_MIN_GAP_SEC !== undefined && String(e.TELEGRAM_MIN_GAP_SEC).trim() !== '') {
+    const n = Number(e.TELEGRAM_MIN_GAP_SEC);
+    if (Number.isFinite(n) && n >= 0) out.telegramMinGapSec = n;
+  }
+  if (e.TELEGRAM_TIMEZONE !== undefined && String(e.TELEGRAM_TIMEZONE).trim() !== '') {
+    out.telegramTimezone = String(e.TELEGRAM_TIMEZONE).trim();
+  }
+  if (e.TELEGRAM_SYMBOLS !== undefined && String(e.TELEGRAM_SYMBOLS).trim() !== '') {
+    const symMode = String(e.TELEGRAM_SYMBOLS).trim().toLowerCase();
+    out.telegramSymbols = symMode === 'ascii' ? 'ascii' : 'unicode';
+  }
+  if (e.TELEGRAM_SELL_CYCLE_NOTIFY !== undefined) {
+    const b = parseBoolEnv(e.TELEGRAM_SELL_CYCLE_NOTIFY);
+    if (b !== undefined) out.telegramSellCycleNotify = b;
+  }
+
+  return out;
+}
 
 // Cú pháp bước macro — phải khớp ScriptRunner._runSteps. Biến $answer/$label/$owner... được thay lúc chạy nên số có thể là "$x".
 const MACRO_TEXT_OPS = new Set(['stopif', 'ask', 'confirm', 'until']); // cần đoạn chữ sau tên lệnh
@@ -169,4 +293,13 @@ function validateConfig(cfg) {
   return { ok: errors.length === 0, errors };
 }
 
-module.exports = { validateConfig, validateMacroSteps, validateMacros };
+module.exports = {
+  validateConfig,
+  validateMacroSteps,
+  validateMacros,
+  DEFAULT_CRIT_EVENTS,
+  DEFAULT_CMD_DENYLIST,
+  TELEGRAM_DEFAULTS,
+  migrateTelegramConfig,
+  normalizeTelegramConfig,
+};

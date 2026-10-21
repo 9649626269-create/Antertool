@@ -5,68 +5,64 @@ const RingBuffer = require('./RingBuffer');
 
 /**
  * TelegramLogger — đẩy LOG RUNTIME (log của từng bot + log hệ thống của tool) lên Telegram.
- *
- *  - MỘT FILE DUY NHẤT (log_all.txt) chứa log của TẤT CẢ bot (+ log hệ thống), xếp theo thời gian, mỗi dòng ghi rõ bot nào.
- *    Đầu file có STATS SERVER (scoreboard: money, shard, kills...) của từng bot.
- *  - File được CẬP NHẬT TẠI CHỖ (sửa đúng 1 tin trong chat, không đẻ tin mới) theo chu kỳ tuỳ chọn: 10s / 30s / 1m / 1h...
- *    (telegram logs every <thời gian>). Chu kỳ chỉ là nhịp sửa file; không có gì mới (log + stats y hệt) thì bỏ qua, không gọi Telegram.
- *    File giữ N dòng mới nhất (mặc định 1000; telegram logs keep <n>) nên chu kỳ dài vẫn không mất log ở giữa.
- *  - Mỗi lần chạy tool tạo 1 file mới (file của lần chạy trước giữ nguyên làm lịch sử). Tin bị xoá thì tự gửi lại file mới.
- *  - Tin đầu tiên gửi IM LẶNG (không rung); các lần sửa không bao giờ rung — cảnh báo kick/hết reconnect... vẫn là tin riêng có thông báo đẩy.
- *  - Chống dội: dòng y hệt liên tiếp của cùng 1 bot gộp thành "(×N)"; tối đa N lần cập nhật/phút; hàng đợi Telegram bận
- *    hoặc đang bị 429 thì giữ lại, cập nhật sau. Gửi lỗi (mạng/Telegram) thì thử lại thưa dần — log nằm sẵn trong bộ nhớ nên không mất;
- *    không bao giờ làm bot chậm hay chết.
- *  - Tự che thông tin nhạy cảm: token Telegram, webhook Discord, mật khẩu trong /dn /dk /login..., user:pass@ của proxy,
- *    và mật khẩu bot đang cấu hình (nếu xuất hiện nguyên văn trong log).
- *  - Giữ 500 dòng gần nhất (mọi mức) để lệnh /logs xem lại theo yêu cầu (gửi file riêng, không đụng file chính).
- *
- * Chỉ dùng TelegramNotifier (sendDocument / editDocument: hàng đợi tuần tự + nghỉ khi 429). Không tự in ra console/log của bot
- * (tránh vòng lặp: lỗi gửi Telegram -> log -> gửi Telegram).
+ * Các ký hiệu trong mã nguồn được viết dưới dạng escape \u{...} để giữ mã nguồn thuần ASCII.
  */
 const LEVELS = ['sys', 'ok', 'warn', 'err', 'afk', 'shard', 'proxy', 'health', 'chat'];
 const PRESETS = {
-  all: ['sys', 'ok', 'warn', 'err', 'afk', 'shard', 'proxy', 'health'], // mặc định — mọi thứ trừ chat của người chơi
-  info: ['ok', 'warn', 'err', 'proxy', 'health'],                       // bỏ log thủ tục (sys/afk/shard)
+  all: ['sys', 'ok', 'warn', 'err', 'afk', 'shard', 'proxy', 'health'],
+  info: ['ok', 'warn', 'err', 'proxy', 'health'],
   warn: ['warn', 'err', 'health'],
   err: ['err'],
 };
 const ALIASES = { error: 'err', errors: 'err', warning: 'warn', warnings: 'warn', system: 'sys', debug: 'sys' };
-const ICONS = { sys: '⚙️', ok: '✅', warn: '⚠️', err: '❌', afk: '💤', shard: '✨', proxy: '🌐', health: '🩺', chat: '💬' };
-const SYSTEM = 'system'; // nguồn log không thuộc bot nào (khởi động, tắt, lỗi chưa bắt được...)
+const ICONS = {
+  sys: '\u{2699}\u{FE0F}',
+  ok: '\u{2705}',
+  warn: '\u{26A0}\u{FE0F}',
+  err: '\u{274C}',
+  afk: '\u{1F4A4}',
+  shard: '\u{2728}',
+  proxy: '\u{1F310}',
+  health: '\u{1FA7A}',
+  chat: '\u{1F4AC}',
+};
+const SYSTEM = 'system';
 const LABELS = { sys: 'SYS', ok: 'OK', warn: 'WARN', err: 'ERR', afk: 'AFK', shard: 'SHARD', proxy: 'PROXY', health: 'HEALTH', chat: 'CHAT' };
 
 const DEFAULTS = { enabled: true, intervalSec: 10, silent: true, maxPerMin: 10, keepLines: 1000 };
 const MIN_INTERVAL_SEC = 2;
 const MAX_INTERVAL_SEC = 86400; // 24h
 const MIN_KEEP = 50;
-const MAX_KEEP = 5000;         // 5000 dòng ≈ 700KB — còn xa giới hạn 50MB của Telegram
-const MAX_MSG = 500;           // ký tự tối đa của 1 dòng log
-const MAX_MSG_LINES = 6;       // số dòng tối đa của 1 mục log nhiều dòng (bảng, stack trace)
-const MAX_STAT_LINES = 40;     // số dòng stats server tối đa của mỗi bot
+const MAX_KEEP = 5000;
+const MAX_MSG = 500;
+const MAX_MSG_LINES = 6;
+const MAX_STAT_LINES = 40;
 const FILE_NAME = 'log_all.txt';
-const REFRESH_DATA = 'lg:now'; // callback_data của nút "Cập nhật ngay" (BotManager xử lý cmd 'lg')
-const KEYBOARD = [[{ text: '🔄 Cập nhật ngay', callback_data: REFRESH_DATA }]];
+const REFRESH_DATA = 'lg:now';
+const KEYBOARD = [[{ text: '\u{1F504} Cập nhật ngay', callback_data: REFRESH_DATA }]];
 
 // ----- che thông tin nhạy cảm -----
 const REDACTIONS = [
   [/\b\d{6,12}:[\w-]{30,}/g, '<telegram-token>'],
-  [/(https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/)[\w-]+/gi, '$1***'],
+  [/(https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)[\w-]+/gi, '$1***'],
   [/(\/(?:dn|dk|login|register|log|reg|l|changepassword|cp)\s+)\S+(?:\s+\S+)?/gi, '$1***'],
   [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/gi, '$1***@'],
+  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
+];
+const STATIC_REDACTIONS = [
+  [/(https?:\/\/api\.telegram\.org\/bot)\d{6,12}:[\w-]{20,}/gi, '$1<telegram-token>'],
+  [/\b\d{6,12}:[\w-]{30,}/g, '<telegram-token>'],
+  [/(https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)[\w-]+/gi, '$1***'],
+  [/(\/(?:dn|dk|login|register|log|reg|l|changepassword|cp)\s+)\S+(?:\s+\S+)?/gi, '$1***'],
+  [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/gi, '$1***:***@'],
+  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
 ];
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
 const MC_COLOR_RE = /§[0-9a-fk-orx]/gi;
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// Telegram trả message_id (số) khi thành công; null/đối tượng lỗi là thất bại
 const validId = (id) => id !== null && id !== undefined && typeof id !== 'object';
 
 class TelegramLogger {
-  /**
-   * @param notifier  TelegramNotifier (sendDocument, editDocument, enabled, paused, pending)
-   * @param opts      { tz: () => 'Asia/Ho_Chi_Minh', secrets: () => ['mật khẩu bot', ...], recentSize,
-   *                    botIds: () => ['bot-1', ...]  — danh sách bot hiện có (để ghi stats cả bot chưa có log),
-   *                    stats: (botId) => { title, lines: ['MONEY 832.5M', ...] } | ['dòng', ...] | null  — stats server ghi đầu file }
-   */
   constructor(notifier, opts = {}) {
     this.tg = notifier;
     this._tz = typeof opts.tz === 'function' ? opts.tz : () => 'Asia/Ho_Chi_Minh';
@@ -74,13 +70,13 @@ class TelegramLogger {
     this._stats = typeof opts.stats === 'function' ? opts.stats : () => null;
     this._botIds = typeof opts.botIds === 'function' ? opts.botIds : () => [];
     this.recent = new RingBuffer(opts.recentSize || 500);
-    this._feed = [];            // log trong file chính (đã qua bộ lọc), cũ -> mới
-    this._seen = new Set();     // id các bot đã có log trong file (để ghi stats)
-    this._dropped = 0;          // số dòng cũ đã bỏ vì file giữ tối đa keepLines dòng
-    this._pending = 0;          // số mục log mới chưa lên file
-    this._ver = 0;              // tăng mỗi khi log đổi -> so chữ ký để bỏ qua lần sửa thừa
-    this._sigSent = null;       // chữ ký (log + stats) của lần cập nhật thành công gần nhất
-    this._msgId = null;         // message_id của file đang cập nhật tại chỗ
+    this._feed = [];
+    this._seen = new Set();
+    this._dropped = 0;
+    this._pending = 0;
+    this._ver = 0;
+    this._sigSent = null;
+    this._msgId = null;
     this._failStreak = 0;
     this._lastByBot = new Map();
     this._timer = null;
@@ -111,27 +107,36 @@ class TelegramLogger {
   static get MIN_KEEP() { return MIN_KEEP; }
   static get MAX_KEEP() { return MAX_KEEP; }
 
-  // "all" | "info" | "warn" | "err" | "warn,err,sys" | "all,chat"  ->  { ok, levels[] } | { ok:false, error }
+  static redactStatic(raw, secrets = []) {
+    let s = String(raw ?? '');
+    for (const [re, rep] of STATIC_REDACTIONS) s = s.replace(re, rep);
+    for (const sec of secrets || []) {
+      const v = String(sec ?? '');
+      if (v.length >= 6) s = s.replace(new RegExp(`(?<![\\w])${escRe(v)}(?![\\w])`, 'g'), '***');
+    }
+    return s;
+  }
+
   static parseLevels(text) {
     const t = String(text ?? '').trim().toLowerCase();
     if (!t) return { ok: false, error: 'Thiếu mức log' };
     const tokens = t.split(/[\s,]+/).filter(Boolean);
-    if (tokens.length === 1 && PRESETS[ALIASES[tokens[0]] || tokens[0]]) return { ok: true, levels: [...PRESETS[ALIASES[tokens[0]] || tokens[0]]] }; // "warn" (một mình) = mẫu warn,err,health
+    if (tokens.length === 1 && PRESETS[ALIASES[tokens[0]] || tokens[0]]) return { ok: true, levels: [...PRESETS[ALIASES[tokens[0]] || tokens[0]]] };
     const out = [];
     for (const raw of tokens) {
       const k = ALIASES[raw] || raw;
-      if (LEVELS.includes(k)) { out.push(k); continue; }   // trong danh sách, "warn"/"err" là đúng mức đó
-      if (PRESETS[k]) { out.push(...PRESETS[k]); continue; } // "all", "info" mở rộng thành cả mẫu (vd all,chat)
+      if (LEVELS.includes(k)) { out.push(k); continue; }
+      if (PRESETS[k]) { out.push(...PRESETS[k]); continue; }
       return { ok: false, error: `Mức "${raw}" không có. Mức: ${LEVELS.join(', ')} · mẫu: ${Object.keys(PRESETS).join(', ')}` };
     }
     return { ok: true, levels: [...new Set(out)] };
   }
-  // Tên mẫu nếu tập mức khớp đúng 1 mẫu (để hiển thị), không thì null
+
   static presetOf(levels) {
     const s = [...levels].sort().join(',');
     return Object.keys(PRESETS).find(k => [...PRESETS[k]].sort().join(',') === s) || null;
   }
-  // "10s" | "30s" | "2m" | "1h" | "1h30m" | "90" (số trần = giây) -> giây (null nếu không hiểu)
+
   static parseSeconds(text) {
     const t = String(text ?? '').trim().toLowerCase();
     if (!t) return null;
@@ -140,14 +145,13 @@ class TelegramLogger {
     if (!m || (!m[1] && !m[2] && !m[3])) return null;
     return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
   }
-  // 10 -> "10s" · 60 -> "1m" · 3600 -> "1h" · 90 -> "1m30s"
+
   static fmtSeconds(sec) {
     sec = Math.max(0, Math.round(Number(sec) || 0));
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
     return `${h ? h + 'h' : ''}${m ? m + 'm' : ''}${s || (!h && !m) ? s + 's' : ''}`;
   }
 
-  // cfg: { enabled, levels (mảng | chuỗi), bots (mảng | null), intervalSec, silent, maxPerMin, keepLines } — thiếu thì dùng mặc định
   configure(cfg = {}) {
     let changed = false;
     if (cfg.enabled !== undefined) this.enabled = cfg.enabled !== false;
@@ -168,7 +172,7 @@ class TelegramLogger {
     if (cfg.intervalSec !== undefined && cfg.intervalSec !== null) {
       const s = Number(cfg.intervalSec);
       this.intervalMs = Math.min(MAX_INTERVAL_SEC, Math.max(MIN_INTERVAL_SEC, Number.isFinite(s) ? s : DEFAULTS.intervalSec)) * 1000;
-      if (this._feed.length && this.enabled) this._arm(this.intervalMs); // đổi chu kỳ thì áp dụng ngay (đổi ngắn lại -> hẹn sớm hơn)
+      if (this._feed.length && this.enabled) this._arm(this.intervalMs);
     }
     if (cfg.silent !== undefined) this.silent = cfg.silent !== false;
     if (cfg.maxPerMin !== undefined && cfg.maxPerMin !== null) {
@@ -181,13 +185,13 @@ class TelegramLogger {
       this._trim();
       changed = true;
     }
-    if (changed && this._feed.length) this._touch(); // mức/bot/số dòng giữ đổi -> dựng lại file ở nhịp tới
+    if (changed && this._feed.length) this._touch();
     if (!this.enabled) this._clearBuffer();
     return this;
   }
 
   get active() { return !!(this.enabled && this.tg && this.tg.enabled); }
-  get buffered() { return this._pending; } // số mục log mới chưa lên file
+  get buffered() { return this._pending; }
 
   status() {
     return {
@@ -199,15 +203,11 @@ class TelegramLogger {
     };
   }
 
-  // Quên tin đang cập nhật (đổi token/chat Telegram): lần cập nhật tới sẽ tạo file mới
   resetMessage() { this._msgId = null; this._sigSent = null; this._ver++; }
-  // Dừng hẹn giờ (tắt tool)
   stop() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; this._dueAt = 0; }
   }
 
-  // ===== nhận log =====
-  // bot: id bot (hoặc 'system'); entry: { level, msg, time }
   push(bot, entry) {
     if (!entry || !this.tg || !this.tg.enabled) return;
     const msg = this._clean(entry.msg);
@@ -215,12 +215,12 @@ class TelegramLogger {
     const level = ALIASES[String(entry.level || 'sys').toLowerCase()] || String(entry.level || 'sys').toLowerCase();
     const t = Number(entry.time) || Date.now();
     const botId = String(bot ?? SYSTEM);
-    this.recent.push({ t, bot: botId, level, msg, n: 1 }); // luôn nhớ (để /logs xem lại), kể cả khi mức này không được gửi tự động
+    this.recent.push({ t, bot: botId, level, msg, n: 1 });
     if (!this.enabled) return;
     const rec = { t, last: t, bot: botId, level, msg, n: 1, gone: false };
     if (!this._passes(rec)) return;
     const last = this._lastByBot.get(botId);
-    if (last && !last.gone && last.level === level && last.msg === msg) { last.n++; last.last = t; this._touch(); return; } // y hệt dòng trước của bot này -> (×N)
+    if (last && !last.gone && last.level === level && last.msg === msg) { last.n++; last.last = t; this._touch(); return; }
     this._feed.push(rec);
     this._lastByBot.set(botId, rec);
     if (botId !== SYSTEM) this._seen.add(botId);
@@ -238,7 +238,6 @@ class TelegramLogger {
     this._arm(this.intervalMs);
   }
 
-  // ===== làm sạch + che bí mật =====
   _clean(raw) {
     if (raw === undefined || raw === null) return '';
     let s = typeof raw === 'string' ? raw : (raw instanceof Error ? (raw.stack || raw.message) : String(raw));
@@ -253,16 +252,14 @@ class TelegramLogger {
     try { secrets = this._secrets() || []; } catch (e) { dbg('TelegramLogger', e); }
     for (const sec of secrets) {
       const v = String(sec ?? '');
-      if (v.length >= 6) s = s.replace(new RegExp(`(?<![\\w])${escRe(v)}(?![\\w])`, 'g'), '***'); // chỉ che khi đứng riêng (không cắt giữa từ/số)
+      if (v.length >= 6) s = s.replace(new RegExp(`(?<![\\w])${escRe(v)}(?![\\w])`, 'g'), '***');
     }
     return s;
   }
 
-  // ===== hẹn giờ + cập nhật file =====
-  // Hẹn lần cập nhật kế tiếp sau ms (lần hẹn sớm hơn được giữ). Sau mỗi lần cập nhật tự hẹn tiếp -> chạy theo chu kỳ.
   _arm(ms) {
     const hold = this._holdUntil - Date.now();
-    if (hold > ms) ms = hold; // đang hoãn (429 / quá nhịp / lỗi mạng) thì dòng mới tới cũng không kéo sớm lại
+    if (hold > ms) ms = hold;
     const due = Date.now() + ms;
     if (this._timer && this._dueAt <= due) return;
     if (this._timer) clearTimeout(this._timer);
@@ -270,13 +267,11 @@ class TelegramLogger {
     this._timer = setTimeout(() => { this._timer = null; this._dueAt = 0; this.flush().catch(() => { }); }, ms);
     if (this._timer.unref) this._timer.unref();
   }
-  // Hoãn hẳn lần cập nhật kế tiếp tới sau ms (thay hẹn giờ cũ)
   _defer(ms) {
     this._holdUntil = Date.now() + ms;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; this._dueAt = 0; }
     this._arm(ms);
   }
-  // File chỉ giữ keepLines dòng mới nhất: bỏ dòng cũ nhất, ghi lại số dòng bỏ
   _trim() {
     const over = this._feed.length - this.keepLines;
     if (over <= 0) return;
@@ -298,29 +293,23 @@ class TelegramLogger {
     return this._sentAt[0] + 60000 - now + 50;
   }
 
-  /**
-   * Cập nhật file lên Telegram (tạo lần đầu, sau đó sửa tại chỗ). Gọi theo nhịp hẹn giờ.
-   *  force  = true (lúc tắt tool / nút "Cập nhật ngay"): bỏ qua giới hạn nhịp + hàng đợi bận
-   *  always = true: cập nhật cả khi log + stats không đổi (chỉ để làm mới giờ "Cập nhật lúc")
-   * Không bao giờ throw.
-   */
   async flush(force = false, always = false) {
     if (this._flushing) return this._flushPromise;
     if (!this._feed.length && !this._dropped) return;
     if (!this.active) { this._clearBuffer(); return; }
     if (!force) {
-      if (this.tg.paused || this.tg.pending > 3) { this._defer(2000); return; } // Telegram đang bận / bị 429 -> giữ log, cập nhật sau
+      if (this.tg.paused || this.tg.pending > 3) { this._defer(2000); return; }
       const wait = this._rateWaitMs();
       if (wait > 0) { this._defer(wait); return; }
     }
     const blocks = this._statsBlocks();
     const sig = this._ver + '|' + blocks.map(b => b.bot + '\n' + b.lines.join('\n')).join('\u0001');
-    if (!always && sig === this._sigSent) { this._arm(this.intervalMs); return; } // không có gì mới -> khỏi sửa, chờ nhịp sau
+    if (!always && sig === this._sigSent) { this._arm(this.intervalMs); return; }
     this._flushing = true;
     this._flushPromise = this._update(blocks, sig).finally(() => {
       this._flushing = false;
       this._flushPromise = null;
-      if (this._feed.length && !this._timer) this._arm(this.intervalMs); // hẹn nhịp kế (đã hẹn sẵn sau lỗi thì giữ nguyên, không kéo sớm lại)
+      if (this._feed.length && !this._timer) this._arm(this.intervalMs);
     });
     return this._flushPromise;
   }
@@ -342,22 +331,20 @@ class TelegramLogger {
       } else {
         this.stats.failed++;
         this._failStreak++;
-        this._defer(Math.min(300000, Math.max(this.intervalMs, 15000) * Math.min(this._failStreak, 20))); // lỗi mạng: thử lại thưa dần (log vẫn nằm trong bộ nhớ)
+        this._defer(Math.min(300000, Math.max(this.intervalMs, 15000) * Math.min(this._failStreak, 20)));
       }
     } catch { /* gửi log không được làm hỏng bot */ }
   }
-  // Cập nhật nốt khi tool tắt: tối đa timeoutMs
   async flushNow(timeoutMs = 3000) {
     let t;
     const work = (async () => {
-      if (this._flushPromise) { try { await this._flushPromise; } catch (e) { dbg('TelegramLogger', e); } } // đang gửi dở thì đợi xong rồi cập nhật phần còn lại
+      if (this._flushPromise) { try { await this._flushPromise; } catch (e) { dbg('TelegramLogger', e); } }
       await this.flush(true);
     })();
     try {
       await Promise.race([work, new Promise(r => { t = setTimeout(r, timeoutMs); if (t.unref) t.unref(); })]);
     } catch (e) { dbg('TelegramLogger', e); } finally { clearTimeout(t); }
   }
-  // Làm mới file NGAY (nút 🔄, "telegram logs now", "/logs now") -> { ok, message }
   async refresh() {
     if (!this.tg || !this.tg.enabled) return { ok: false, message: 'Telegram chưa cấu hình (telegram set <token> → telegram chatid)' };
     if (!this.enabled) return { ok: false, message: 'Log runtime đang TẮT (telegram logs on)' };
@@ -369,7 +356,6 @@ class TelegramLogger {
     return { ok: true, message: 'Đã cập nhật file log' };
   }
 
-  // Gửi 1 file log thử (tin riêng, không đụng file đang cập nhật) qua đúng đường gửi thật — kiểm tra Telegram + định dạng
   async test() {
     if (!this.tg || !this.tg.enabled) return { ok: false, message: 'Telegram chưa cấu hình (telegram set <token> → telegram chatid)' };
     const rec = { t: Date.now(), last: Date.now(), bot: SYSTEM, level: 'ok', msg: 'Kiểm tra log runtime — thấy file này nghĩa là log đã gửi được lên Telegram', n: 1 };
@@ -378,8 +364,6 @@ class TelegramLogger {
     return validId(id) ? { ok: true, message: 'Đã gửi file log thử' } : { ok: false, message: `Gửi thất bại: ${this.tg.lastError || 'không rõ lý do'}` };
   }
 
-  // ===== xem lại theo yêu cầu (/logs, "telegram logs send") =====
-  // Mọi mức (trừ chat người chơi nếu chưa bật), lọc theo bot, n dòng cuối, gửi thành 1 file RIÊNG (tin mới). -> { count, messages }
   async sendRecent({ bot = null, n = 25 } = {}) {
     if (!this.tg || !this.tg.enabled) return { count: 0, messages: 0 };
     n = Math.max(1, Math.min(150, Math.floor(Number(n)) || 25));
@@ -393,7 +377,6 @@ class TelegramLogger {
     return { count: tail.length, messages: validId(id) ? 1 : 0 };
   }
 
-  // ===== dựng file =====
   _timeFmt() {
     let tz = 'Asia/Ho_Chi_Minh';
     try { tz = this._tz() || tz; } catch (e) { dbg('TelegramLogger', e); }
@@ -417,16 +400,14 @@ class TelegramLogger {
     }
     return f;
   }
-  // "14:05:09 [WARN  ] bot-1: nội dung (×3)" — văn bản thuần trong file .txt; mục nhiều dòng thụt vào dưới
   _line(r, fmt = this._timeFmt()) {
     const at = (ms) => { try { return fmt.format(new Date(ms)); } catch { return '--:--:--'; } };
     const [first, ...rest] = r.msg.split('\n');
     let s = `${at(r.t)} [${(LABELS[r.level] || r.level.toUpperCase()).padEnd(6)}] ${r.bot}: ${first}`;
     for (const x of rest) s += `\n           ↳ ${x}`;
-    if (r.n > 1) s += (r.last || r.t) - r.t >= 60000 ? ` (×${r.n} · tới ${at(r.last)})` : ` (×${r.n})`; // lặp kéo dài: ghi cả giờ lặp gần nhất
+    if (r.n > 1) s += (r.last || r.t) - r.t >= 60000 ? ` (×${r.n} · tới ${at(r.last)})` : ` (×${r.n})`;
     return s;
   }
-  // Stats server (scoreboard) của 1 bot, đã làm sạch + che bí mật. [] nếu không có.
   _statsLines(bot) {
     if (bot === SYSTEM) return [];
     let st = null;
@@ -435,7 +416,6 @@ class TelegramLogger {
     const raw = Array.isArray(st) ? st : [...(st.title ? [`Scoreboard: ${st.title}`] : []), ...(st.lines || [])];
     return raw.map(x => this._clean(x).replace(/\n+/g, ' ')).filter(Boolean).slice(0, MAX_STAT_LINES);
   }
-  // Stats của mọi bot (hoặc chỉ bot `only`): [{ bot, lines }] — bot hiện có (botIds) + bot đã có log trong file; bỏ bot ngoài bộ lọc
   _statsBlocks(only = null) {
     let ids = [];
     try { ids = (this._botIds() || []).filter(x => x !== undefined && x !== null).map(String); } catch { ids = []; }
@@ -452,7 +432,6 @@ class TelegramLogger {
     return out;
   }
   _fileName(bot) { return bot ? `log_${String(bot).replace(/[^\w.-]+/g, '_').slice(0, 60) || SYSTEM}.txt` : FILE_NAME; }
-  // -> { name, text, caption }.  live=true: file chính (ghi chu kỳ tự cập nhật + dòng đã bỏ); live=false: ảnh chụp theo yêu cầu (/logs, test)
   _build(recs, blocks, dropped, { live = false, bot = null } = {}) {
     const fmt = this._timeFmt(), dfmt = this._dateFmt();
     const now = new Date();
@@ -482,10 +461,10 @@ class TelegramLogger {
     const errs = recs.filter(r => r.level === 'err').reduce((t, r) => t + r.n, 0);
     const warns = recs.filter(r => r.level === 'warn').reduce((t, r) => t + r.n, 0);
     let caption = live
-      ? `📜 <b>Log runtime</b> · ${nBots} bot${hasSys ? ' + hệ thống' : ''} · ${lines} dòng · 🔄 mỗi ${every} · ${clock}`
-      : `📜 <b>${escapeHtml(bot || 'Log runtime')}</b> · ${lines} dòng · ${clock}`;
-    if (errs) caption += ` · ❌ ${errs}`;
-    if (warns) caption += ` · ⚠️ ${warns}`;
+      ? `\u{1F4DC} <b>Log runtime</b> · ${nBots} bot${hasSys ? ' + hệ thống' : ''} · ${lines} dòng · \u{1F504} mỗi ${every} · ${clock}`
+      : `\u{1F4DC} <b>${escapeHtml(bot || 'Log runtime')}</b> · ${lines} dòng · ${clock}`;
+    if (errs) caption += ` · \u{274C} ${errs}`;
+    if (warns) caption += ` · \u{26A0}\u{FE0F} ${warns}`;
     return { name: this._fileName(bot), text: out.join('\n') + '\n', caption };
   }
 }

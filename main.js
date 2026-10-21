@@ -637,6 +637,16 @@ async function shutdown(code = 0) {
                   if (ok) logger.success('Đã gửi test, kiểm tra kênh Discord');
                   else logger.error('Gửi thất bại — kiểm tra lại URL');
                 });
+              } else if (args[0] === 'preview') {
+                if (!notifier.enabled) { logger.warn('Chưa cấu hình webhook — dùng: webhook set <url>'); break; }
+                const onlyKey = args[1] ? String(args[1]).trim() : null;
+                cliSpinner.start('Đang gửi bộ mẫu preview Discord...');
+                notifier.preview({ onlyKey }).then(res => {
+                  cliSpinner.stop();
+                  if (res && res.total > 0 && res.sent > 0) logger.success(`Đã gửi ${res.sent}/${res.total} mẫu embed lên kênh Discord`);
+                  else if (onlyKey) logger.warn(`Không tìm thấy mẫu cho sự kiện "${onlyKey}"`);
+                  else logger.error('Gửi preview thất bại — kiểm tra lại URL webhook');
+                });
               } else if (args[0] === 'mention' || args[0] === 'tag') {
                 const v = args.slice(1).join(' ').trim();
                 if (!v) {
@@ -667,7 +677,7 @@ async function shutdown(code = 0) {
                   logger.success('Đã đặt loại sự kiện: ' + list.join(', '));
                 }
               } else {
-                logger.info('Usage: webhook set <url> | webhook test | webhook off | webhook events [a,b,c]');
+                logger.info('Usage: webhook set <url> | webhook test | webhook preview [sự_kiện] | webhook off | webhook events [a,b,c]');
                 logger.info('Trạng thái: ' + (notifier.enabled ? 'BẬT' : 'TẮT'));
               }
               break;
