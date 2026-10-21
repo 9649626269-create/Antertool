@@ -6,7 +6,7 @@ const EnvironmentDetector = require('../core/EnvironmentDetector');
 const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
-const DiscordTheme = require('../core/DiscordTheme');
+let DiscordTheme; try { DiscordTheme = require('../core/DiscordTheme'); } catch { DiscordTheme = Notifier.THEME; }
 const TelegramControl = require('../core/TelegramControl');
 const NotificationCenter = require('../core/NotificationCenter');
 const RevenueTracker = require('../core/RevenueTracker');

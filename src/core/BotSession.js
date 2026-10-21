@@ -16,7 +16,7 @@ const RevenueTracker = require('./RevenueTracker');
 const TeleportWatch = require('./TeleportWatch');
 const ScriptRunner = require('./ScriptRunner');
 const Notifier = require('./Notifier');
-const DiscordTheme = require('./DiscordTheme');
+let DiscordTheme; try { DiscordTheme = require('./DiscordTheme'); } catch { DiscordTheme = Notifier.THEME; }
 const { anglesTo, aimCheck, EYE_STAND } = require('./VectorUtil');
 const { resolvePlayerPose, describePose, supportsPoseMeta } = require('./MotionUtil');
 const SG = require('./SpawnMonitor');
