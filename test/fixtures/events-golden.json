@@ -1,0 +1,176 @@
+{
+  "disconnect": {
+    "text": "✗ <b>Mất kết nối</b> · <b>bot-1</b> · 05:13:20\nLý do: \"Đã xảy ra lỗi nội bộ…\"\nĐã online: 3h12m · Kế hoạch: tự kết nối lại sau 15s (lần 1/5)\nĐang làm lúc đó: Bán lồng 3/5 (vòng #128)",
+    "keyboard": [
+      [
+        {
+          "text": "↻ Kết nối lại",
+          "callback_data": "p:39kf0:rc"
+        },
+        {
+          "text": "■ Dừng bot",
+          "callback_data": "p:39kf0:b0"
+        }
+      ]
+    ],
+    "level": "crit"
+  },
+  "reconnectFailed": {
+    "text": "✗ <b>Hết lượt kết nối lại</b> · <b>bot-1</b> · 05:13:20\nSố lần thử: 5/5\nLỗi cuối: ECONNREFUSED\nProxy: socks5://***:***@1.2.3.4:1080",
+    "keyboard": [
+      [
+        {
+          "text": "↻ Thử lại",
+          "callback_data": "p:39kf0:rc"
+        },
+        {
+          "text": "Đổi proxy",
+          "callback_data": "p:39kf0:px"
+        }
+      ]
+    ],
+    "level": "crit"
+  },
+  "reconnectRecovered": {
+    "text": "✓ <b>Đã kết nối lại ổn định</b> · <b>bot-1</b> · 05:13:20\nSau số lần thử: 2\nThời gian gián đoạn: 32s",
+    "keyboard": null,
+    "level": "ok"
+  },
+  "connected": {
+    "text": "✓ <b>Đã vào server</b> · <b>bot-1</b> · 05:13:20\nĐăng nhập: OK\nAntibot: OK\nMenu: OK\nThời gian: 3.2s",
+    "keyboard": null,
+    "level": "ok"
+  },
+  "featuresReady": {
+    "text": "✓ <b>Tính năng sẵn sàng</b> · <b>bot-1</b> · 05:13:20\nAutoSell: OK (5 lồng)\nProtect: OK (mức 2)",
+    "keyboard": [
+      [
+        {
+          "text": "► Bán ngay",
+          "callback_data": "p:39kf0:sn"
+        }
+      ]
+    ],
+    "level": "ok"
+  },
+  "sellCycle": {
+    "text": "◇ <b>Xong vòng bán</b> · <b>bot-1</b> · 05:13:20\nSố lồng: 5/5\nThu về: +250K\nVòng kế tiếp: sau 05:00",
+    "keyboard": null,
+    "level": "info"
+  },
+  "sellFailed": {
+    "text": "✗ <b>Bán lồng thất bại</b> · <b>bot-1</b> · 05:13:20\nLỗi lồng: Lồng #2 không mở được GUI\nSố lần thử /home: 10/10",
+    "keyboard": [
+      [
+        {
+          "text": "► Thử bán lại",
+          "callback_data": "p:39kf0:sn"
+        },
+        {
+          "text": "■ Dừng bán",
+          "callback_data": "p:39kf0:s0"
+        }
+      ]
+    ],
+    "level": "crit"
+  },
+  "homeReturn": {
+    "text": "▲ <b>Lệch vị trí / đã về home</b> · <b>bot-1</b> · 05:13:20\nToạ độ lệch: x:140 y:64 z:-20 (lệch 28m)\nLệnh đã gõ: /home treolong",
+    "keyboard": [
+      [
+        {
+          "text": "► Gõ /home ngay",
+          "callback_data": "p:39kf0:h"
+        }
+      ]
+    ],
+    "level": "warn"
+  },
+  "spawnerThreat": {
+    "text": "✗ <b>Mối đe dọa gần lồng</b> · <b>bot-1</b> · 05:13:20\nLoại: người chơi (Alex_VN) · cách 12 block · lồng 3/5\nBot đang: tạm dừng bán, xử lý lồng 3",
+    "keyboard": [
+      [
+        {
+          "text": "◈ Nâng mức bảo vệ",
+          "callback_data": "p:39kf0:pu"
+        },
+        {
+          "text": "≡ Xem trạng thái",
+          "callback_data": "p:39kf0:r"
+        }
+      ]
+    ],
+    "level": "crit"
+  },
+  "protectResult": {
+    "text": "✓ <b>Kết quả bảo vệ lồng</b> · <b>bot-1</b> · 05:13:20\nKết quả: Đã đào an toàn 2/2 lồng\nThời gian: 4.1s",
+    "keyboard": null,
+    "level": "ok"
+  },
+  "autoSell": {
+    "text": "◇ <b>Túi đầy</b> · <b>bot-1</b> · 05:13:20\nSố ô đầy: 36/36\nMacro đã chạy: autosell",
+    "keyboard": null,
+    "level": "info"
+  },
+  "moneyGoal": {
+    "text": "✓ <b>Đủ mục tiêu tiền</b> · <b>bot-1</b> · 05:13:20\nSố dư: 50M / 50M\nMacro đã chạy: chuyen_tien",
+    "keyboard": null,
+    "level": "ok"
+  },
+  "autoOrder": {
+    "text": "◇ <b>Báo cáo AutoOrder</b> · <b>bot-1</b> · 05:13:20\nĐã giao: 64 stack\nThu về: +12.8M\nUptime: 2h 15m",
+    "keyboard": null,
+    "level": "info"
+  },
+  "schedule": {
+    "text": "◇ <b>Lịch tự out/vào</b> · 05:13:20\nGiờ nghỉ: 23:00\nVào lại lúc: 06:00\nSố bot: 4",
+    "keyboard": [
+      [
+        {
+          "text": "✗ Huỷ lịch",
+          "callback_data": "p:all:sc0"
+        }
+      ]
+    ],
+    "level": "info"
+  },
+  "macro": {
+    "text": "◇ <b>Macro</b> · <b>bot-1</b> · 05:13:20\nMacro: mualong\nBước: 3/8\nTrạng thái: Đang chạy",
+    "keyboard": [
+      [
+        {
+          "text": "■ Dừng macro",
+          "callback_data": "p:39kf0:ms"
+        }
+      ]
+    ],
+    "level": "info"
+  },
+  "proxy": {
+    "text": "▲ <b>Proxy</b> · <b>bot-1</b> · 05:13:20\nChuyển đổi: socks5://***:***@1.1.1.1:1080 → socks5://***:***@2.2.2.2:1080",
+    "keyboard": null,
+    "level": "warn"
+  },
+  "posLost": {
+    "text": "▲ <b>Mất vị trí treo</b> · <b>bot-1</b> · 05:13:20\nToạ độ hiện tại: x:0 y:80 z:0\nSố lần thử: 2/5",
+    "keyboard": [
+      [
+        {
+          "text": "► Gõ /home",
+          "callback_data": "p:39kf0:h"
+        }
+      ]
+    ],
+    "level": "warn"
+  },
+  "system": {
+    "text": "◇ <b>Hệ thống</b> · 05:13:20\nPhiên bản: 1.0.0\nSố bot: 2\nTính năng: Telegram, FileLog",
+    "keyboard": null,
+    "level": "info"
+  },
+  "revenue": {
+    "text": "◇ <b>Doanh thu</b> · <b>bot-1</b> · 05:13:20\nTổng thu nhập: $12.4M\nTốc độ: $1.1M/ngày",
+    "keyboard": null,
+    "level": "info"
+  }
+}

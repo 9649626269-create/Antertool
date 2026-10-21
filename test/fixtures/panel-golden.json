@@ -1,0 +1,23 @@
+{
+  "text": "◆ <b>Auto sell spawner</b>\nBot: <b>bot-1</b> · Acc: <b>Steve</b>\n● Tình trạng: <b>ổn định</b>\n► Đang làm: Bán lồng 3/5 (vòng #128) ▰▰▰▱▱ · 14s\n» Kế tiếp: vòng bán sau 02:40\n◈ Protect: mức 2 Cân bằng · 0 mối đe dọa · quét 3s trước\n◎ x:120 y:64 z:-48 · ping 42ms · proxy: có\n──────────────────\n$ Tổng <b>12.4M</b> · ↑ <b>1.1M</b>/ngày · 1h <b>250K</b> · Δ +<b>250K</b> <i>(12s trước)</i>\nUptime <b>3h 12m 00s</b>\n≡ Gần đây\n<blockquote expandable> 05:13:17 ✓ Bán xong 5/5 lồng +250K\n 05:13:13 ✓ Lồng 4/5 OK\n 05:10:25 ▲ /home treolong (lệch vị trí) → đã về</blockquote>\nCập nhật 05:13:20",
+  "keyboard": [
+    [
+      {
+        "text": "↻ Làm mới",
+        "callback_data": "p:39kf0:r"
+      },
+      {
+        "text": "■ Tắt bán",
+        "callback_data": "p:39kf0:s0"
+      },
+      {
+        "text": "◈ Protect",
+        "callback_data": "p:39kf0:p0"
+      },
+      {
+        "text": "≡ Menu bot",
+        "callback_data": "p:39kf0:m"
+      }
+    ]
+  ]
+}

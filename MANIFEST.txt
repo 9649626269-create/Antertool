@@ -1,0 +1,35 @@
+MANIFEST — Antertool Telegram Notification & Remote Control Rebuild (v2)
+Base build: antertool-theme update.zip (antares-manager@1.0.0)
+Total staged repo files: 30 (18 modified, 12 new)
+
+Files:
+[MODIFIED] .env.example — Thêm các biến môi trường Telegram v2 (TELEGRAM_ADMINS, TELEGRAM_ALLOWED_USERS, TELEGRAM_SYMBOLS, ...)
+[MODIFIED] README.md — Tài liệu tiếng Việt về cài đặt Telegram v2, RBAC, bảng lệnh, chính sách ký hiệu, xử lý lỗi và QA thủ công
+[MODIFIED] config.example.json — Thêm các khoá cấu hình Telegram v2 kèm giá trị mặc định an toàn
+[MODIFIED] main.js — Thêm các lệnh CLI phụ trợ telegram (users, mute, control), che token và gắn thông báo khởi động/tắt/lỗi
+[MODIFIED] src/core/AutoLoginFlow.js — Gắn hook chỉ đọc setActivity/endActivity/emitEvent cho luồng tự đăng nhập, antibot và mở menu
+[MODIFIED] src/core/AutoOrder.js — Chuyển thông báo báo cáo định kỳ AutoOrder qua NotificationCenter.emit
+[MODIFIED] src/core/AutoSellHandler.js — Thêm getter chỉ đọc tiến độ bán và hook setActivity/endActivity cho từng lồng
+[MODIFIED] src/core/BeggarGuard.js — Ghi nhận sự kiện chặn người ăn xin vào lịch sử hoạt động của bot
+[NEW] src/core/BotActivity.js — Mô hình trạng thái hoạt động đang chạy, hàng đợi vòng lịch sử 30 mục, chụp snapshot 60s và kiểm tra mâu thuẫn/treo
+[MODIFIED] src/core/BotSession.js — Tích hợp BotActivity, chuyển _notify qua NotificationCenter, thêm getter chỉ đọc cho bảng & lệnh Telegram
+[MODIFIED] src/core/ConfigValidator.js — Kiểm tra schema, chuẩn hoá thứ tự ưu tiên (env > config.json > mặc định) và di trú idempotent cho các khoá Telegram v2
+[MODIFIED] src/core/HelpCatalog.js — Bổ sung danh sách lệnh Telegram vào phân khu notify và hàm xuất danh sách setMyCommands (không dùng emoji)
+[NEW] src/core/NotificationCenter.js — Trung tâm thông báo hợp nhất cho Telegram & Discord (19 sự kiện, dedup ×N, storm digest, mute vs crit)
+[MODIFIED] src/core/ReconnectHandler.js — Thêm getter chỉ đọc lần thử kết nối lại và hook hoạt động kết nối lại
+[MODIFIED] src/core/ScriptRunner.js — Thêm getter chỉ đọc bước macro hiện tại và hook setActivity/endActivity cho macro
+[NEW] src/core/Symbols.js — Bảng ký hiệu chuẩn duy nhất cho Telegram (unicode & ascii fallback), hoàn toàn không có emoji
+[NEW] src/core/TelegramControl.js — Bộ xử lý lệnh & nút bấm điều khiển từ xa qua Telegram kèm RBAC, xác nhận 30s, denylist, rate-limit & khoá tạm
+[MODIFIED] src/core/TelegramLogger.js — Mở rộng _redact che token/URL API, proxy scheme://***:***@, lệnh mật khẩu và chuyển ký hiệu mã nguồn sang escape
+[MODIFIED] src/core/TelegramNotifier.js — Hàng đợi ưu tiên P0-P5 giới hạn 200 mục, xử lý đủ bảng mã lỗi Telegram (401/403/400/409/429/5xx), TTL theo Date header
+[MODIFIED] src/core/TelegramPanel.js — Bảng Auto sell spawner v2, các nút theo trạng thái, mã bot 5 ký tự base36 ổn định, /status, /bots, menu bot và /help
+[NEW] src/core/TextSafe.js — Làm sạch chuỗi ngoài (NFC, gỡ mã màu §x, gỡ bidi/control/emoji, cắt chuỗi an toàn theo code point, escape HTML)
+[MODIFIED] src/services/BotManager.js — Kết nối NotificationCenter, TelegramControl, lịch làm mới _tgTick ưu tiên dirty-first + lượng tử hoá 5s, heartbeat & flush khi tắt
+[NEW] test/activity-panel.test.js — Kiểm tra đơn vị cho BotActivity, TelegramPanel, các nút theo trạng thái, mã định danh ngắn và golden snapshot của bảng
+[NEW] test/fixtures/events-golden.json — Golden snapshot cho toàn bộ 19 mẫu tin nhắn sự kiện Telegram
+[NEW] test/fixtures/panel-golden.json — Golden snapshot cho bảng Auto sell spawner v2 và bàn phím inline
+[NEW] test/no-emoji.test.js — Kiểm tra chính sách không emoji (quét bảng ký hiệu, dữ liệu thù địch ở unicode/ascii, quét mã nguồn và fuzz Unicode)
+[NEW] test/notification-center.test.js — Kiểm tra NotificationCenter, dedup, storm digest, mute, hàng đợi ưu tiên, bảng mã lỗi Telegram và tương thích Discord
+[NEW] test/simulation.test.js — Bộ mô phỏng 5 giai đoạn vòng đời bot và kiểm tra toàn bộ lệnh mục 9 qua cả đường /command lẫn nút bấm
+[NEW] test/telegram-control.test.js — Kiểm tra điều khiển từ xa TelegramControl, RBAC, xác nhận 30s, denylist, rate-limit/lockout, redaction và chaos test
+[MODIFIED] test/telegram.test.js — Cập nhật bộ kiểm tra tích hợp Telegram hiện có sang bảng ký hiệu và bố cục bảng v2
