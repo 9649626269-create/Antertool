@@ -43,35 +43,7 @@ const STATE_FILE = path.join(HOME, 'state.json'); // { sha, depsHash, updatedAt 
 const API = (process.env.GH_API || 'https://api.github.com').replace(/\/+$/, ''); // GH_API chỉ dùng để test
 const MAX_DOWNLOAD = 100 * 1024 * 1024;
 
-// Zero-dependency ANSI capability & structured logging for standalone load.js
-function isColorEnabled(stream = process.stdout) {
-  if (typeof process.env.NO_COLOR === 'string' && process.env.NO_COLOR.length > 0) return false;
-  if (typeof process.env.FORCE_COLOR === 'string' && process.env.FORCE_COLOR.length > 0) {
-    return process.env.FORCE_COLOR !== '0' && process.env.FORCE_COLOR.toLowerCase() !== 'false';
-  }
-  if (process.env.TERM === 'dumb') return false;
-  return Boolean(stream && stream.isTTY);
-}
-
-function fmtLoaderLog(level, msg, stream = process.stdout) {
-  const d = new Date();
-  const ts = `[${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}]`;
-  const color = isColorEnabled(stream);
-  if (!color) {
-    const badge = level === 'err' ? '[ERROR  ]' : (level === 'warn' ? '[WARNING]' : (level === 'ok' ? '[SUCCESS]' : '[INIT   ]'));
-    return `${ts} ${badge} [load] ${msg}`;
-  }
-  const tsCol = `\x1b[90m${ts}\x1b[0m`;
-  const scopeCol = `\x1b[96m[load]\x1b[0m`;
-  let badgeCol = `\x1b[1;96m[INIT   ]\x1b[0m`;
-  if (level === 'ok') badgeCol = `\x1b[1;92m[SUCCESS]\x1b[0m`;
-  else if (level === 'warn') badgeCol = `\x1b[1;93m[WARNING]\x1b[0m`;
-  else if (level === 'err') badgeCol = `\x1b[1;91m[ERROR  ]\x1b[0m`;
-  return `${tsCol} ${badgeCol} ${scopeCol} \x1b[97m${msg}\x1b[0m`;
-}
-
-const log = (m, level = 'info') => console.log(fmtLoaderLog(level, m, process.stdout));
-const logErr = (m) => console.error(fmtLoaderLog('err', m, process.stderr));
+const log = m => console.log('[load] ' + m);
 const rmrf = p => { try { fs.rmSync(p, { recursive: true, force: true }); } catch {} };
 
 function settings() {
@@ -249,7 +221,7 @@ async function install(info) {
   fs.renameSync(stage, CODE);
   rmrf(CODE + '.old');
   writeState({ sha: latest, updatedAt: new Date().toISOString() });
-  log(`Đã cập nhật xong (${n} file).`, 'ok');
+  log(`Đã cập nhật xong (${n} file).`);
 }
 
 let forceUpdate = false; // true khi người dùng gõ "update" trong tool (thoát mã 42) -> bỏ qua ANTER_AUTO_UPDATE=0
@@ -257,23 +229,23 @@ async function sync() {
   let info;
   const forced = forceUpdate; forceUpdate = false;
   if (hasCode() && !settings().autoUpdate && !forced) {
-    log('Tự cập nhật đang TẮT (ANTER_AUTO_UPDATE=0) → chạy bản đã tải. Gõ "update" trong tool để cập nhật thủ công.', 'warn');
+    log('Tự cập nhật đang TẮT (ANTER_AUTO_UPDATE=0) → chạy bản đã tải. Gõ "update" trong tool để cập nhật thủ công.');
     return;
   }
   try {
     info = await checkForUpdate();
   } catch (e) {
-    if (hasCode()) { log(`Không kết nối được GitHub (${e.message}) → chạy bản đã tải trước đó.`, 'warn'); return; }
+    if (hasCode()) { log(`Không kết nối được GitHub (${e.message}) → chạy bản đã tải trước đó.`); return; }
     throw new Error(`Chưa có code trên máy và không tải được từ GitHub: ${e.message}`);
   }
-  if (!info.available) { log(`Đang là bản mới nhất (${info.latest.slice(0, 7)}).`, 'ok'); return; }
-  log(info.current ? `Có bản mới: ${info.message}` : 'Lần đầu chạy: tải code từ GitHub (có thể mất vài phút để cài thư viện)...', 'info');
+  if (!info.available) { log(`Đang là bản mới nhất (${info.latest.slice(0, 7)}).`); return; }
+  log(info.current ? `Có bản mới: ${info.message}` : 'Lần đầu chạy: tải code từ GitHub (có thể mất vài phút để cài thư viện)...');
   try {
     await install(info);
   } catch (e) {
     rmrf(path.join(HOME, 'code.new'));
     if (!hasCode() && fs.existsSync(CODE + '.old')) { rmrf(CODE); fs.renameSync(CODE + '.old', CODE); } // khôi phục nếu đang thay dở
-    if (hasCode()) { log(`Cập nhật lỗi (${e.message}) → chạy bản cũ.`, 'warn'); return; }
+    if (hasCode()) { log(`Cập nhật lỗi (${e.message}) → chạy bản cũ.`); return; }
     throw e;
   }
 }
@@ -286,7 +258,7 @@ function launch() {
     stdio: 'inherit',
     env: { ...process.env, ANTER_LOADER: __filename, ANTER_DATA_DIR: DATA_DIR }, // để lệnh "update" trong tool gọi lại load.js
   });
-  child.on('error', e => { logErr('Không chạy được main.js: ' + e.message); process.exit(1); });
+  child.on('error', e => { console.error('[load] Không chạy được main.js: ' + e.message); process.exit(1); });
   child.on('exit', code => {
     child = null;
     if (code === 42) { forceUpdate = true; return start(); } // yêu cầu cập nhật + khởi động lại
@@ -299,18 +271,18 @@ function ensureConfig() {
   const f = path.join(DATA_DIR, 'config.json');
   if (fs.existsSync(f)) return;
   fs.writeFileSync(f, JSON.stringify({ bots: [] }, null, 2));
-  log('Chưa có config.json → đã tạo file trống.', 'ok');
+  log('Chưa có config.json → đã tạo file trống.');
 }
 
 async function start() {
-  try { await sync(); ensureConfig(); } catch (e) { logErr(e.message); process.exit(1); }
+  try { await sync(); ensureConfig(); } catch (e) { console.error('[load] ' + e.message); process.exit(1); }
   launch();
 }
 
 module.exports = { checkForUpdate, untar };
 
 if (require.main === module) {
-  if (parseInt(process.versions.node, 10) < 18) { logErr('Cần Node.js >= 18 (đang dùng ' + process.versions.node + ')'); process.exit(1); }
+  if (parseInt(process.versions.node, 10) < 18) { console.error('[load] Cần Node.js >= 18 (đang dùng ' + process.versions.node + ')'); process.exit(1); }
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { if (child) child.kill(sig); else process.exit(0); });
   start();
 }

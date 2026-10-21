@@ -89,6 +89,12 @@ function validateConfig(cfg) {
   if (cfg.dashboardToken !== undefined && !isStr(cfg.dashboardToken)) errors.push('dashboardToken phải là string');
   if (cfg.useProxy !== undefined && !isBool(cfg.useProxy)) errors.push('useProxy phải là boolean');
   if (cfg.timezone !== undefined && !isStr(cfg.timezone)) errors.push('timezone phải là string');
+  if (cfg.noColor !== undefined && !isBool(cfg.noColor)) errors.push('noColor phải là boolean');
+  if (cfg.plain !== undefined && !isBool(cfg.plain)) errors.push('plain phải là boolean');
+  if (cfg.ascii !== undefined && !isBool(cfg.ascii)) errors.push('ascii phải là boolean');
+  if (cfg.color !== undefined && !isBool(cfg.color)) errors.push('color phải là boolean');
+  if (cfg.unicode !== undefined && !isBool(cfg.unicode)) errors.push('unicode phải là boolean');
+  if (cfg.ui !== undefined && !isObj(cfg.ui)) errors.push('ui phải là object');
 
   // settings
   if (cfg.settings !== undefined) {

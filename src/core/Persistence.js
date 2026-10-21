@@ -3,7 +3,8 @@ const fs = require('fs');
 const { dbg } = require('./debug');
 const path = require('path');
 const { validateConfig } = require('./ConfigValidator');
-const { formatLogEntry } = require('./TuiEngine');
+const { getDefaultRuntime } = require('../ui');
+
 class Persistence {
   constructor(configPath = path.join(process.cwd(), 'config.json')) {
     this._configPath = configPath;
@@ -24,7 +25,7 @@ class Persistence {
       if (!result.ok) {
         const msg = 'Config không hợp lệ:\n- ' + result.errors.join('\n- ');
         if (!process.env.SILENT_CONFIG) {
-          console.error(formatLogEntry({ level: 'warn', scope: 'Persistence', msg }));
+          getDefaultRuntime().logger.warn('[Persistence] ' + msg, { stderr: true });
         }
         // Vẫn load nhưng log lỗi — không chặn startup để tương thích ngược
       }
@@ -32,7 +33,7 @@ class Persistence {
       return this._data;
     } catch (e) {
       if (e && e.code === 'ENOENT') { // chưa có config.json -> khởi tạo rỗng thay vì sập lúc khởi động
-        this.lastValidation = { ok: true, errors: [], missingFile: true };
+        this.lastValidation = { ok: true, errors: [] };
         this._data = { bots: [] };
         return this._data;
       }
@@ -73,7 +74,7 @@ class Persistence {
       this._dirty = false;
     } catch (e) {
       if (!process.env.SILENT_CONFIG) {
-        console.error(formatLogEntry({ level: 'err', scope: 'Persistence', msg: `Save error: ${e.message}` }));
+        getDefaultRuntime().logger.error('[Persistence] Save error: ' + e.message, { stderr: true });
       }
     } finally {
       this._writeLock = false;
