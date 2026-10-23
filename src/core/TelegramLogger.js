@@ -47,7 +47,7 @@ const REDACTIONS = [
   [/(https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)[\w-]+/gi, '$1***'],
   [/(\/(?:dn|dk|login|register|log|reg|l|changepassword|cp)\s+)\S+(?:\s+\S+)?/gi, '$1***'],
   [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/gi, '$1***@'],
-  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
+  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl|omniRouterApiKey)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
 ];
 const STATIC_REDACTIONS = [
   [/(https?:\/\/api\.telegram\.org\/bot)\d{6,12}:[\w-]{20,}/gi, '$1<telegram-token>'],
@@ -55,7 +55,7 @@ const STATIC_REDACTIONS = [
   [/(https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)[\w-]+/gi, '$1***'],
   [/(\/(?:dn|dk|login|register|log|reg|l|changepassword|cp)\s+)\S+(?:\s+\S+)?/gi, '$1***'],
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/gi, '$1***:***@'],
-  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
+  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl|omniRouterApiKey)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
 ];
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
 const MC_COLOR_RE = /§[0-9a-fk-orx]/gi;

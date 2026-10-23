@@ -211,6 +211,9 @@ function validateConfig(cfg) {
   if (cfg.botPassword !== undefined && !isStr(cfg.botPassword)) errors.push('botPassword phải là string');
   if (cfg.webDashboard !== undefined && !isBool(cfg.webDashboard)) errors.push('webDashboard phải là boolean');
   if (cfg.dashboardToken !== undefined && !isStr(cfg.dashboardToken)) errors.push('dashboardToken phải là string');
+  if (cfg.omniRouterApiKey !== undefined && !isStr(cfg.omniRouterApiKey)) errors.push('omniRouterApiKey phải là string');
+  if (cfg.omniRouterBaseUrl !== undefined && !isStr(cfg.omniRouterBaseUrl)) errors.push('omniRouterBaseUrl phải là string');
+  if (cfg.omniRouterModel !== undefined && !isStr(cfg.omniRouterModel)) errors.push('omniRouterModel phải là string');
   if (cfg.useProxy !== undefined && !isBool(cfg.useProxy)) errors.push('useProxy phải là boolean');
   if (cfg.timezone !== undefined && !isStr(cfg.timezone)) errors.push('timezone phải là string');
   if (cfg.noColor !== undefined && !isBool(cfg.noColor)) errors.push('noColor phải là boolean');

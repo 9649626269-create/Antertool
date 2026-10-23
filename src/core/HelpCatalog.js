@@ -19,6 +19,8 @@ const SECTIONS = [
       { name: 'delbot', usage: 'delbot <id>', desc: 'xoá bot khỏi danh sách' },
       { name: 'cmd', usage: 'cmd <id> <lệnh>', desc: 'gửi lệnh tới một bot (xem các lệnh bên dưới)' },
       { name: 'cmdall', usage: 'cmdall <lệnh>', desc: 'gửi lệnh tới TẤT CẢ bot đang online' },
+      { name: 'ai', usage: 'ai set <api_key> [url] [model] | ai status | ai test | ai off', desc: 'cấu hình khoá API OmniRouter cho trợ lý AI-Anter' },
+      { name: 'ai', usage: 'ai <yêu cầu> | Dev: <yêu cầu>', desc: 'nhờ AI-Anter điều khiển dàn bot bằng tiếng Việt (vd: Dev: khởi động 2 bot số 1 và 2)' },
     ],
     bot: [
       { name: 'checkstats', usage: 'checkstats <người chơi>', desc: 'xem stats của người chơi khác: gõ /stats <tên>, đọc GUI, làm sạch tên + lore, bỏ item trang trí' },
@@ -151,6 +153,7 @@ const SECTIONS = [
 
 // Danh sách lệnh đăng ký với BotFather / setMyCommands (không có emoji)
 const TELEGRAM_BOT_COMMANDS = Object.freeze([
+  { command: 'ai', description: 'Ra lệnh cho AI-Anter điều khiển dàn bot bằng tiếng Việt' },
   { command: 'status', description: 'Tổng quan trạng thái và doanh thu cả dàn bot' },
   { command: 'bots', description: 'Danh sách bot và nút mở menu điều khiển' },
   { command: 'panel', description: 'Gửi bảng Auto sell spawner' },
@@ -198,6 +201,7 @@ const COMMAND_ALIASES = {
   tg: 'telegram',
   system: 'sys',
   logdir: 'filelog',
+  omnirouter: 'ai',
   quit: 'exit',
   q: 'exit',
   e: 'exit',

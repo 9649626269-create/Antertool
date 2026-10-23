@@ -560,6 +560,20 @@ class TelegramControl {
         return this._cmdRawAll(ev, role, parts.join(' '), now);
       case 'diag':
         return this._cmdDiag(now);
+      case 'ai': {
+        const promptText = parts.join(' ').trim();
+        if (!promptText) {
+          return { code: 'INVALID_ARG', text: `${sym('warn')} Cú pháp: <code>/ai &lt;yêu cầu điều khiển&gt;</code> (ví dụ: <code>/ai khởi động 2 bot số 1 và 2</code>)` };
+        }
+        this._audit(ev, role, 'ai', promptText);
+        const res = await this.mgr.askAi(promptText);
+        const refreshIds = (this.mgr.bots || []).map(b => String(b.cfg.id));
+        return {
+          code: res.ok ? 'OK' : 'INVALID_ARG',
+          text: `${res.ok ? sym('ok') : sym('warn')} <b>${escapeHtml(res.reply)}</b>`,
+          refresh: refreshIds,
+        };
+      }
       default:
         return { code: 'INVALID_ARG', text: `${sym('warn')} Không rõ lệnh <code>/${escapeHtml(sanitizeExternal(cmd, { max: 32 }))}</code>. Gõ /help để xem danh sách lệnh.` };
     }

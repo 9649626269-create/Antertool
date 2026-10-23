@@ -12,6 +12,9 @@
   "webDashboard": true,
   "fileLogDir": "/sdcard/bot/log",
   "dashboardToken": "",
+  "omniRouterApiKey": "",
+  "omniRouterBaseUrl": "https://omnirouter.li/v1",
+  "omniRouterModel": "gpt-4o-mini",
   "afkTabNoise": false,
   "settingsProfile": "vanilla",
   "settings": {

@@ -363,6 +363,9 @@ function redactSecretsInText(text, knownSecrets = []) {
     /(\/(?:dn|dk|login|register|log|reg|l|changepassword|cp)\s+)\S+(?:\s+\S+)?/gi,
     '$1***'
   );
+  // JSON secret fields & Bearer tokens
+  out = out.replace(/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl|omniRouterApiKey)"\s*:\s*")[^"]*(")/gi, '$1***$2');
+  out = out.replace(/(Bearer\s+)[\w.-]{8,}/gi, '$1***');
   // Proxy URLs with user:pass@
   out = out.replace(
     /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/gi,

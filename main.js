@@ -46,6 +46,8 @@ const ui = createUIRuntime({
     const list = [];
     if (config && config.botPassword) list.push(config.botPassword);
     if (config && config.dashboardToken) list.push(config.dashboardToken);
+    if (config && config.omniRouterApiKey) list.push(config.omniRouterApiKey);
+    if (manager && manager.ai && manager.ai.apiKey) list.push(manager.ai.apiKey);
     if (manager && Array.isArray(manager.bots)) {
       for (const b of manager.bots) {
         if (b?.cfg?.botPassword) list.push(b.cfg.botPassword);
@@ -382,7 +384,8 @@ async function shutdown(code = 0) {
         const input = String(line || '').trim();
         if (manager.hasWebhookPrompt && manager.answerWebhookPrompt(input)) { rl.prompt(); return; }
         if (!input) { rl.prompt(); return; }
-        const parts = input.split(/\s+/);
+        const devPrefixMatch = /^(?:dev|ai-anter|ai)\s*:\s*(.+)$/i.exec(input);
+        const parts = devPrefixMatch ? ['ai', devPrefixMatch[1]] : input.split(/\s+/);
         const cmd = parts[0].toLowerCase();
         const args = parts.slice(1);
         try {
@@ -440,6 +443,71 @@ async function shutdown(code = 0) {
               }).catch(e => {
                 cliSpinner.stop();
                 logger.error('Không kiểm tra được: ' + e.message);
+                if (rl) rl.prompt(true);
+              });
+              return;
+            }
+            case 'ai':
+            case 'omnirouter': {
+              const sub = String(args[0] || '').toLowerCase();
+              const aiUsage = () => {
+                const st = manager.ai.getStatus();
+                logger.info(`AI-Anter (OmniRouter): ${st.enabled ? 'ĐÃ ĐẶT KHOÁ (' + st.maskedKey + ')' : 'CHẾ ĐỘ TẠI CHỖ (chưa đặt khoá API)'} · Model: ${st.model} · Endpoint: ${st.endpoint}`);
+                logger.info('Usage: ai set <api_key> [base_url] [model]  |  ai model <tên_model>  |  ai url <base_url>  |  ai test  |  ai off');
+                logger.info('       ai <yêu cầu điều khiển>              |  Dev: <yêu cầu điều khiển>   (vd: Dev: khởi động 2 bot số 1 và 2)');
+              };
+              if (!sub || sub === 'status') {
+                aiUsage();
+                break;
+              }
+              if (sub === 'set') {
+                if (!args[1]) { logger.warn('Thiếu API key — dùng: ai set <omnirouter_api_key> [base_url] [model]'); break; }
+                const st = manager.setAiConfig({
+                  apiKey: args[1],
+                  baseUrl: args[2] !== undefined ? args[2] : undefined,
+                  model: args[3] !== undefined ? args[3] : undefined,
+                });
+                logger.success(`Đã lưu khoá OmniRouter (${st.maskedKey}) · Model: ${st.model} · Endpoint: ${st.endpoint}`);
+                break;
+              }
+              if (sub === 'url' || sub === 'endpoint') {
+                if (!args[1]) { logger.warn('Usage: ai url <https://omnirouter.li/v1 | http://localhost:20128/v1>'); break; }
+                const st = manager.setAiConfig({ baseUrl: args[1] });
+                logger.success(`Đã đổi OmniRouter URL → ${st.endpoint}`);
+                break;
+              }
+              if (sub === 'model') {
+                if (!args[1]) { logger.warn('Usage: ai model <tên_model>'); break; }
+                const st = manager.setAiConfig({ model: args[1] });
+                logger.success(`Đã đổi OmniRouter model → ${st.model}`);
+                break;
+              }
+              if (sub === 'off' || sub === 'clear') {
+                manager.setAiConfig({ apiKey: '' });
+                logger.warn('Đã xoá khoá API OmniRouter (AI-Anter vẫn nhận lệnh tiếng Việt cơ bản tại chỗ)');
+                break;
+              }
+              if (sub === 'test') {
+                cliSpinner.start('Đang kiểm tra kết nối OmniRouter AI...');
+                manager.ai.testConnection().then(r => {
+                  cliSpinner.stop();
+                  if (r.ok) {
+                    logger.success(r.message);
+                    if (r.reply) logger.ai(r.reply);
+                  } else {
+                    logger.error(r.message);
+                  }
+                  if (rl) rl.prompt(true);
+                });
+                return;
+              }
+              const promptText = args.join(' ').trim();
+              logger.ai('AI-Anter: Đang xử lý yêu cầu...');
+              manager.askAi(promptText).then(res => {
+                logger.ai(res.reply);
+                if (rl) rl.prompt(true);
+              }).catch(err => {
+                logger.error('AI-Anter lỗi: ' + (err.message || err));
                 if (rl) rl.prompt(true);
               });
               return;

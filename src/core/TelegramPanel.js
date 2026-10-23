@@ -503,6 +503,7 @@ function buildTelegramHelpText() {
     `${sBullet} <code>/whoami</code> — xem User ID, Chat ID và quyền hiện tại`,
     '',
     '<b>Điều khiển (chỉ Admin):</b>',
+    `${sBullet} <code>/ai &lt;yêu cầu&gt;</code> — giao việc cho AI-Anter bằng tiếng Việt (vd: <code>/ai khởi động 2 bot số 1 và 2</code>)`,
     `${sBullet} <code>/startbot &lt;bot|all&gt;</code> · <code>/stopbot &lt;bot|all&gt;</code> · <code>/reconnect &lt;bot&gt;</code>`,
     `${sBullet} <code>/sell &lt;bot&gt; on|off|now|status|every &lt;5m&gt;</code> · <code>/sellall on|off|now</code>`,
     `${sBullet} <code>/protect &lt;bot&gt; on|off|status|level &lt;1-4&gt;</code>`,

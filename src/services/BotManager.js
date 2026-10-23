@@ -16,6 +16,7 @@ const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
 const TelegramLogger = require('../core/TelegramLogger');
 const FileLogger = require('../core/FileLogger');
+const AiController = require('../core/AiController');
 const { migrateTelegramConfig, normalizeTelegramConfig } = require('../core/ConfigValidator');
 const { setSymbolSet } = require('../core/Symbols');
 const { readDotEnv } = require('../core/dotenv');
@@ -47,7 +48,7 @@ class BotManager {
     // Log runtime (log từng bot + log hệ thống) -> Telegram: 1 FILE chung cho tất cả bot, sửa tại chỗ theo chu kỳ; gộp dòng lặp, che mật khẩu/token
     this.telegramLogs = new TelegramLogger(this.telegram, {
       tz: () => this._scheduleTz(),
-      secrets: () => this.bots.map(b => b?.cfg?.botPassword).filter(Boolean),
+      secrets: () => [...this.bots.map(b => b?.cfg?.botPassword), this._config?.omniRouterApiKey, this.ai?.apiKey].filter(Boolean),
       botIds: () => this.bots.map(b => b?.cfg?.id).filter(x => x !== undefined && x !== null),
       stats: (id) => this._serverStats(id),
     });
@@ -57,6 +58,7 @@ class BotManager {
       tz: () => this._scheduleTz(),
       redact: s => this.telegramLogs._redact(s),
     });
+    this.ai = new AiController(this);
     this.telegramControl = new TelegramControl(this);
     this.notifications = new NotificationCenter({
       getTelegram: () => this.telegram,
@@ -85,6 +87,7 @@ class BotManager {
     this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
     this._armRevenueSummary();
     this._initTelegram();
+    this._initAi();
     this.autoExe = this._config.autoExe === true || this.autoExe;
     const { env, profile } = this.envDetector.getAdaptiveProfile();
     this.env = env;
@@ -496,6 +499,38 @@ class BotManager {
   }
 
   // ===== Telegram v2: bảng Auto sell spawner + cảnh báo + điều khiển từ xa =====
+  _initAi() {
+    if (!this._config) this._config = {};
+    const base = path.dirname(this.configPath);
+    const dot = readDotEnv(base);
+    const apiKey = process.env.OMNIROUTER_API_KEY || dot.OMNIROUTER_API_KEY || this._config.omniRouterApiKey || '';
+    const baseUrl = process.env.OMNIROUTER_BASE_URL || dot.OMNIROUTER_BASE_URL || this._config.omniRouterBaseUrl || AiController.DEFAULT_BASE_URL;
+    const model = process.env.OMNIROUTER_MODEL || dot.OMNIROUTER_MODEL || this._config.omniRouterModel || AiController.DEFAULT_MODEL;
+    this.ai.configure({ apiKey, baseUrl, model });
+  }
+
+  setAiConfig({ apiKey, baseUrl, model } = {}) {
+    if (!this._config) this._config = {};
+    if (apiKey !== undefined) {
+      this._config.omniRouterApiKey = apiKey || '';
+      this.persistence.set('omniRouterApiKey', apiKey || '');
+    }
+    if (baseUrl !== undefined && baseUrl !== null && baseUrl !== '') {
+      this._config.omniRouterBaseUrl = String(baseUrl).trim();
+      this.persistence.set('omniRouterBaseUrl', this._config.omniRouterBaseUrl);
+    }
+    if (model !== undefined && model !== null && model !== '') {
+      this._config.omniRouterModel = String(model).trim();
+      this.persistence.set('omniRouterModel', this._config.omniRouterModel);
+    }
+    this._initAi();
+    return this.ai.getStatus();
+  }
+
+  async askAi(prompt, opts = {}) {
+    return this.ai.ask(prompt, opts);
+  }
+
   _initTelegram() {
     if (!this._config) this._config = {};
     const hadExplicitRefresh = this._config.telegramRefreshSec !== undefined || process.env.TELEGRAM_REFRESH_SEC !== undefined;
@@ -580,6 +615,7 @@ class BotManager {
     if (token !== undefined) { this._config.telegramToken = token || null; this.persistence.set('telegramToken', token || null); }
     if (chatId !== undefined) { this._config.telegramChatId = chatId ?? null; this.persistence.set('telegramChatId', chatId ?? null); }
     this._initTelegram();
+    this._initAi();
   }
 
   setTelegramOption(key, value) {

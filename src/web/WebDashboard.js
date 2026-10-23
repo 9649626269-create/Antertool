@@ -344,6 +344,24 @@ class WebDashboard {
     this.expressApp.get('/api/server-env', (req, res) => {
       res.json(this.manager.env);
     });
+    this.expressApp.get('/api/ai/status', (req, res) => {
+      res.json(this.manager.ai ? this.manager.ai.getStatus() : { enabled: false });
+    });
+    this.expressApp.post('/api/ai/config', (req, res) => {
+      const { apiKey, baseUrl, model } = req.body || {};
+      const st = this.manager.setAiConfig({ apiKey, baseUrl, model });
+      res.json({ ok: true, status: st });
+    });
+    this.expressApp.post('/api/ai/ask', async (req, res) => {
+      const { prompt } = req.body || {};
+      if (!prompt || !String(prompt).trim()) return res.status(400).json({ ok: false, error: 'prompt required' });
+      try {
+        const result = await this.manager.askAi(String(prompt));
+        res.json(result);
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    });
     this.io.on('connection', sock => {
       const clientIp = sock.handshake?.address || sock.conn?.remoteAddress || 'unknown';
       sock.emit('init', {
@@ -482,6 +500,23 @@ class WebDashboard {
       });
       sock.on('getSystemMetrics', (cb) => {
         if (cb) cb(this.manager.getSystemMetrics());
+      });
+      sock.on('askAi', async ({ prompt } = {}, cb) => {
+        if (!_rateLimit('askAi:' + clientIp, 5)) {
+          if (cb) cb({ ok: false, code: 'RATE_LIMIT', reply: 'AI-Anter: Quá nhiều yêu cầu, vui lòng thử lại sau giây lát.' });
+          return;
+        }
+        try {
+          const res = await this.manager.askAi(prompt);
+          this.io.emit('aiReply', { prompt, ...res });
+          if (cb) cb(res);
+        } catch (e) {
+          if (cb) cb({ ok: false, error: e.message, reply: 'AI-Anter: Lỗi khi xử lý yêu cầu.' });
+        }
+      });
+      sock.on('setAiConfig', (data = {}, cb) => {
+        const status = this.manager.setAiConfig(data);
+        if (cb) cb({ ok: true, status });
       });
       sock.on('startAll', (data, cb) => {
         this.manager.startAll(typeof data?.filterFn === 'function' ? data.filterFn : null);

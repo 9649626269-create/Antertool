@@ -212,7 +212,7 @@ const SECRET_REDACTIONS = [
   [/(https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)[\w-]+/gi, '$1***'],
   [/(\/(?:dn|dk|login|register|log|reg|l|changepassword|cp)\s+)\S+(?:\s+\S+)?/gi, '$1***'],
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/gi, '$1***:***@'],
-  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
+  [/("(?:botPassword|password|telegramToken|dashboardToken|webhookUrl|revenueWebhookUrl|omniRouterApiKey)"\s*:\s*")[^"]*(")/gi, '$1***$2'],
 ];
 
 const MC_COLOR_RE = /§x(?:§[0-9a-fA-F]){6}|§[0-9a-fk-orxA-FK-ORX#]/g;
