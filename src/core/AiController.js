@@ -1,11 +1,18 @@
 'use strict';
 /**
  * AiController.js — Điều phối AI-Anter tích hợp OmniRouter API (OpenAI-compatible /v1/chat/completions)
- * kết hợp bộ phân tích ngôn ngữ tự nhiên tiếng Việt tại chỗ (fallback & thực thi lệnh).
+ * kết hợp bộ phân tích ngôn ngữ tự nhiên tiếng Việt tại chỗ.
  *
- * Ví dụ:
- *   Dev: khởi động 2 bot số 1 và 2
- *   AI-Anter: Đã nhận đang làm — đang khởi động 2 bot: bot-1 (#1), bot-2 (#2).
+ * Luồng xử lý (v2):
+ *   1. LOCAL-FIRST: parser tại chỗ chạy trước. Nếu hiểu chắc chắn (từ khoá + mục tiêu rõ) thì thực thi
+ *      luôn, không gọi API (nhanh, rẻ, không bị LLM "nghĩ bậy").
+ *   2. Chỉ gọi LLM khi local không hiểu, hoặc câu mang tính hỏi/phân tích ("sao bot 2 treo vậy?").
+ *   3. LLM chỉ LẬP KẾ HOẠCH (JSON actions). Hệ thống validate (whitelist type, target tồn tại,
+ *      denylist lệnh) rồi mới thực thi.
+ *   4. Báo cáo dựa trên KẾT QUẢ THẬT. Với log/trạng thái, kết quả được gửi lại LLM để diễn giải.
+ *   5. Câu nhiều thao tác ("bật bán lồng rồi bảo vệ lồng bot 1") được tách thành nhiều action.
+ *   6. Thiếu bot mục tiêu cho lệnh nguy hiểm (stop/reconnect/cmd/macro) => hỏi lại, nhớ ngữ cảnh.
+ *   7. Có lịch sử hội thoại ngắn: hiểu "bot đó", "làm lại đi".
  */
 const http = require('http');
 const https = require('https');
@@ -14,17 +21,95 @@ const { DEFAULT_CMD_DENYLIST } = require('./ConfigValidator');
 const { maskSecret } = require('../ui/text');
 
 const DEFAULT_BASE_URL = 'https://omnirouter.li/v1';
-const DEFAULT_MODEL = 'gpt-4o-mini';
-const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_MODEL = 'agy/gemini-3.8-flash-medium';
+const DEFAULT_TIMEOUT_MS = 25000; // model "medium" có thể suy nghĩ lâu hơn
+const DEFAULT_HISTORY_TURNS = 6;
+const MAX_ACTIONS = 8;
+const PENDING_TTL_MS = 5 * 60 * 1000;
 
-function foldVi(s) {
+const ALLOWED_TYPES = new Set([
+  'greet', 'logs', 'status',
+  'start', 'stop', 'reconnect',
+  'sell_on', 'sell_off', 'sell_now',
+  'protect_on', 'protect_off',
+  'afk_jump', 'afk_walk', 'afk_stop',
+  'home', 'macro', 'stop_macro', 'cmd',
+]);
+// Các lệnh nguy hiểm: không bao giờ mặc định "cả dàn bot" khi thiếu mục tiêu.
+const NEEDS_TARGET = new Set(['stop', 'reconnect', 'cmd', 'macro', 'stop_macro']);
+const INFO_TYPES = new Set(['logs', 'status']);
+
+const CLARIFY_VERB = {
+  stop: 'dừng',
+  reconnect: 'kết nối lại',
+  cmd: 'gửi lệnh cho',
+  macro: 'chạy macro trên',
+  stop_macro: 'dừng macro trên',
+};
+
+const QUESTION_RE = /\?|\b(sao|tai sao|vi sao|co phai|lieu|bao nhieu|la gi|the nao|nhu the nao|bi gi|co nen|hay khong)\b/;
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/* ------------------------------------------------------------------ */
+/* Tiện ích tiếng Việt                                                  */
+/* ------------------------------------------------------------------ */
+
+function foldRaw(s) {
   return String(s || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D')
-    .toLowerCase()
-    .trim();
+    .toLowerCase();
+}
+
+function foldVi(s) {
+  return foldRaw(s).trim();
+}
+
+/**
+ * Phân biệt nghĩa của "dung" khi bỏ dấu:
+ *   "dừng" (có râu ư)         => dừng/stop
+ *   "dùng" / "dụng" (có dấu)   => sử dụng
+ *   "dung" không dấu           => đoán theo từ đứng cạnh
+ */
+function dungSense(rawTok, prev, next) {
+  const nfd = String(rawTok || '').normalize('NFD');
+  if (/\u031b/.test(nfd)) return 'stop';
+  if (/[\u0300\u0301\u0303\u0309\u0323]/.test(nfd)) return 'use';
+  if (['su', 'ap', 'noi', 'nhan', 'hieu', 'tinh', 'cong', 'thuc'].includes(prev)) return 'use';
+  if (['lenh', 'de', 'cmd', 'command', 'chuc', 'nang'].includes(next)) return 'use';
+  return 'stop';
+}
+
+/**
+ * Chuẩn hoá câu để so khớp ý định: bỏ dấu, hạ chữ thường; riêng "dùng/dụng" (sử dụng)
+ * được đổi thành "dung_use" để KHÔNG bị nhầm với "dừng" (stop).
+ */
+function normalizeIntent(raw) {
+  const nfc = String(raw || '').normalize('NFC').toLowerCase();
+  const toks = [];
+  const re = /[\p{L}\p{N}]+/gu;
+  let m;
+  while ((m = re.exec(nfc))) toks.push({ raw: m[0], idx: m.index, f: foldVi(m[0]) });
+
+  let out = '';
+  let last = 0;
+  toks.forEach((t, i) => {
+    out += foldRaw(nfc.slice(last, t.idx));
+    let w = t.f;
+    if (w === 'dung') {
+      const sense = dungSense(t.raw, toks[i - 1]?.f || '', toks[i + 1]?.f || '');
+      w = sense === 'use' ? 'dung_use' : 'dung';
+    }
+    out += w;
+    last = t.idx + t.raw.length;
+  });
+  out += foldRaw(nfc.slice(last));
+  return out.trim();
 }
 
 function isBlockedRawCommand(cmdText, denylist = DEFAULT_CMD_DENYLIST) {
@@ -47,20 +132,33 @@ function buildChatCompletionsUrl(baseUrl) {
   return `${u}/v1/chat/completions`;
 }
 
+/* ------------------------------------------------------------------ */
+/* Tìm bot mục tiêu                                                     */
+/* ------------------------------------------------------------------ */
+
+const NUMLIST = '\\d+(?:\\s*(?:,|va|&|voi|den|toi|-)\\s*\\d+)*';
+
 /**
  * Tìm danh sách bot mục tiêu từ câu lệnh tiếng Việt / tiếng Anh.
- * Hỗ trợ:
- *  - "tất cả", "toàn bộ", "cả dàn", "all"
- *  - "2 bot số 1 và 2", "bot số 1, 2", "bot 1 và 3", "bot 1-3"
- *  - tên định danh trực tiếp ("bot-1", "acc2")
  */
 function resolveTargetBots(text, bots = []) {
   if (!Array.isArray(bots) || !bots.length) return [];
   const raw = String(text || '').trim();
   const folded = foldVi(raw);
 
+  // 1. Tất cả bot
   if (/\b(tat ca|toan bo|ca dan|het tat ca|all)\b/.test(folded)) {
     return [...bots];
+  }
+
+  // 2. "2 bot", "cả 2 bot" (số lượng tổng quát, không có "số 2", "#2" theo sau)
+  const nBotMatch = /\b(?:cua|ca)?\s*(\d+)\s+bots?\b(?!\s+(?:so|thu|#|[0-9]))/.exec(folded);
+  if (nBotMatch) {
+    const count = parseInt(nBotMatch[1], 10);
+    if (Number.isFinite(count) && count > 0) {
+      if (count >= bots.length) return [...bots];
+      return bots.slice(0, count);
+    }
   }
 
   const picked = [];
@@ -72,52 +170,44 @@ function resolveTargetBots(text, bots = []) {
     }
   };
 
-  // 1. Khớp tên ID bot xuất hiện trực tiếp trong câu
-  const lower = raw.toLowerCase();
+  // 3. Khớp đích danh theo ID bot hoặc Username
+  const lowerRaw = raw.toLowerCase();
   for (const b of bots) {
     const id = String(b.cfg?.id || '').toLowerCase();
-    if (!id) continue;
-    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`(?<![a-z0-9_-])${esc}(?![a-z0-9_-])`, 'i');
-    if (re.test(lower)) addBot(b);
-  }
-
-  // 2. Khớp cụm chỉ định bot theo số thứ tự:
-  //    Ví dụ: "khởi động 2 bot số 1 và 2" -> bỏ số lượng "2" trước chữ "bot", lấy "1 và 2" sau chữ "bot"/"số"
-  let targetSegment = folded;
-  const afterBotMatch = /\b(?:\d+\s+)?bots?\s+(?:so\s+|thu\s+|#)?([0-9,\s]+(?:(?:va|&|voi|den|toi|-)\s*[0-9,\s]+)*)/.exec(folded);
-  const afterSoMatch = /\b(?:so|thu|#)\s*([0-9,\s]+(?:(?:va|&|voi|den|toi|-)\s*[0-9,\s]+)*)/.exec(folded);
-  if (afterBotMatch) {
-    targetSegment = afterBotMatch[1];
-  } else if (afterSoMatch) {
-    targetSegment = afterSoMatch[1];
-  }
-
-  // Hỗ trợ dải số: "1-3" hoặc "1 den 3" / "1 toi 3"
-  const rangeRe = /\b(\d+)\s*(?:-|den|toi)\s*(\d+)\b/g;
-  for (const m of targetSegment.matchAll(rangeRe)) {
-    const a = parseInt(m[1], 10);
-    const b = parseInt(m[2], 10);
-    if (Number.isFinite(a) && Number.isFinite(b)) {
-      const start = Math.min(a, b);
-      const end = Math.max(a, b);
-      for (let idx = start; idx <= end; idx++) {
-        if (idx >= 1 && idx <= bots.length) addBot(bots[idx - 1]);
+    const user = String(b.cfg?.username || '').toLowerCase();
+    if (id) {
+      const escId = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(?<![a-z0-9_-])${escId}(?![a-z0-9_-])`, 'i').test(lowerRaw) || foldVi(id) === folded) {
+        addBot(b);
+      }
+    }
+    if (user && user.length >= 3) {
+      const escUser = user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(?<![a-z0-9_-])${escUser}(?![a-z0-9_-])`, 'i').test(lowerRaw)) {
+        addBot(b);
       }
     }
   }
 
-  // Các số thứ tự rời rạc trong cụm target
-  if (afterBotMatch || afterSoMatch) {
-    const numRe = /\b(\d+)\b/g;
-    for (const m of targetSegment.matchAll(numRe)) {
-      const idx = parseInt(m[1], 10);
-      if (idx >= 1 && idx <= bots.length) addBot(bots[idx - 1]);
+  // 4. Số thứ tự: "bot 1 và 2", "bot số 1, 3", "bot 1-3", "bot 1 và bot 3", "#2", "số 2"
+  const segments = [];
+  const afterBotRe = new RegExp(`\\bbots?\\s+(?:so\\s+|thu\\s+|#)?(${NUMLIST})`, 'g');
+  const afterSoRe = new RegExp(`(?:\\b(?:so|thu)|#)\\s*(${NUMLIST})`, 'g');
+  for (const m of folded.matchAll(afterBotRe)) segments.push(m[1]);
+  for (const m of folded.matchAll(afterSoRe)) segments.push(m[1]);
+
+  for (const seg of segments) {
+    for (const m of seg.matchAll(/\b(\d+)\s*(?:-|den|toi)\s*(\d+)\b/g)) {
+      const a = parseInt(m[1], 10);
+      const b = parseInt(m[2], 10);
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        for (let idx = Math.min(a, b); idx <= Math.max(a, b); idx++) {
+          if (idx >= 1 && idx <= bots.length) addBot(bots[idx - 1]);
+        }
+      }
     }
-  } else if (picked.length === 0) {
-    // Nếu người dùng viết "khởi động 1 và 2" (không có chữ bot)
-    const fallbackNums = [...folded.matchAll(/\b(\d+)\b/g)].map(m => parseInt(m[1], 10));
-    for (const idx of fallbackNums) {
+    for (const m of seg.matchAll(/\b(\d+)\b/g)) {
+      const idx = parseInt(m[1], 10);
       if (idx >= 1 && idx <= bots.length) addBot(bots[idx - 1]);
     }
   }
@@ -125,122 +215,230 @@ function resolveTargetBots(text, bots = []) {
   return picked;
 }
 
+/* ------------------------------------------------------------------ */
+/* Tách câu nhiều thao tác                                              */
+/* ------------------------------------------------------------------ */
+
+const VERB_LA = '(?:khoi dong|bat|tat|dung|ngung|ngat|chay|start|stop|restart|reconnect|ket noi|vao lai|xem|doc|bao cao|trang thai|kiem tra|tom tat|ve home|gui|go lenh|macro|ban|bao ve|canh|protect|afk|wafk|cho)';
+const CMD_KW_RE = /\b(?:(?:gui|go|nhap|chay)\s+lenh|gui\s+chat|chat|lenh(?=\s*["'`\/]))\s*/;
+
+/**
+ * Tách "bật bán lồng rồi bảo vệ lồng bot 1", "khởi động bot 1, bật bán lồng"... thành nhiều đoạn.
+ * Không tách bên trong nội dung trong ngoặc kép hoặc phần nội dung lệnh raw.
+ */
+function splitSegments(text) {
+  const nfc = String(text || '').normalize('NFC');
+  let f = foldRaw(nfc);
+  if (f.length !== nfc.length) return [nfc.trim()].filter(Boolean);
+  f = f.replace(/(["'`“‘])([^"'`”’]*)(["'`”’])/g, (m, a, b, c) => a + 'x'.repeat(b.length) + c);
+
+  const cmdM = CMD_KW_RE.exec(f);
+  const cmdIdx = cmdM ? cmdM.index : Infinity;
+
+  const re = new RegExp(
+    `(\\s*(?:[;\\n]+|,?\\s*\\b(?:roi|sau do|xong|then)\\b)\\s*)|((?:\\s*[+,]\\s*|\\s+\\bva\\b\\s+)(?=${VERB_LA}\\b))`,
+    'g'
+  );
+
+  const parts = [];
+  let last = 0;
+  let m;
+  while ((m = re.exec(f))) {
+    if (m[0].length === 0) { re.lastIndex++; continue; }
+    const isHard = m[1] !== undefined;
+    if (!isHard && m.index > cmdIdx) continue; // phần sau "gửi lệnh" là nội dung lệnh
+    parts.push(nfc.slice(last, m.index));
+    last = m.index + m[0].length;
+  }
+  parts.push(nfc.slice(last));
+  return parts.map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * Tách nội dung lệnh raw: "gửi lệnh /sethome cho bot 2" => { cmd: '/sethome', targetText: 'bot 2' }
+ */
+function extractRawCmd(seg) {
+  const nfc = String(seg || '').normalize('NFC');
+  const f = foldRaw(nfc);
+  if (f.length !== nfc.length) return null;
+  const m = CMD_KW_RE.exec(f);
+  if (!m) return null;
+  const before = nfc.slice(0, m.index);
+  const rest = nfc.slice(m.index + m[0].length);
+
+  const q = /^["'`“‘]([^"'`”’]+)["'`”’]\s*(.*)$/.exec(rest);
+  if (q) return { cmd: q[1].trim(), targetText: `${before} ${q[2]}`.trim() };
+
+  const rf = foldRaw(rest);
+  const t = /\s+(?:cho|tren|o|vao)\s+(?=(?:bot\b|tat ca|toan bo|ca dan|all\b|#?\d))/.exec(rf);
+  if (t) {
+    return {
+      cmd: rest.slice(0, t.index).trim(),
+      targetText: `${before} ${rest.slice(t.index + t[0].length)}`.trim(),
+    };
+  }
+  return { cmd: rest.trim(), targetText: before.trim() };
+}
+
+function pickTargets(text, bots, ctx = {}) {
+  const t = resolveTargetBots(text, bots);
+  if (t.length) return { ids: t.map(b => b.cfg.id), explicit: true };
+  const f = foldVi(text);
+  if (ctx.lastTargetIds?.length && /\b(?:bot|con)\s+(?:do|nay|kia|vua roi)\b|\bnhu cu\b/.test(f)) {
+    return { ids: [...ctx.lastTargetIds], explicit: true };
+  }
+  return { ids: [], explicit: false };
+}
+
+/**
+ * Nhận diện MỘT thao tác trong một đoạn câu. Trả về null nếu không hiểu.
+ */
+function classifySegment(seg, bots, ctx = {}) {
+  const raw = String(seg || '').normalize('NFC').trim();
+  if (!raw) return null;
+  const n = normalizeIntent(raw);
+  const mk = (type, arg, text = raw) => ({ type, arg, ...pickTargets(text, bots, ctx) });
+
+  // 0. Gửi lệnh raw (nội dung lệnh giữ nguyên, kiểm tra ĐẦU TIÊN)
+  const rc = extractRawCmd(raw);
+  if (rc && rc.cmd) return mk('cmd', rc.cmd, rc.targetText);
+
+  // 1. Chào hỏi
+  if (/^(xin chao|chao|hello|hi|hey|alo|halo)\b/.test(n) || /\b(ban la ai|em la ai|tro ly)\b/.test(n)) {
+    return { type: 'greet', ids: [], explicit: false };
+  }
+
+  // 2. Tóm tắt log / lịch sử
+  if (/\b(tom tat|noi dung log|xem log|doc log|log cua|nhat ky|lich su)\b/.test(n)) return mk('logs');
+
+  // 3. Trạng thái / báo cáo
+  if (/\b(trang thai|status|tinh hinh|bao cao|doanh thu|kiem tra|danh sach)\b/.test(n)) return mk('status');
+
+  // 4. Autosell_spawn (bán lồng)
+  if (/\b(autosell_spawn|autosell|ban long|auto sell|tu ban)\b/.test(n)
+    || /\b(bat|tat|dung)\s+ban\b/.test(n) || /\bban\s+ngay\b/.test(n)) {
+    let type = 'sell_on';
+    if (/\b(tat(?! ca\b)|dung|ngung|off|stop)\b/.test(n)) type = 'sell_off';
+    else if (/\b(ngay|now|1 vong|mot vong)\b/.test(n)) type = 'sell_now';
+    return mk(type);
+  }
+
+  // 5. Bảo vệ lồng
+  if (/\b(spawnerprotect|protect|bao ve long|canh long)\b/.test(n)) {
+    return mk(/\b(tat(?! ca\b)|dung|ngung|off|stop)\b/.test(n) ? 'protect_off' : 'protect_on');
+  }
+
+  // 6. AFK
+  if (/\b(wafk|afk)\b/.test(n)) {
+    let type = 'afk_jump';
+    if (/\b(tat(?! ca\b)|dung|ngung|off|stop|nghi)\b/.test(n)) type = 'afk_stop';
+    else if (/\b(wafk|di bo|walk)\b/.test(n)) type = 'afk_walk';
+    return mk(type);
+  }
+
+  // 7. Về home
+  if (/\b(ve home|spawnhome|quay ve home|ve treolong)\b/.test(n) || /(?:^|\s|\/)home\b/.test(n)) return mk('home');
+
+  // 8. Macro
+  if (/\b(?:dung|tat|stop)\s+macro\b/.test(n)) return mk('stop_macro');
+  const mm = /\bmacro\s+([A-Za-z0-9_-]+)/i.exec(raw);
+  if (mm) {
+    const bad = new Set(['cho', 'tren', 'o', 'bot', 'tat', 'all', 'so', 'thu', 'nao']);
+    const name = bad.has(foldVi(mm[1])) ? '' : mm[1];
+    return mk('macro', name, raw.replace(mm[0], ' '));
+  }
+
+  // 9. Kết nối lại
+  if (/\b(reconnect|ket noi lai|vao lai|relog|khoi dong lai|restart)\b/.test(n)) return mk('reconnect');
+
+  // 10. Khởi động
+  if (/\b(khoi dong|bat(?! ngo\b| dac di\b)|chay|start|login|dang nhap|vao server|log in)\b/.test(n)) return mk('start');
+
+  // 11. Dừng / tắt
+  const nStop = n.replace(/\b(tom tat|noi dung|ap dung|suy nghi|de nghi|nghi ngo)\b/g, ' ');
+  if (/\b(dung|tat(?! ca\b)|ngung|ngat|stop|out|disconnect|thoat|nghi|kick)\b/.test(nStop)) return mk('stop');
+
+  return null;
+}
+
+function buildClarifyQuestion(pendingActions, bots) {
+  const verbs = [...new Set((pendingActions || []).map(a => CLARIFY_VERB[a.type] || a.type))];
+  const list = (bots || []).map((b, i) => `#${i + 1} ${b.cfg?.id || ''}`).join(', ');
+  return `Bạn muốn ${verbs.join(' / ')} bot nào? Hiện có: ${list || '(chưa có bot)'} — hoặc nói "tất cả".`;
+}
+
 /**
  * Phân tích câu lệnh tự nhiên tiếng Việt / tiếng Anh sang danh sách hành động chuẩn.
+ * Trả về { cleaned, actions, clarify?, pendingActions?, repeatLast? }
+ *
+ * @param ctx { lastTargetIds } — ngữ cảnh để hiểu "bot đó", "như cũ"
  */
-function parseNaturalCommand(rawInput, bots = []) {
+function parseNaturalCommand(rawInput, bots = [], ctx = {}) {
   const cleaned = String(rawInput || '')
     .trim()
     .replace(/^(?:dev|operator|admin|user)\s*:\s*/i, '')
     .replace(/^\/?ai\s+/i, '')
     .trim();
 
-  if (!cleaned) {
-    return { actions: [], cleaned: '' };
+  if (!cleaned) return { actions: [], cleaned: '' };
+
+  if (/^(lam lai|lap lai|nhu cu|nua di|lam nua|again|redo)\b/.test(foldVi(cleaned))) {
+    return { cleaned, actions: [], repeatLast: true };
   }
 
-  const folded = foldVi(cleaned);
-  const targets = resolveTargetBots(cleaned, bots);
-  const targetIds = targets.map(b => b.cfg.id);
+  const parsed = [];
+  for (const seg of splitSegments(cleaned)) {
+    const c = classifySegment(seg, bots, ctx);
+    if (c) parsed.push(c);
+  }
+  if (!parsed.length) return { actions: [], cleaned };
 
-  // 1. Bật/tắt/chạy ngay autosell_spawn (bán lồng)
-  if (/\b(autosell_spawn|autosell|ban long|auto sell|tu ban)\b/.test(folded) || /\b(bat|tat|dung)\s+ban\b/.test(folded) || /\bban\s+ngay\b/.test(folded)) {
-    let type = 'sell_on';
-    if (/\b(tat(?!\s+ca\b)|dung|off|stop)\b/.test(folded) && !/\btắt\s+cả\b/i.test(cleaned)) type = 'sell_off';
-    else if (/\b(ngay|now|1 vong)\b/.test(folded)) type = 'sell_now';
-    return {
-      cleaned,
-      actions: [{ type, targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
+  // Đoạn không nêu bot => mượn mục tiêu của đoạn gần nhất có nêu (ưu tiên đoạn trước)
+  for (let i = 0; i < parsed.length; i++) {
+    if (parsed[i].explicit || parsed[i].type === 'greet') continue;
+    let src = null;
+    for (let j = i - 1; j >= 0 && !src; j--) if (parsed[j].explicit) src = parsed[j];
+    for (let j = i + 1; j < parsed.length && !src; j++) if (parsed[j].explicit) src = parsed[j];
+    if (src) {
+      parsed[i].ids = [...src.ids];
+      parsed[i].explicit = true;
+    }
   }
 
-  // 2. Bảo vệ lồng (spawnerprotect)
-  if (/\b(spawnerprotect|protect|bao ve long|canh long)\b/.test(folded)) {
-    const type = /\b(tat(?!\s+ca\b)|dung|off|stop)\b/.test(folded) ? 'protect_off' : 'protect_on';
-    return {
-      cleaned,
-      actions: [{ type, targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
+  const allIds = bots.map(b => b.cfg.id);
+  const actions = [];
+  const pendingActions = [];
+  const seen = new Set();
+  for (const p of parsed) {
+    if (p.type === 'greet') {
+      if (!seen.has('greet')) { seen.add('greet'); actions.push({ type: 'greet' }); }
+      continue;
+    }
+    let ids = p.ids;
+    if (!ids.length) {
+      if (NEEDS_TARGET.has(p.type) && allIds.length > 1) {
+        pendingActions.push({ type: p.type, ...(p.arg ? { arg: p.arg } : {}) });
+        continue;
+      }
+      ids = allIds;
+    }
+    const key = `${p.type}|${p.arg || ''}|${ids.join(',')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    actions.push({ type: p.type, targets: ids, ...(p.arg ? { arg: p.arg } : {}) });
   }
 
-  // 3. AFK
-  if (/\b(wafk|afk)\b/.test(folded)) {
-    let type = 'afk_jump';
-    if (/\b(tat(?!\s+ca\b)|dung|off|stop|nghi)\b/.test(folded)) type = 'afk_stop';
-    else if (/\b(wafk|di bo|walk)\b/.test(folded)) type = 'afk_walk';
-    return {
-      cleaned,
-      actions: [{ type, targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
+  const out = { cleaned, actions };
+  if (pendingActions.length) {
+    out.pendingActions = pendingActions;
+    out.clarify = buildClarifyQuestion(pendingActions, bots);
   }
-
-  // 4. Về home / vị trí treo lồng
-  if (/\b(ve home|spawnhome|\/home|quay ve home)\b/.test(folded)) {
-    return {
-      cleaned,
-      actions: [{ type: 'home', targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  // 5. Macro
-  const macroMatch = /\b(?:dung|tat|stop)\s+macro\b/i.exec(folded);
-  if (macroMatch) {
-    return {
-      cleaned,
-      actions: [{ type: 'stop_macro', targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-  const runMacroMatch = /\b(?:chay\s+macro|macro)\s+([a-zA-Z0-9_-]+)/i.exec(folded);
-  if (runMacroMatch) {
-    return {
-      cleaned,
-      actions: [{ type: 'macro', arg: runMacroMatch[1], targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  // 6. Kết nối lại (reconnect)
-  if (/\b(reconnect|ket noi lai|vao lai|relog|khoi dong lai|restart)\b/.test(folded)) {
-    return {
-      cleaned,
-      actions: [{ type: 'reconnect', targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  // 7. Khởi động bot (start)
-  if (/\b(khoi dong|bat|chay|start|login|vao server|log in)\b/.test(folded)) {
-    return {
-      cleaned,
-      actions: [{ type: 'start', targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  // 8. Dừng / tắt bot (stop)
-  if (/\b(dung|tat(?!\s+ca\b)|ngat|stop|out|disconnect|nghi)\b/.test(folded)) {
-    return {
-      cleaned,
-      actions: [{ type: 'stop', targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  // 9. Gửi lệnh raw/chat
-  const cmdMatch = /(?:gui lenh|go lenh|chat|lenh)\s+["'`]?([^"'`]+)["'`]?$/i.exec(cleaned);
-  if (cmdMatch) {
-    return {
-      cleaned,
-      actions: [{ type: 'cmd', arg: cmdMatch[1].trim(), targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  // 10. Xem trạng thái / báo cáo
-  if (/\b(trang thai|status|tinh hinh|bao cao|doanh thu|kiem tra|danh sach)\b/.test(folded)) {
-    return {
-      cleaned,
-      actions: [{ type: 'status', targets: targetIds.length ? targetIds : bots.map(b => b.cfg.id) }],
-    };
-  }
-
-  return { actions: [], cleaned };
+  return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* AiController                                                         */
+/* ------------------------------------------------------------------ */
 
 class AiController {
   constructor(manager, opts = {}) {
@@ -249,7 +447,13 @@ class AiController {
     this.baseUrl = DEFAULT_BASE_URL;
     this.model = DEFAULT_MODEL;
     this.timeoutMs = DEFAULT_TIMEOUT_MS;
+    this.historyTurns = DEFAULT_HISTORY_TURNS;
     this._httpPost = opts.httpPost || null; // cho phép inject mock trong unit test
+    this._jsonMode = true;                  // tự tắt nếu model/router không hỗ trợ response_format
+    this._history = new Map();              // chatId -> [{role, content}]
+    this._pending = null;                   // câu hỏi làm rõ đang chờ trả lời
+    this._lastTargets = [];
+    this._lastActions = [];
     this.configure(opts);
   }
 
@@ -261,10 +465,15 @@ class AiController {
       this.baseUrl = opts.baseUrl ? String(opts.baseUrl).trim() : DEFAULT_BASE_URL;
     }
     if (opts.model !== undefined) {
-      this.model = opts.model ? String(opts.model).trim() : DEFAULT_MODEL;
+      const nextModel = opts.model ? String(opts.model).trim() : DEFAULT_MODEL;
+      if (nextModel !== this.model) this._jsonMode = true; // thử lại json mode với model mới
+      this.model = nextModel;
     }
     if (opts.timeoutMs !== undefined && Number.isFinite(Number(opts.timeoutMs)) && Number(opts.timeoutMs) >= 1000) {
       this.timeoutMs = Number(opts.timeoutMs);
+    }
+    if (opts.historyTurns !== undefined && Number.isFinite(Number(opts.historyTurns)) && Number(opts.historyTurns) >= 0) {
+      this.historyTurns = Math.min(20, Number(opts.historyTurns));
     }
     return this;
   }
@@ -284,12 +493,40 @@ class AiController {
       baseUrl: this.baseUrl || DEFAULT_BASE_URL,
       endpoint: this.endpointUrl,
       model: this.model || DEFAULT_MODEL,
+      jsonMode: this._jsonMode,
+      historyTurns: this.historyTurns,
     };
   }
 
-  /**
-   * Tóm tắt trạng thái dàn bot để đưa vào context cho OmniRouter AI.
-   */
+  resetHistory(chatId) {
+    if (chatId === undefined) {
+      this._history.clear();
+    } else {
+      this._history.delete(String(chatId));
+    }
+    this._pending = null;
+    return this;
+  }
+
+  /* ---------------- lịch sử hội thoại ---------------- */
+
+  _getHistory(chatId) {
+    if (!this.historyTurns) return [];
+    return this._history.get(chatId) || [];
+  }
+
+  _pushHistory(chatId, role, content) {
+    if (!this.historyTurns) return;
+    const text = String(content || '').trim().slice(0, 600);
+    if (!text) return;
+    const arr = this._history.get(chatId) || [];
+    arr.push({ role, content: text });
+    while (arr.length > this.historyTurns * 2) arr.shift();
+    this._history.set(chatId, arr);
+  }
+
+  /* ---------------- dàn bot ---------------- */
+
   _buildFleetSnapshot() {
     const bots = Array.isArray(this.mgr?.bots) ? this.mgr.bots : [];
     return bots.map((b, i) => ({
@@ -339,6 +576,80 @@ class AiController {
     return picked;
   }
 
+  /* ---------------- validate kế hoạch từ LLM ---------------- */
+
+  /**
+   * Không tin LLM tuyệt đối: whitelist type, kiểm tra target tồn tại, denylist lệnh,
+   * tên macro hợp lệ, giới hạn số action. Thiếu mục tiêu của lệnh nguy hiểm => pending (hỏi lại).
+   */
+  _validateActions(rawActions) {
+    const bots = Array.isArray(this.mgr?.bots) ? this.mgr.bots : [];
+    const allIds = bots.map(b => b.cfg.id);
+    const valid = [];
+    const rejected = [];
+    const pending = [];
+    if (!Array.isArray(rawActions)) return { valid, rejected, pending };
+
+    const denylist = this.mgr?._config?.telegramCmdDenylist || DEFAULT_CMD_DENYLIST;
+    const seen = new Set();
+
+    for (const raw of rawActions.slice(0, MAX_ACTIONS)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const type = String(raw.type || '').toLowerCase().trim();
+      if (!ALLOWED_TYPES.has(type)) {
+        rejected.push(`Loại hành động "${type || '?'}" không hợp lệ.`);
+        continue;
+      }
+      if (type === 'greet') {
+        if (!seen.has('greet')) { seen.add('greet'); valid.push({ type }); }
+        continue;
+      }
+
+      const arg = raw.arg == null ? '' : String(raw.arg).trim();
+      if (type === 'cmd') {
+        if (!arg) { rejected.push('Thiếu nội dung lệnh cần gửi.'); continue; }
+        if (isBlockedRawCommand(arg, denylist)) {
+          rejected.push('Từ chối lệnh nhạy cảm (login/register/changepassword/pay).');
+          continue;
+        }
+      }
+      if (type === 'macro' && !/^[A-Za-z0-9_-]{1,40}$/.test(arg)) {
+        rejected.push('Tên macro không hợp lệ hoặc bị thiếu.');
+        continue;
+      }
+
+      let tokens = raw.targets;
+      if (tokens == null || tokens === '') tokens = [];
+      if (!Array.isArray(tokens)) tokens = [tokens];
+      tokens = tokens.map(t => String(t ?? '').trim()).filter(Boolean);
+
+      let ids;
+      if (tokens.some(t => t.toLowerCase() === 'all')) {
+        ids = allIds;
+      } else if (tokens.length) {
+        const resolved = this._resolveActionTargets(tokens);
+        if (!resolved.length) {
+          rejected.push(`Không có bot nào khớp "${tokens.join(', ')}".`);
+          continue;
+        }
+        ids = resolved.map(b => b.cfg.id);
+      } else if (NEEDS_TARGET.has(type) && allIds.length > 1) {
+        pending.push({ type, ...(arg ? { arg } : {}) });
+        continue;
+      } else {
+        ids = allIds;
+      }
+
+      const key = `${type}|${arg}|${ids.join(',')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      valid.push({ type, targets: ids, ...(arg ? { arg } : {}) });
+    }
+    return { valid, rejected, pending };
+  }
+
+  /* ---------------- thực thi ---------------- */
+
   /**
    * Thực thi danh sách hành động điều khiển bot và trả về kết quả chi tiết.
    */
@@ -351,14 +662,64 @@ class AiController {
     for (const act of actions) {
       if (!act || typeof act !== 'object') continue;
       const type = String(act.type || '').toLowerCase().trim();
+
+      const hasExplicit = Array.isArray(act.targets) ? act.targets.length > 0 : (act.targets != null && act.targets !== '');
+      if (NEEDS_TARGET.has(type) && !hasExplicit && bots.length > 1) {
+        results.push({ type, ok: false, summary: `Thiếu bot mục tiêu cho "${type}" — hãy nói rõ bot nào hoặc "tất cả".` });
+        continue;
+      }
+
       const targets = this._resolveActionTargets(act.targets);
 
-      if (!targets.length && type !== 'status') {
+      if (!targets.length && !['status', 'greet'].includes(type)) {
         results.push({ type, ok: false, summary: 'Không tìm thấy bot phù hợp để thực hiện.' });
         continue;
       }
 
       switch (type) {
+        case 'greet': {
+          results.push({
+            type,
+            ok: true,
+            summary: 'Chào bạn! Em là AI-Anter sẵn sàng hỗ trợ điều khiển và kiểm tra dàn bot (khởi động/dừng, bật/tắt bán lồng, treo AFK, xem log và doanh thu).',
+          });
+          break;
+        }
+        case 'logs': {
+          const lines = [];
+          const data = [];
+          for (const b of targets) {
+            const id = b.cfg?.id || 'bot';
+            const acc = b.cfg?.username || '';
+            const state = b.state?.connState || 'DISCONNECTED';
+            const up = this.mgr?.revenue?.uptime ? this.mgr.revenue.uptime(id) : null;
+            const rev = this.mgr?.revenue?.stats ? this.mgr.revenue.stats(id) : null;
+            const rawLogs = typeof b.getLogs === 'function' ? b.getLogs() : [];
+            const recent = rawLogs.filter(l => l && l.level !== 'chat').slice(-3);
+            const recentStr = recent.length
+              ? recent.map(l => l.msg).join(' · ')
+              : (b.isOnline ? 'đang hoạt động ổn định' : 'chưa kết nối');
+            const upStr = up?.totalMs ? `${Math.round(up.totalMs / 60000)}p uptime` : 'offline';
+            const revStr = rev && rev.total > 0 ? ` · Doanh thu: $${rev.total.toLocaleString()}` : '';
+            lines.push(`• Bot ${id}${acc ? ' (' + acc + ')' : ''}: ${state} (${upStr}${revStr})\n  ↳ Hoạt động: ${recentStr}`);
+            data.push({
+              id,
+              username: acc,
+              state,
+              online: Boolean(b.isOnline),
+              uptimeMin: up?.totalMs ? Math.round(up.totalMs / 60000) : 0,
+              revenue: rev?.total || 0,
+              recentLogs: recent.map(l => String(l.msg || '').slice(0, 200)),
+            });
+          }
+          results.push({
+            type,
+            ok: true,
+            data,
+            summary: `Tóm tắt log của ${targets.length} bot:\n${lines.join('\n')}`,
+          });
+          break;
+        }
         case 'start': {
           const started = [];
           const already = [];
@@ -493,10 +854,17 @@ class AiController {
         case 'status': {
           const snap = this._buildFleetSnapshot();
           const onlineCount = snap.filter(s => s.online).length;
-          const detail = snap.map(s => `#${s.index} ${s.id} (${s.state}${s.sellOn ? ', đang bán lồng' : ''})`).join(', ');
+          const detail = snap.map(s => {
+            const extra = [];
+            if (s.sellOn) extra.push('đang bán lồng');
+            if (s.protectOn) extra.push('bảo vệ lồng');
+            if (s.money) extra.push(`$${Number(s.money).toLocaleString()}`);
+            return `#${s.index} ${s.id} (${[s.state, ...extra].join(', ')})`;
+          }).join(', ');
           results.push({
             type,
             ok: true,
+            data: snap,
             summary: `hiện có ${onlineCount}/${snap.length} bot đang ONLINE${detail ? ': ' + detail : ''}`,
           });
           break;
@@ -509,12 +877,24 @@ class AiController {
     return results;
   }
 
+  /* ---------------- prompt ---------------- */
+
   _buildSystemPrompt() {
     const fleet = this._buildFleetSnapshot();
+    const lastNames = this._lastTargets.length ? this._lastTargets.join(', ') : '(chưa có)';
     return [
-      'Bạn là AI-Anter, trợ lý điều khiển dàn bot Minecraft của hệ thống Antertool.',
-      'Khi người vận hành (Dev) yêu cầu điều khiển hoặc kiểm tra bot, hãy trả về DUY NHẤT một JSON hợp lệ theo cấu trúc:',
-      '{"reply": "AI-Anter: Đã nhận đang làm — <mô tả ngắn gọn tiếng Việt>", "actions": [{"type": "<loại_lệnh>", "targets": ["<bot_id_hoặc_số_thứ_tự>"], "arg": "<tham_số_nếu_có>"}]}',
+      'Bạn là AI-Anter, trợ lý điều khiển dàn bot Minecraft của hệ thống Antertool. Người vận hành nói tiếng Việt (có thể không dấu, viết tắt).',
+      'Nhiệm vụ: hiểu yêu cầu và LẬP KẾ HOẠCH. Trả về DUY NHẤT một JSON hợp lệ, không markdown, theo cấu trúc:',
+      '{"reply": "<chỉ để trò chuyện/giải thích, để rỗng nếu có action>", "actions": [{"type": "<loại>", "targets": ["<bot_id|số thứ tự|all>"], "arg": "<tham số nếu có>"}], "clarify": "<câu hỏi lại nếu thiếu thông tin, nếu không để rỗng>"}',
+      'QUY TẮC:',
+      '- Hệ thống tự thực thi actions rồi tự báo kết quả thật. KHÔNG được nói "đã xong/đã làm" trong "reply".',
+      '- "targets": mảng id bot hoặc số thứ tự (1-based). Chỉ dùng ["all"] khi người dùng nói rõ "tất cả/cả dàn".',
+      '- Câu có nhiều thao tác => nhiều phần tử trong "actions", đúng thứ tự.',
+      '- Thiếu bot mục tiêu cho stop/reconnect/cmd/macro/stop_macro khi có nhiều bot => actions rỗng + "clarify" hỏi lại. Tuyệt đối không tự đoán "tất cả".',
+      '- "bot đó", "con đó", "như cũ" = bot được nhắc ở lượt trước.',
+      '- Câu hỏi nguyên nhân/tình trạng ("sao bot 2 treo?", "doanh thu thế nào?") => dùng "logs" hoặc "status" để lấy dữ liệu thật; hệ thống sẽ diễn giải sau.',
+      '- Trò chuyện thường (không liên quan điều khiển) => actions rỗng, trả lời ngắn trong "reply".',
+      '- TUYỆT ĐỐI không gửi lệnh login/register/changepassword/pay.',
       'Danh sách type hợp lệ:',
       '- "start": khởi động bot',
       '- "stop": dừng/tắt bot',
@@ -528,13 +908,35 @@ class AiController {
       '- "afk_walk": bật AFK đi bộ',
       '- "afk_stop": dừng AFK',
       '- "home": cho bot về /home treolong',
-      '- "macro": chạy macro (đặt tên macro ở "arg")',
+      '- "macro": chạy macro (tên macro ở "arg")',
       '- "stop_macro": dừng macro',
-      '- "cmd": gửi lệnh bot (đặt lệnh ở "arg", KHÔNG gửi lệnh login/register/pay)',
-      '- "status": xem trạng thái dàn bot',
+      '- "cmd": gửi lệnh bot (lệnh ở "arg")',
+      '- "logs": lấy log hoạt động gần nhất của bot',
+      '- "status": lấy trạng thái dàn bot',
+      'VÍ DỤ:',
+      'U: khởi động 2 bot số 1 và 2 => {"reply":"","actions":[{"type":"start","targets":["1","2"]}],"clarify":""}',
+      'U: bat ban long bot 1 roi bao ve long luon => {"reply":"","actions":[{"type":"sell_on","targets":["1"]},{"type":"protect_on","targets":["1"]}],"clarify":""}',
+      'U: tắt bot đi (có nhiều bot) => {"reply":"","actions":[],"clarify":"Bạn muốn tắt bot nào? (số thứ tự/id hoặc tất cả)"}',
+      'U: sao bot 2 treo vậy? => {"reply":"","actions":[{"type":"logs","targets":["2"]}],"clarify":""}',
+      'U: chạy macro farm cho tất cả => {"reply":"","actions":[{"type":"macro","targets":["all"],"arg":"farm"}],"clarify":""}',
+      'U: gửi lệnh /sethome cho bot 2 => {"reply":"","actions":[{"type":"cmd","targets":["2"],"arg":"/sethome"}],"clarify":""}',
+      'U: doanh thu hôm nay sao rồi => {"reply":"","actions":[{"type":"status","targets":["all"]}],"clarify":""}',
+      'U: bạn khoẻ không => {"reply":"AI-Anter: Mình khoẻ, sẵn sàng điều khiển dàn bot cho bạn!","actions":[],"clarify":""}',
+      `Bot được nhắc gần nhất: ${lastNames}`,
       `Danh sách bot hiện tại (index 1-based): ${JSON.stringify(fleet)}`,
     ].join('\n');
   }
+
+  _buildNarrationPrompt() {
+    return [
+      'Bạn là AI-Anter, trợ lý điều khiển dàn bot Minecraft (Antertool).',
+      'Bên dưới là KẾT QUẢ THỰC TẾ vừa thực thi. Hãy trả lời người vận hành bằng tiếng Việt, ngắn gọn (tối đa khoảng 6 dòng), bắt đầu bằng "AI-Anter:".',
+      'Chỉ dùng số liệu có trong kết quả, không bịa. Thao tác lỗi (ok=false) phải nói rõ.',
+      'Nếu người dùng hỏi nguyên nhân/vì sao, hãy suy luận từ log và nói rõ đó là suy đoán. Không trả về JSON.',
+    ].join('\n');
+  }
+
+  /* ---------------- HTTP / LLM ---------------- */
 
   _defaultHttpPost(urlStr, headers, bodyObj, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -581,34 +983,70 @@ class AiController {
     });
   }
 
-  async _callOmniRouter(userPrompt) {
+  /**
+   * Gọi chat/completions. Tự động:
+   *  - thử response_format json_object, nếu router/model không hỗ trợ thì tắt và gọi lại;
+   *  - thử lại 1 lần khi lỗi mạng / 429 / 5xx.
+   */
+  async _chat(messages, { json = false, temperature = 0.1 } = {}) {
     const postFn = this._httpPost || this._defaultHttpPost.bind(this);
-    const body = {
-      model: this.model || DEFAULT_MODEL,
-      temperature: 0.1,
-      messages: [
-        { role: 'system', content: this._buildSystemPrompt() },
-        { role: 'user', content: String(userPrompt || '') },
-      ],
-    };
-    const headers = {
-      Authorization: `Bearer ${this.apiKey}`,
-    };
-    const res = await postFn(this.endpointUrl, headers, body, this.timeoutMs);
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw new Error(`HTTP ${res.statusCode}: ${String(res.body || '').slice(0, 200)}`);
+    const headers = { Authorization: `Bearer ${this.apiKey}` };
+    let useJson = Boolean(json && this._jsonMode);
+    let attempt = 0;
+
+    for (;;) {
+      const body = {
+        model: this.model || DEFAULT_MODEL,
+        temperature,
+        messages,
+      };
+      if (useJson) body.response_format = { type: 'json_object' };
+
+      let res;
+      try {
+        res = await postFn(this.endpointUrl, headers, body, this.timeoutMs);
+      } catch (err) {
+        if (attempt < 1) { attempt++; await sleep(500); continue; }
+        throw err;
+      }
+
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        let data;
+        try {
+          data = JSON.parse(res.body);
+        } catch {
+          throw new Error('Phản hồi từ OmniRouter không phải JSON hợp lệ');
+        }
+        let content = data?.choices?.[0]?.message?.content;
+        if (Array.isArray(content)) content = content.map(c => (typeof c === 'string' ? c : c?.text || '')).join('');
+        if (!content || !String(content).trim()) throw new Error('OmniRouter trả về nội dung rỗng');
+        return String(content).trim();
+      }
+
+      if (useJson && (res.statusCode === 400 || res.statusCode === 422)
+        && /response_format|json_object|json mode|json_schema/i.test(String(res.body || ''))) {
+        this._jsonMode = false;
+        useJson = false;
+        continue;
+      }
+      if ([429, 500, 502, 503, 504].includes(res.statusCode) && attempt < 1) {
+        attempt++;
+        await sleep(600);
+        continue;
+      }
+      if (res.statusCode === 401) {
+        throw new Error('HTTP 401: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (Incorrect API key)');
+      }
+      throw new Error(`HTTP ${res.statusCode}: ${String(res.body || '').slice(0, 160)}`);
     }
-    let data;
-    try {
-      data = JSON.parse(res.body);
-    } catch {
-      throw new Error('Phản hồi từ OmniRouter không phải JSON hợp lệ');
-    }
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error('OmniRouter trả về nội dung rỗng');
-    }
-    return String(content).trim();
+  }
+
+  /** Giữ lại để tương thích code cũ: hỏi 1 câu, nhận về nội dung thô. */
+  async _callOmniRouter(userPrompt) {
+    return this._chat([
+      { role: 'system', content: this._buildSystemPrompt() },
+      { role: 'user', content: String(userPrompt || '') },
+    ], { json: true });
   }
 
   _extractJsonPlan(text) {
@@ -629,6 +1067,27 @@ class AiController {
     return null;
   }
 
+  async _planWithLlm(rawPrompt, chatId) {
+    const messages = [
+      { role: 'system', content: this._buildSystemPrompt() },
+      ...this._getHistory(chatId),
+      { role: 'user', content: rawPrompt },
+    ];
+    const content = await this._chat(messages, { json: true, temperature: 0.1 });
+    return { content, parsed: this._extractJsonPlan(content) };
+  }
+
+  /** Gửi KẾT QUẢ THẬT cho LLM để diễn giải thành câu trả lời. */
+  async _narrate(rawPrompt, results) {
+    let payload = JSON.stringify(results.map(r => ({ type: r.type, ok: r.ok, summary: r.summary, data: r.data })));
+    if (payload.length > 6000) payload = payload.slice(0, 6000) + '…(đã cắt bớt)';
+    const content = await this._chat([
+      { role: 'system', content: this._buildNarrationPrompt() },
+      { role: 'user', content: `Yêu cầu của người vận hành: ${rawPrompt}\n\nKết quả thực thi (JSON):\n${payload}` },
+    ], { json: false, temperature: 0.3 });
+    return content;
+  }
+
   _formatReplyPrefix(replyText) {
     const trimmed = String(replyText || '').trim();
     if (!trimmed) return 'AI-Anter: Đã nhận đang làm.';
@@ -636,10 +1095,61 @@ class AiController {
     return `AI-Anter: ${trimmed}`;
   }
 
+  _composeReply({ results, llmReply, clarify, apiError, question, softHint }) {
+    const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+    const okRes = results.filter(r => r.ok);
+    const failRes = results.filter(r => !r.ok);
+    let reply = '';
+
+    if (okRes.length) {
+      const sums = okRes.map(r => r.summary).filter(Boolean);
+      const actionable = okRes.some(r => !INFO_TYPES.has(r.type) && r.type !== 'greet');
+      const multi = sums.some(s => s.includes('\n')) || sums.length > 3;
+      if (actionable) {
+        reply = multi
+          ? `AI-Anter:\n${sums.map(cap).join('\n')}`
+          : `AI-Anter: Đã nhận đang làm — ${sums.join('; ')}.`;
+      } else {
+        reply = multi || sums.length > 1
+          ? `AI-Anter:\n${sums.map(cap).join('\n')}`
+          : `AI-Anter: ${cap(sums[0] || '')}`;
+      }
+    }
+
+    if (failRes.length) {
+      const failText = failRes.map(r => `⚠ ${r.summary}`).join('\n');
+      reply = reply ? `${reply}\n${failText}` : `AI-Anter:\n${failText}`;
+    }
+
+    if (!reply) {
+      if (llmReply) reply = this._formatReplyPrefix(llmReply);
+      else if (clarify) reply = '';
+      else if (softHint) reply = `AI-Anter: ${softHint}`;
+      else if (apiError) {
+        reply = apiError.includes('401')
+          ? 'AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: "ai set <omnirouter_api_key>" để cập nhật khoá hợp lệ nhé.'
+          : `AI-Anter: Không gọi được OmniRouter (${apiError}) và chưa nhận diện được lệnh tại chỗ.`;
+      } else if (!this.hasKey) {
+        reply = 'AI-Anter: Chưa nhận diện được lệnh. Bạn có thể đặt khoá OmniRouter bằng "ai set <api_key>" hoặc nói rõ như: "khởi động 2 bot số 1 và 2", "xem log của 2 bot", "trạng thái".';
+      } else {
+        reply = 'AI-Anter: Đã nhận yêu cầu nhưng không có thao tác bot nào cần thực thi.';
+      }
+    }
+
+    if (clarify) {
+      reply = reply ? `${reply}\n${clarify}` : `AI-Anter: ${clarify}`;
+    }
+    if (apiError && apiError.includes('401') && reply && !/401/.test(reply)) {
+      reply += '\n(Lưu ý: Khoá OmniRouter đang báo lỗi 401 — Incorrect API key. Dùng: "ai set <khoá_mới>" để cập nhật).';
+    }
+    return reply;
+  }
+
+  /* ---------------- điểm vào chính ---------------- */
+
   /**
-   * Nhận câu lệnh từ Dev (VD: "Dev: khởi động 2 bot số 1 và 2"),
-   * gọi OmniRouter (nếu đã cấu hình API key) + kết hợp bộ phân tích tại chỗ,
-   * thực thi hành động trên dàn bot và trả về câu trả lời của AI-Anter.
+   * Nhận câu lệnh từ Dev (VD: "Dev: khởi động 2 bot số 1 và 2").
+   * opts: { offline?: boolean, chatId?: string }
    */
   async ask(prompt, opts = {}) {
     const rawPrompt = String(prompt || '').trim();
@@ -653,82 +1163,141 @@ class AiController {
       };
     }
 
+    const chatId = String(opts.chatId || 'default');
     const bots = Array.isArray(this.mgr?.bots) ? this.mgr.bots : [];
-    const localPlan = parseNaturalCommand(rawPrompt, bots);
-    let actions = localPlan.actions;
+    const botIds = new Set(bots.map(b => b.cfg.id));
+    const ctx = { lastTargetIds: this._lastTargets.filter(id => botIds.has(id)) };
+    const local = parseNaturalCommand(rawPrompt, bots, ctx);
+    const question = QUESTION_RE.test(foldVi(local.cleaned || rawPrompt));
+    const llmAllowed = this.hasKey && opts.offline !== true;
+
+    let actions = [];
+    let pending = [];
+    let clarify = '';
     let llmReply = '';
+    let softHint = '';
     let via = 'local';
     let apiError = null;
+    const rejected = [];
 
-    if (this.hasKey && opts.offline !== true) {
-      try {
-        const rawContent = await this._callOmniRouter(rawPrompt);
-        const parsed = this._extractJsonPlan(rawContent);
-        if (parsed) {
-          if (Array.isArray(parsed.actions) && parsed.actions.length > 0) {
-            actions = parsed.actions;
+    // A. Người dùng đang trả lời câu hỏi "bot nào?" trước đó
+    if (this._pending && Date.now() - this._pending.ts <= PENDING_TTL_MS && !local.actions.length && !local.clarify) {
+      const t = resolveTargetBots(local.cleaned || rawPrompt, bots);
+      if (t.length) {
+        actions = this._pending.actions.map(a => ({ ...a, targets: t.map(b => b.cfg.id) }));
+      }
+    }
+
+    // B. "làm lại đi"
+    if (!actions.length && local.repeatLast && this._lastActions.length) {
+      actions = this._lastActions.map(a => ({ ...a }));
+    }
+
+    // C. Local hiểu chắc chắn => chạy luôn, không gọi API
+    const infoOnly = local.actions.length > 0 && local.actions.every(a => INFO_TYPES.has(a.type) || a.type === 'greet');
+    const localConfident = local.actions.length > 0 && (!question || infoOnly);
+    if (!actions.length && localConfident) {
+      actions = local.actions;
+      pending = local.pendingActions || [];
+      clarify = local.clarify || '';
+    } else if (!actions.length && local.clarify && !question) {
+      pending = local.pendingActions || [];
+      clarify = local.clarify;
+    }
+
+    // D. Local không hiểu / câu hỏi mở => nhờ LLM lập kế hoạch
+    if (!actions.length && !clarify) {
+      if (llmAllowed) {
+        try {
+          const { parsed, content } = await this._planWithLlm(rawPrompt, chatId);
+          via = 'omnirouter';
+          if (parsed) {
+            const v = this._validateActions(parsed.actions);
+            actions = v.valid;
+            pending = v.pending;
+            rejected.push(...v.rejected);
+            if (typeof parsed.clarify === 'string' && parsed.clarify.trim()) clarify = parsed.clarify.trim();
+            else if (pending.length) clarify = buildClarifyQuestion(pending, bots);
+            if (typeof parsed.reply === 'string' && parsed.reply.trim()) llmReply = parsed.reply.trim();
+          } else {
+            llmReply = content;
           }
-          if (typeof parsed.reply === 'string' && parsed.reply.trim()) {
-            llmReply = parsed.reply.trim();
-          }
-        } else {
-          llmReply = rawContent;
+        } catch (err) {
+          apiError = err.message || String(err);
         }
-        via = 'omnirouter';
-      } catch (err) {
-        apiError = err.message || String(err);
+      } else if (local.actions.length && question) {
+        softHint = 'Câu này giống một câu hỏi nên mình chưa thực thi. Bạn nói rõ lệnh giúp mình nhé (ví dụ: "khởi động bot 1", "tắt bot 2").';
       }
     }
 
+    // E. Thực thi + ghi nhận kết quả thật
     const results = actions.length > 0 ? this.executeActions(actions) : [];
-    const summaries = results.map(r => r.summary).filter(Boolean);
+    for (const msg of rejected) results.push({ type: 'invalid', ok: false, summary: msg });
 
-    let reply;
-    if (llmReply) {
-      reply = this._formatReplyPrefix(llmReply);
-      if (summaries.length && !summaries.some(s => reply.toLowerCase().includes(s.slice(0, 12).toLowerCase()))) {
-        reply = `${reply} (${summaries.join('; ')})`;
-      }
-    } else if (summaries.length > 0) {
-      reply = `AI-Anter: Đã nhận đang làm — ${summaries.join('; ')}.`;
-    } else if (apiError) {
-      reply = `AI-Anter: Không gọi được OmniRouter (${apiError}) và chưa nhận diện được lệnh tại chỗ.`;
-    } else if (!this.hasKey) {
-      reply = 'AI-Anter: Chưa nhận diện được lệnh. Bạn có thể đặt khoá OmniRouter bằng "ai set <api_key>" hoặc nói rõ như: "khởi động 2 bot số 1 và 2".';
-    } else {
-      reply = 'AI-Anter: Đã nhận yêu cầu nhưng không có thao tác bot nào cần thực thi.';
+    const acted = actions.filter(a => !INFO_TYPES.has(a.type) && a.type !== 'greet');
+    if (acted.length) {
+      this._lastActions = acted.map(a => ({ ...a }));
+      const ids = new Set();
+      for (const a of acted) for (const b of this._resolveActionTargets(a.targets)) ids.add(b.cfg.id);
+      if (ids.size) this._lastTargets = [...ids];
     }
+    this._pending = pending.length ? { actions: pending, ts: Date.now() } : null;
+
+    // F. Báo cáo: log/trạng thái được gửi lại LLM để diễn giải dựa trên dữ liệu thật
+    let reply = '';
+    const hasInfo = results.some(r => r.ok && INFO_TYPES.has(r.type));
+    if (hasInfo && llmAllowed && (via === 'omnirouter' || question)) {
+      try {
+        const text = await this._narrate(rawPrompt, results);
+        if (text) {
+          reply = this._formatReplyPrefix(text);
+          via = 'omnirouter';
+          const fails = results.filter(r => !r.ok);
+          if (fails.length) reply += `\n${fails.map(r => `⚠ ${r.summary}`).join('\n')}`;
+          if (clarify) reply += `\n${clarify}`;
+        }
+      } catch (err) {
+        apiError = apiError || err.message || String(err);
+      }
+    }
+    if (!reply) {
+      reply = this._composeReply({ results, llmReply, clarify, apiError, question, softHint });
+    }
+
+    this._pushHistory(chatId, 'user', local.cleaned || rawPrompt);
+    this._pushHistory(chatId, 'assistant', reply);
 
     try {
       this.mgr?.runtimeLog?.('sys', `[AI-Anter via ${via}] ${rawPrompt} -> ${reply}`);
     } catch { /* ignore */ }
 
     return {
-      ok: results.length > 0 || via === 'omnirouter',
+      ok: results.some(r => r.ok) || via === 'omnirouter' || Boolean(clarify),
       via,
       apiError,
       reply,
       actions,
       results,
+      clarify: clarify || undefined,
     };
   }
 
   /**
-   * Kiểm tra nhanh kết nối tới OmniRouter API.
+   * Kiểm tra nhanh kết nối tới OmniRouter API (gọi thẳng API, không đi qua parser tại chỗ).
    */
   async testConnection() {
     if (!this.hasKey) {
       return { ok: false, message: 'Chưa cấu hình khoá API OmniRouter (dùng: ai set <api_key> [base_url] [model])' };
     }
     try {
-      const res = await this.ask('Kiểm tra trạng thái dàn bot', { offline: false });
-      if (res.apiError) {
-        return { ok: false, message: `Lỗi kết nối OmniRouter: ${res.apiError}` };
-      }
+      const reply = await this._chat(
+        [{ role: 'user', content: 'Trả lời đúng một từ: OK' }],
+        { json: false, temperature: 0 }
+      );
       return {
         ok: true,
         message: `Kết nối OmniRouter thành công (${this.endpointUrl} · model ${this.model})`,
-        reply: res.reply,
+        reply,
       };
     } catch (e) {
       return { ok: false, message: `Lỗi kết nối OmniRouter: ${e.message || e}` };
@@ -741,5 +1310,7 @@ AiController.DEFAULT_MODEL = DEFAULT_MODEL;
 AiController.parseNaturalCommand = parseNaturalCommand;
 AiController.resolveTargetBots = resolveTargetBots;
 AiController.buildChatCompletionsUrl = buildChatCompletionsUrl;
+AiController.splitSegments = splitSegments;
+AiController.normalizeIntent = normalizeIntent;
 
 module.exports = AiController;
