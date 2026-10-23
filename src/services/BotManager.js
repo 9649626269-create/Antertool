@@ -1,4 +1,6 @@
 'use strict';
+const path = require('path');
+const os = require('os');
 const BotSession = require('../core/BotSession');
 const { dbg } = require('../core/debug');
 const ProxyManager = require('../core/ProxyManager');
@@ -6,8 +8,7 @@ const EnvironmentDetector = require('../core/EnvironmentDetector');
 const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
-let DiscordTheme; try { DiscordTheme = require('../core/DiscordTheme'); } catch { DiscordTheme = Notifier.THEME; }
-const HelpCatalog = require('../core/HelpCatalog');
+const DiscordTheme = require('../core/DiscordTheme');
 const TelegramControl = require('../core/TelegramControl');
 const NotificationCenter = require('../core/NotificationCenter');
 const RevenueTracker = require('../core/RevenueTracker');
@@ -15,24 +16,27 @@ const TelegramNotifier = require('../core/TelegramNotifier');
 const TelegramPanel = require('../core/TelegramPanel');
 const TelegramLogger = require('../core/TelegramLogger');
 const FileLogger = require('../core/FileLogger');
+const { migrateTelegramConfig, normalizeTelegramConfig } = require('../core/ConfigValidator');
+const { setSymbolSet } = require('../core/Symbols');
 const { readDotEnv } = require('../core/dotenv');
 const { resolveBotPassword } = require('../core/secrets');
 const { pickTheme, TIMING, CS, CAPACITY, resolveVersion } = require('../core/constants');
+
 class BotManager {
   constructor(options = {}) {
-    this.configPath = options.configPath || require('path').join(process.cwd(), 'config.json');
+    this.configPath = options.configPath || path.join(process.cwd(), 'config.json');
     this.autoExe = options.autoExe || false;
     this.io = options.io || null;
     this.onBotLog = typeof options.onBotLog === 'function' ? options.onBotLog : null;
     this.bots = [];
     this._activeConnects = 0;
-    this.envDetector = new EnvironmentDetector(this.autoExe);
+    this.envDetector = options.envDetector || new EnvironmentDetector(this.autoExe);
     this.persistence = new Persistence(this.configPath);
     this.proxyManager = new ProxyManager(this.io, this.persistence);
     this.sharedPool = SharedPool.global();
     this.notifier = new Notifier({});
     this.revenueNotifier = new Notifier({}); // webhook RIÊNG cho báo cáo doanh thu (không đặt thì dùng webhook chung)
-    this.revenue = new RevenueTracker(require('path').join(require('path').dirname(this.configPath), 'revenue.json'), () => this._scheduleTz());
+    this.revenue = new RevenueTracker(path.join(path.dirname(this.configPath), 'revenue.json'), () => this._scheduleTz());
     this.telegram = new TelegramNotifier({}); // bảng Auto sell spawner + cảnh báo qua Telegram (không đặt token thì không làm gì)
     this._tgMsgs = {};                        // botId -> message_id của bảng (để sửa tại chỗ, khỏi spam)
     this._tgLastAt = new Map();               // botId -> lần gửi bảng gần nhất (chống dội)
@@ -40,18 +44,18 @@ class BotManager {
     this._tgBusy = new Set();                 // bot đang có lần gửi/sửa bảng chưa xong (nhịp 1s bỏ qua bot này)
     this._tgSig = new Map();                  // botId -> "chữ ký" trạng thái bảng gửi gần nhất (bot offline chỉ sửa khi chữ ký đổi)
     this._tgRR = 0;                           // vòng xoay: mỗi nhịp sửa 1 bảng
-    // Log runtime (log từng bot + log hệ thống) -> Telegram: 1 FILE chung cho tất cả bot, sửa tại chỗ theo chu kỳ; gộp dòng lặp, che mật khẩu/token (xem TelegramLogger.js)
+    // Log runtime (log từng bot + log hệ thống) -> Telegram: 1 FILE chung cho tất cả bot, sửa tại chỗ theo chu kỳ; gộp dòng lặp, che mật khẩu/token
     this.telegramLogs = new TelegramLogger(this.telegram, {
       tz: () => this._scheduleTz(),
       secrets: () => this.bots.map(b => b?.cfg?.botPassword).filter(Boolean),
-      botIds: () => this.bots.map(b => b?.cfg?.id).filter(x => x !== undefined && x !== null), // bot hiện có -> ghi stats cả bot chưa có log
-      stats: (id) => this._serverStats(id), // stats server (scoreboard: money, shard, kills...) ghi đầu file log_all.txt, mỗi bot 1 khối
+      botIds: () => this.bots.map(b => b?.cfg?.id).filter(x => x !== undefined && x !== null),
+      stats: (id) => this._serverStats(id),
     });
-    // Log runtime -> FILE trên máy (/sdcard/bot/log/runtime-YYYY-MM-DD.log): còn đọc được sau khi tool sập. Cấu hình: xem _applyFileLogConfig
+    // Log runtime -> FILE trên máy (/sdcard/bot/log/runtime-YYYY-MM-DD.log)
     this.fileLogs = new FileLogger({
-      dir: this._envLogDir() || FileLogger.resolveDefaultLogDir(require('path').dirname(this.configPath)),
+      dir: this._envLogDir() || FileLogger.resolveDefaultLogDir(path.dirname(this.configPath)),
       tz: () => this._scheduleTz(),
-      redact: s => this.telegramLogs._redact(s), // dùng chung bộ che mật khẩu/token với log Telegram
+      redact: s => this.telegramLogs._redact(s),
     });
     this.telegramControl = new TelegramControl(this);
     this.notifications = new NotificationCenter({
@@ -68,9 +72,10 @@ class BotManager {
     this._poolPruneInterval = setInterval(() => this.sharedPool.pruneCache(), 10 * 60 * 1000);
     this._inRest = false;
     this._scheduleInterval = setInterval(() => this._scheduleTick(), 20000);
-    this._beatInterval = setInterval(() => { for (const b of this.bots) { if (b.isOnline) this.revenue.touch(b.cfg.id); } }, 5 * 60000); // nhịp tim đếm giờ chạy
+    this._beatInterval = setInterval(() => { for (const b of this.bots) { if (b.isOnline) this.revenue.touch(b.cfg.id); } }, 5 * 60000);
     if (this._beatInterval.unref) this._beatInterval.unref();
   }
+
   async init() {
     this._config = this.persistence.load();
     this._migrateWebhookEvents();
@@ -95,12 +100,13 @@ class BotManager {
     }
     return this;
   }
-  // Các cài đặt của trình tự khởi động / tự về home (đọc từ bot, không có thì lấy ở cấp toàn cục config.json, không có nữa thì dùng mặc định của BotSession)
+
   static STARTUP_KEYS = [
     'loginSuccessPattern', 'loginConfirmTimeoutMs',
     'spawnHomeEnabled', 'spawnHomeCommand', 'spawnHomeGraceMs', 'spawnHomeConfirmMs', 'spawnHomeCooldownMs', 'spawnHomeMaxTries', 'spawnHomeSlowMs',
     'spawnPositionSettleMs', 'spawnGateTimeoutMs',
   ];
+
   _startupFields(src) {
     const out = {};
     for (const k of BotManager.STARTUP_KEYS) {
@@ -109,8 +115,7 @@ class BotManager {
     }
     return out;
   }
-  // Danh sách loại sự kiện webhook người dùng đã lưu từ trước chưa có các loại mới -> thêm 1 lần cho mỗi loại mới
-  // (sau đó bạn tắt bớt bằng "webhook events ..." thì giữ nguyên, không tự thêm lại).
+
   _migrateWebhookEvents() {
     const c = this._config;
     if (!c) return;
@@ -124,19 +129,25 @@ class BotManager {
       this.persistence.set('webhookEvents', c.webhookEvents);
     }
   }
-  // Log ra file (config.json, gốc): fileLogs (true) · fileLogLevels ("all" | ["warn","err",...]) · fileLogChat (false: có ghi chat người chơi không)
-  //   fileLogKeepDays (7) · fileLogMaxMB (10: quá thì sang file .1, .2) · fileLogFormat ("text" | "json") · fileLogDir (mặc định logs/ cạnh config.json; hoặc ANTER_LOG_DIR trong môi trường / .env)
-  // ANTER_LOG_DIR: biến môi trường thật, hoặc dòng ANTER_LOG_DIR=... trong file .env cạnh config.json (ưu tiên biến môi trường). Đường dẫn tương đối tính từ thư mục config.json.
+
   _envLogDir() {
-    const base = require('path').dirname(this.configPath);
+    const base = path.dirname(this.configPath);
     const v = process.env.ANTER_LOG_DIR || readDotEnv(base).ANTER_LOG_DIR;
     return v ? FileLogger.normalizeLogDir(v, base) : '';
   }
+
   _applyFileLogConfig() {
     const c = this._config || {};
-    const base = require('path').dirname(this.configPath);
-    const fl = { enabled: c.fileLogs !== false, levels: c.fileLogLevels ?? 'all', includeChat: c.fileLogChat === true,
-      keepDays: c.fileLogKeepDays ?? 7, maxMB: c.fileLogMaxMB ?? 10, format: c.fileLogFormat ?? 'text', baseDir: base };
+    const base = path.dirname(this.configPath);
+    const fl = {
+      enabled: c.fileLogs !== false,
+      levels: c.fileLogLevels ?? 'all',
+      includeChat: c.fileLogChat === true,
+      keepDays: c.fileLogKeepDays ?? 7,
+      maxMB: c.fileLogMaxMB ?? 10,
+      format: c.fileLogFormat ?? 'text',
+      baseDir: base,
+    };
     const envDir = this._envLogDir();
     if (envDir) fl.dir = envDir;
     else if (c.fileLogDir) fl.dir = FileLogger.normalizeLogDir(c.fileLogDir, base);
@@ -144,27 +155,29 @@ class BotManager {
     this.fileLogs.configure(fl);
     try { if (this.fileLogs.enabled) this.fileLogs.ensureFile(); } catch (e) { dbg('BotManager', e); }
   }
+
   setFileLogOption(key, value) {
     if (!this._config) this._config = {};
     this._config[key] = value;
     this.persistence.set(key, value);
     this._applyFileLogConfig();
   }
+
   _wireBotLog(bot) {
     bot.on('log', ev => {
       try { this.fileLogs.write(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); }
-      try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); } // log runtime -> Telegram (không bao giờ làm hỏng bot)
+      try { this.telegramLogs.push(bot.cfg.id, ev && ev.entry ? ev.entry : ev); } catch (e) { dbg('BotManager', e); }
       if (this.onBotLog) {
         try { this.onBotLog(bot.cfg.id, ev); } catch (e) { dbg('BotManager', e); }
       }
     });
   }
-  // Log hệ thống không thuộc bot nào (khởi động, tắt, lỗi chưa bắt được...) -> cùng đường gửi Telegram với log bot
+
   runtimeLog(level, msg) {
-    try { this.fileLogs.write(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); if (level === 'err') this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); } // lỗi nặng: ghi ngay (tool có thể sắp chết)
+    try { this.fileLogs.write(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); if (level === 'err') this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); }
     try { this.telegramLogs.push(TelegramLogger.SYSTEM, { level, msg, time: Date.now() }); } catch (e) { dbg('BotManager', e); }
   }
-  // Stats server của 1 bot cho đầu file log: tên scoreboard + từng dòng (MONEY, SHARD, KILLS...). Không có bảng thì dùng số đã đọc.
+
   _serverStats(id) {
     const b = this.findBot(id);
     if (!b) return null;
@@ -178,151 +191,100 @@ class BotManager {
     if (b.state.shard) lines.push(`Shard: ${b.state.shard.toLocaleString('en-US')}`);
     return lines;
   }
+
   flushTelegramLogs(timeoutMs = 3000) { return this.telegramLogs.flushNow(timeoutMs); }
-  _createBotFromConfig(cfg, index) {
-    const merged = {
-      host: cfg.host || this._config.host,
-      port: cfg.port || this._config.port,
-      version: resolveVersion(cfg.version, this._config.version),
-      username: cfg.username,
-      ownerUsername: cfg.ownerUsername || this._config.ownerUsername,
-      registered: cfg.registered !== undefined ? cfg.registered : false,
-      botPassword: resolveBotPassword(cfg, this._config),
-      respawn: cfg.respawn !== undefined ? cfg.respawn : (this._config.respawn !== undefined ? this._config.respawn : true),
-      useProxy: cfg.useProxy !== undefined ? cfg.useProxy : (this._config.useProxy !== undefined ? this._config.useProxy : false),
-      autoMenu: cfg.autoMenu !== undefined ? cfg.autoMenu : (this._config.autoMenu !== undefined ? this._config.autoMenu : true),
-      menuCommand: cfg.menuCommand || this._config.menuCommand || '/menu',
-      clientSettings: cfg.clientSettings || null,
-      sendClientSettings: cfg.sendClientSettings !== undefined ? cfg.sendClientSettings : true,
-      skipValidation: cfg.skipValidation !== undefined ? cfg.skipValidation : false,
-      viewDistance: cfg.viewDistance || null,
-      autoLogin: cfg.autoLogin || this._config.autoLogin || null,   // Auto Login & Antibot & Auto Join (xem AutoLoginFlow.js)
-      beggarGuard: cfg.beggarGuard || this._config.beggarGuard || null,   // chặn người ăn xin (xem BeggarGuard.js)
-      id: cfg.id,
-      theme: cfg.theme || 'teal',
-      authMode: cfg.authMode || 'offline', // 'offline' (mặc định, /dn qua chat) hoặc 'microsoft' (acc Premium thật)
-      macros: cfg.macros || this._config.macros || {},
-      moneyGoal: cfg.moneyGoal ?? this._config.moneyGoal ?? null,
-      moneyGoalMacro: cfg.moneyGoalMacro || this._config.moneyGoalMacro || null,
-      autoSellMacro: cfg.autoSellMacro || null,
-      autoSellThreshold: cfg.autoSellThreshold ?? 90,
-      autoSellRevenue: cfg.autoSellRevenue ?? true,
-      autoSellMsgKeyword: cfg.autoSellMsgKeyword || '',
-      autoSellMsgPattern: cfg.autoSellMsgPattern || '',
-      autoSellIgnoreChat: cfg.autoSellIgnoreChat ?? true,
-      autoSellReportMin: cfg.autoSellReportMin ?? 0,
-      spawnerProtectOn: cfg.spawnerProtectOn ?? this._config.spawnerProtectOn ?? false,
-      spawnerProtectRange: cfg.spawnerProtectRange ?? this._config.spawnerProtectRange ?? null,
-      spawnerProtectLevel: cfg.spawnerProtectLevel ?? this._config.spawnerProtectLevel,
-      spawnerProtectTune: cfg.spawnerProtectTune ?? this._config.spawnerProtectTune,
-      spawnerAutoDisconnect: cfg.spawnerAutoDisconnect ?? this._config.spawnerAutoDisconnect ?? false,
-      spawnerAutoMine: cfg.spawnerAutoMine ?? this._config.spawnerAutoMine ?? true,
-      spawnerRequireSilk: cfg.spawnerRequireSilk ?? this._config.spawnerRequireSilk ?? true,
-      spawnerSaveRange: cfg.spawnerSaveRange ?? this._config.spawnerSaveRange ?? 5,
-      enderChestCommand: cfg.enderChestCommand ?? this._config.enderChestCommand ?? '/ec',
-      spawnerWhitelist: cfg.spawnerWhitelist || this._config.spawnerWhitelist || [],
-      protectedSpawners: cfg.protectedSpawners || [],
-      autoSellSpawnOn: cfg.autoSellSpawnOn ?? false,
-      autoSellSpawnList: cfg.autoSellSpawnList || [],
-      autoSellSpawnSlot: cfg.autoSellSpawnSlot ?? 51,
-      autoSellSpawnButton: cfg.autoSellSpawnButton ?? 0,
-      autoSellSpawnSecond: cfg.autoSellSpawnSecond,
-      autoSellSpawnMinute: cfg.autoSellSpawnMinute,
-      autoSellSpawnHour: cfg.autoSellSpawnHour,
-      autoSellSpawnRange: cfg.autoSellSpawnRange ?? 5,
-      autoSellSpawnRevenue: cfg.autoSellSpawnRevenue ?? true,
-      autoSellSpawnMsgKeyword: cfg.autoSellSpawnMsgKeyword || '',
-      autoSellSpawnMsgPattern: cfg.autoSellSpawnMsgPattern || '',
-      autoSellSpawnIgnoreChat: cfg.autoSellSpawnIgnoreChat ?? true,
-      autoSellSpawnReportMin: cfg.autoSellSpawnReportMin ?? 0,
-      afkTabNoise: cfg.afkTabNoise ?? this._config.afkTabNoise ?? false,
-      settingsProfile: cfg.settingsProfile ?? this._config.settingsProfile ?? 'vanilla',
-      pingServerInfo: cfg.pingServerInfo ?? this._config.pingServerInfo ?? null,
-      proxyAutoRotate: cfg.proxyAutoRotate ?? this._config.proxyAutoRotate ?? false,
-      proxyRotateMinMinutes: cfg.proxyRotateMinMinutes ?? this._config.proxyRotateMinMinutes ?? 1,
-      proxyRotateMaxMinutes: cfg.proxyRotateMaxMinutes ?? this._config.proxyRotateMaxMinutes ?? 10,
-      ...this._startupFields(cfg),
+
+  /** Hợp nhất việc xây dựng cấu hình bot cho cả load từ file và tạo mới qua CLI/Web */
+  _buildBotConfig(src = {}) {
+    const root = this._config || {};
+    const cfgWithPw = src.password && !src.botPassword ? { ...src, botPassword: src.password } : src;
+    return {
+      id: src.id,
+      host: src.host || root.host,
+      port: src.port || root.port,
+      version: resolveVersion(src.version, root.version),
+      username: src.username,
+      ownerUsername: src.ownerUsername || root.ownerUsername,
+      registered: src.registered !== undefined ? src.registered : false,
+      botPassword: resolveBotPassword(cfgWithPw, root),
+      respawn: src.respawn !== undefined ? src.respawn : (root.respawn !== undefined ? root.respawn : true),
+      useProxy: src.useProxy !== undefined ? src.useProxy : (root.useProxy !== undefined ? root.useProxy : false),
+      autoMenu: src.autoMenu !== undefined ? src.autoMenu : (root.autoMenu !== undefined ? root.autoMenu : true),
+      menuCommand: src.menuCommand || root.menuCommand || '/menu',
+      clientSettings: src.clientSettings || null,
+      sendClientSettings: src.sendClientSettings !== undefined ? src.sendClientSettings : true,
+      skipValidation: src.skipValidation !== undefined ? src.skipValidation : false,
+      viewDistance: src.viewDistance || null,
+      autoLogin: src.autoLogin || root.autoLogin || null,
+      beggarGuard: src.beggarGuard || root.beggarGuard || null,
+      theme: src.theme || 'teal',
+      authMode: src.authMode || 'offline',
+      macros: src.macros || root.macros || {},
+      moneyGoal: src.moneyGoal ?? root.moneyGoal ?? null,
+      moneyGoalMacro: src.moneyGoalMacro || root.moneyGoalMacro || null,
+      autoSellMacro: src.autoSellMacro || null,
+      autoSellThreshold: src.autoSellThreshold ?? 90,
+      autoSellRevenue: src.autoSellRevenue ?? true,
+      autoSellMsgKeyword: src.autoSellMsgKeyword || '',
+      autoSellMsgPattern: src.autoSellMsgPattern || '',
+      autoSellIgnoreChat: src.autoSellIgnoreChat ?? true,
+      autoSellReportMin: src.autoSellReportMin ?? 0,
+      spawnerProtectOn: src.spawnerProtectOn ?? root.spawnerProtectOn ?? false,
+      spawnerProtectRange: src.spawnerProtectRange ?? root.spawnerProtectRange ?? null,
+      spawnerProtectLevel: src.spawnerProtectLevel ?? root.spawnerProtectLevel,
+      spawnerProtectTune: src.spawnerProtectTune ?? root.spawnerProtectTune,
+      spawnerAutoDisconnect: src.spawnerAutoDisconnect ?? root.spawnerAutoDisconnect ?? false,
+      spawnerAutoMine: src.spawnerAutoMine ?? root.spawnerAutoMine ?? true,
+      spawnerRequireSilk: src.spawnerRequireSilk ?? root.spawnerRequireSilk ?? true,
+      spawnerSaveRange: src.spawnerSaveRange ?? root.spawnerSaveRange ?? 5,
+      enderChestCommand: src.enderChestCommand ?? root.enderChestCommand ?? '/ec',
+      spawnerWhitelist: src.spawnerWhitelist || root.spawnerWhitelist || [],
+      protectedSpawners: src.protectedSpawners || [],
+      autoSellSpawnOn: src.autoSellSpawnOn ?? false,
+      autoSellSpawnList: src.autoSellSpawnList || [],
+      autoSellSpawnSlot: src.autoSellSpawnSlot ?? 51,
+      autoSellSpawnButton: src.autoSellSpawnButton ?? 0,
+      autoSellSpawnSecond: src.autoSellSpawnSecond,
+      autoSellSpawnMinute: src.autoSellSpawnMinute,
+      autoSellSpawnHour: src.autoSellSpawnHour,
+      autoSellSpawnRange: src.autoSellSpawnRange ?? 5,
+      autoSellSpawnRevenue: src.autoSellSpawnRevenue ?? true,
+      autoSellSpawnMsgKeyword: src.autoSellSpawnMsgKeyword || '',
+      autoSellSpawnMsgPattern: src.autoSellSpawnMsgPattern || '',
+      autoSellSpawnIgnoreChat: src.autoSellSpawnIgnoreChat ?? true,
+      autoSellSpawnReportMin: src.autoSellSpawnReportMin ?? 0,
+      sellFailMention: src.sellFailMention ?? root.sellFailMention,
+      sellFailMaxHome: src.sellFailMaxHome ?? root.sellFailMaxHome,
+      nameProtect: src.nameProtect || root.nameProtect || null,
+      afkTabNoise: src.afkTabNoise ?? root.afkTabNoise ?? false,
+      settingsProfile: src.settingsProfile ?? root.settingsProfile ?? 'vanilla',
+      pingServerInfo: src.pingServerInfo ?? root.pingServerInfo ?? null,
+      proxyAutoRotate: src.proxyAutoRotate ?? root.proxyAutoRotate ?? false,
+      proxyRotateMinMinutes: src.proxyRotateMinMinutes ?? root.proxyRotateMinMinutes ?? 1,
+      proxyRotateMaxMinutes: src.proxyRotateMaxMinutes ?? root.proxyRotateMaxMinutes ?? 10,
+      ...this._startupFields(src),
     };
-    const theme = pickTheme(merged.theme, index);
-    const bot = new BotSession(merged, theme, this.proxyManager, { io: this.io });
+  }
+
+  _instantiateBot(mergedCfg, index) {
+    const theme = pickTheme(mergedCfg.theme, index);
+    const bot = new BotSession(mergedCfg, theme, this.proxyManager, { io: this.io });
     bot._manager = this;
     this._wireBotLog(bot);
-    if (this._config.settings) {
+    if (this._config?.settings) {
       Object.assign(bot.settings, this._config.settings);
     }
     return bot;
   }
+
+  _createBotFromConfig(cfg, index) {
+    return this._instantiateBot(this._buildBotConfig(cfg), index);
+  }
+
   _createBotFromData(data) {
     const index = this.bots.length;
-    const cfg = {
-      id: data.id,
-      host: data.host || this._config.host,
-      port: data.port || this._config.port,
-      version: resolveVersion(data.version, this._config.version),
-      username: data.username,
-      ownerUsername: data.ownerUsername || this._config.ownerUsername,
-      botPassword: data.password || data.botPassword || this._config.botPassword,
-      registered: data.registered !== undefined ? data.registered : false,
-      useProxy: data.useProxy !== undefined ? data.useProxy : false,
-      autoMenu: data.autoMenu !== undefined ? data.autoMenu : true,
-      menuCommand: data.menuCommand || '/menu',
-      clientSettings: data.clientSettings || null,
-      sendClientSettings: data.sendClientSettings !== undefined ? data.sendClientSettings : true,
-      skipValidation: data.skipValidation !== undefined ? data.skipValidation : false,
-      viewDistance: data.viewDistance || null,
-      autoLogin: data.autoLogin || this._config.autoLogin || null,
-      beggarGuard: data.beggarGuard || this._config.beggarGuard || null,
-      authMode: data.authMode || 'offline',
-      theme: data.theme || 'teal',
-      macros: data.macros || this._config.macros || {},
-      moneyGoal: data.moneyGoal ?? this._config.moneyGoal ?? null,
-      moneyGoalMacro: data.moneyGoalMacro || this._config.moneyGoalMacro || null,
-      autoSellMacro: data.autoSellMacro || null,
-      autoSellThreshold: data.autoSellThreshold ?? 90,
-      autoSellRevenue: data.autoSellRevenue ?? true,
-      autoSellMsgKeyword: data.autoSellMsgKeyword || '',
-      autoSellMsgPattern: data.autoSellMsgPattern || '',
-      autoSellIgnoreChat: data.autoSellIgnoreChat ?? true,
-      autoSellReportMin: data.autoSellReportMin ?? 0,
-      spawnerProtectOn: data.spawnerProtectOn ?? this._config.spawnerProtectOn ?? false,
-      spawnerProtectRange: data.spawnerProtectRange ?? this._config.spawnerProtectRange ?? null,
-      spawnerProtectLevel: data.spawnerProtectLevel ?? this._config.spawnerProtectLevel,
-      spawnerProtectTune: data.spawnerProtectTune ?? this._config.spawnerProtectTune,
-      spawnerAutoDisconnect: data.spawnerAutoDisconnect ?? this._config.spawnerAutoDisconnect ?? false,
-      spawnerAutoMine: data.spawnerAutoMine ?? this._config.spawnerAutoMine ?? true,
-      spawnerRequireSilk: data.spawnerRequireSilk ?? this._config.spawnerRequireSilk ?? true,
-      spawnerSaveRange: data.spawnerSaveRange ?? this._config.spawnerSaveRange ?? 5,
-      enderChestCommand: data.enderChestCommand ?? this._config.enderChestCommand ?? '/ec',
-      spawnerWhitelist: data.spawnerWhitelist || this._config.spawnerWhitelist || [],
-      protectedSpawners: data.protectedSpawners || [],
-      autoSellSpawnOn: data.autoSellSpawnOn ?? false,
-      autoSellSpawnList: data.autoSellSpawnList || [],
-      autoSellSpawnSlot: data.autoSellSpawnSlot ?? 51,
-      autoSellSpawnButton: data.autoSellSpawnButton ?? 0,
-      autoSellSpawnSecond: data.autoSellSpawnSecond,
-      autoSellSpawnMinute: data.autoSellSpawnMinute,
-      autoSellSpawnHour: data.autoSellSpawnHour,
-      autoSellSpawnRange: data.autoSellSpawnRange ?? 5,
-      autoSellSpawnRevenue: data.autoSellSpawnRevenue ?? true,
-      autoSellSpawnMsgKeyword: data.autoSellSpawnMsgKeyword || '',
-      autoSellSpawnMsgPattern: data.autoSellSpawnMsgPattern || '',
-      autoSellSpawnIgnoreChat: data.autoSellSpawnIgnoreChat ?? true,
-      autoSellSpawnReportMin: data.autoSellSpawnReportMin ?? 0,
-      afkTabNoise: data.afkTabNoise ?? this._config.afkTabNoise ?? false,
-      settingsProfile: data.settingsProfile ?? this._config.settingsProfile ?? 'vanilla',
-      pingServerInfo: data.pingServerInfo ?? this._config.pingServerInfo ?? null,
-      proxyAutoRotate: data.proxyAutoRotate ?? this._config.proxyAutoRotate ?? false,
-      proxyRotateMinMinutes: data.proxyRotateMinMinutes ?? this._config.proxyRotateMinMinutes ?? 1,
-      proxyRotateMaxMinutes: data.proxyRotateMaxMinutes ?? this._config.proxyRotateMaxMinutes ?? 10,
-      ...this._startupFields(data),
-    };
-    const theme = pickTheme(cfg.theme, index);
-    const bot = new BotSession(cfg, theme, this.proxyManager, { io: this.io });
-    bot._manager = this;
-    this._wireBotLog(bot);
-    if (this._config.settings) {
-      Object.assign(bot.settings, this._config.settings);
-    }
+    const cfg = this._buildBotConfig(data);
+    const bot = this._instantiateBot(cfg, index);
     if (typeof data.proxyIdx === 'number') {
       bot.proxy = this.proxyManager.list[data.proxyIdx] || null;
       if (bot.proxy) {
@@ -344,11 +306,13 @@ class BotManager {
     this.persistence.saveSync();
     return bot;
   }
+
   createBot(data) {
     const bot = this._createBotFromData(data);
     this.bots.push(bot);
     return bot;
   }
+
   removeBot(id) {
     const idx = this.bots.findIndex(b => b.cfg.id.toLowerCase() === id.toLowerCase());
     if (idx === -1) return null;
@@ -364,15 +328,15 @@ class BotManager {
     }
     return bot;
   }
+
   findBot(id) {
     return this.bots.find(b => b.cfg.id.toLowerCase() === (id || '').toLowerCase());
   }
+
   startAll(filterFn = null) {
     const targets = filterFn ? this.bots.filter(filterFn) : this.bots;
     let stagger = 0;
     for (const bot of targets) {
-      // Bot đã Stop (shutdown đặt _disabled=true) phải được bật lại; chỉ bỏ qua bot đang nghỉ theo lịch
-      // (_scheduledOut) vì _scheduleTick sẽ out lại trong ≤20s, vô lại chỉ để bị đá ra.
       if (!bot.isConnected && !bot.isReconnecting && !bot._scheduledOut) {
         bot._disabled = false;
         bot.state.reconnects = 0;
@@ -386,11 +350,13 @@ class BotManager {
     }
     return targets.length;
   }
+
   stopAll(filterFn = null) {
     const targets = filterFn ? this.bots.filter(filterFn) : this.bots;
     for (const bot of targets) bot.shutdown();
     return targets.length;
   }
+
   restartAll(filterFn = null) {
     const targets = filterFn ? this.bots.filter(filterFn) : this.bots;
     let stagger = 0;
@@ -411,6 +377,7 @@ class BotManager {
     }
     return targets.length;
   }
+
   getSummary() {
     const counts = { ONLINE: 0, CONNECTING: 0, AUTHENTICATING: 0, SPAWNING: 0, RECONNECTING: 0, DISCONNECTED: 0, STOPPING: 0 };
     let totalPpsIn = 0;
@@ -436,8 +403,8 @@ class BotManager {
       systemMetrics: this.getSystemMetrics(),
     };
   }
+
   getSystemMetrics() {
-    const os = require('os');
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const usedMem = totalMem - freeMem;
@@ -458,8 +425,8 @@ class BotManager {
       arch: process.arch,
     };
   }
+
   getBotCapacity() {
-    const os = require('os');
     const totalMemMB = os.totalmem() / (1024 * 1024);
     const freeMemMB = os.freemem() / (1024 * 1024);
     const procMem = process.memoryUsage();
@@ -468,7 +435,6 @@ class BotManager {
     const safeMB = Math.max(0, availableMB - CAPACITY.RESERVED_SYSTEM_MB);
     const afkCount = this.bots.filter(b => b.state.afk).length;
     const activeCount = this.bots.filter(b => b.isOnline && !b.state.afk).length;
-    const idleCount = this.bots.length - afkCount - activeCount;
     const avgRAMPerBot = this.bots.length > 0
       ? Math.round(usedByProcessMB / this.bots.length)
       : CAPACITY.RAM_PER_BOT_IDLE_MB;
@@ -499,30 +465,22 @@ class BotManager {
       warnThresholdPct: CAPACITY.WARN_THRESHOLD_PCT,
     };
   }
-  // ===== Lịch nghỉ: tự out trong khung giờ nghỉ, hết khung thì tự vô lại =====
-  // Chạy theo KHUNG GIỜ (không phải bắn đúng 1 phút) nên không bị trượt khi
-  // tick lệch / process restart giữa đêm; khung có thể qua nửa đêm (23:00→06:00).
-  // Giờ tính theo múi giờ config.timezone (mặc định Asia/Ho_Chi_Minh) — không
-  // phụ thuộc giờ của máy chủ (Render mặc định UTC nên trước đây bị lệch 7 tiếng).
+
   _normHM(v) {
     const m = /^\s*([01]?\d|2[0-3])\s*[:hH.]\s*([0-5]\d)\s*$/.exec(String(v ?? ''));
     return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
   }
   _hmToMin(hm) { const [h, m] = hm.split(':').map(Number); return h * 60 + m; }
-  _scheduleTz() { return this._config?.timezone || process.env.BOT_TZ || 'Asia/Ho_Chi_Minh'; }
+  _scheduleTz() { return this._config?.timezone || this._config?.telegramTimezone || process.env.BOT_TZ || 'Asia/Ho_Chi_Minh'; }
 
-  // ===== Hỏi liên kết webhook Discord sau khi bật autosell / autosell_spawn (chỉ khi dùng CLI) =====
-  // Không chặn: bot vẫn chạy bình thường. Dòng kế tiếp người dùng gõ là link webhook -> lưu;
-  // Enter trống -> bỏ qua; gõ lệnh khác -> huỷ câu hỏi và chạy lệnh đó như bình thường.
   askRevenueWebhook(botId) {
-    if (typeof this.cliAsk !== 'function') return;                      // không có CLI tương tác (dashboard/AUTO_EXE) -> không hỏi
-    if (this._webhookPrompt) return;                                    // đang hỏi rồi (vd cmdall nhiều bot)
-    if (this.revenueNotifier?.enabled || this.notifier?.isEventOn('revenue')) return; // đã liên kết rồi
+    if (typeof this.cliAsk !== 'function') return;
+    if (this._webhookPrompt) return;
+    if (this.revenueNotifier?.enabled || this.notifier?.isEventOn('revenue')) return;
     this._webhookPrompt = { botId };
     this.cliAsk('🔗 Liên kết webhook Discord để nhận báo cáo doanh thu? Dán link vào đây rồi Enter — hoặc Enter trống để bỏ qua (tool vẫn chạy bình thường).');
   }
   get hasWebhookPrompt() { return !!this._webhookPrompt; }
-  // true = dòng này đã được xử lý (là link hoặc Enter trống); false = là lệnh khác, để CLI xử lý tiếp
   answerWebhookPrompt(input) {
     if (!this._webhookPrompt) return false;
     this._webhookPrompt = null;
@@ -534,28 +492,41 @@ class BotManager {
       this.cliAsk?.('✓ Đã liên kết webhook Discord cho báo cáo doanh thu. Thử: webhook revenue test');
       return true;
     }
-    return false; // không phải link Discord -> coi là lệnh bình thường
+    return false;
   }
 
-  // ===== Telegram: bảng Auto sell spawner + cảnh báo + lệnh /status /panel =====
-  // Cấu hình (config.json hoặc biến môi trường — tiện cho Render/Docker):
-  //   telegramToken | TELEGRAM_BOT_TOKEN, telegramChatId | TELEGRAM_CHAT_ID
-  //   telegramEvents (mặc định disconnect,reconnectFailed,reconnectRecovered,sellFailed,spawnerThreat)
-  //   telegramMode 'edit' (mặc định: 1 bảng/bot sửa tại chỗ) | 'new' (mỗi vòng 1 tin mới)
-  //   telegramRefreshSec (mặc định 1 = bảng cập nhật mỗi giây; 0 = chỉ khi có vòng bán/sự kiện; chỉ chạy ở mode 'edit'),
-  //   telegramMinGapSec (30, chống dội cho cập nhật sau vòng bán), telegramCommands (true)
+  // ===== Telegram v2: bảng Auto sell spawner + cảnh báo + điều khiển từ xa =====
   _initTelegram() {
-    const c = this._config || {};
-    this.telegram.configure(c.telegramToken || process.env.TELEGRAM_BOT_TOKEN || null, c.telegramChatId ?? process.env.TELEGRAM_CHAT_ID ?? null, c.telegramEvents);
+    if (!this._config) this._config = {};
+    const hadExplicitRefresh = this._config.telegramRefreshSec !== undefined || process.env.TELEGRAM_REFRESH_SEC !== undefined;
+    const hadExplicitMode = this._config.telegramMode !== undefined;
+    const hadExplicitEvents = Array.isArray(this._config.telegramEvents) && this._config.telegramEvents.length > 0;
+    const norm = normalizeTelegramConfig(this._config, process.env);
+    // Chỉ đồng bộ các khoá Telegram v2 vào bộ nhớ runtime nếu chưa có (tránh làm bẩn file config.json khi chưa dùng)
+    for (const [k, v] of Object.entries(norm)) {
+      if (k.startsWith('telegram') && this._config[k] === undefined) {
+        if (k === 'telegramRefreshSec' && !hadExplicitRefresh) continue;
+        if (k === 'telegramMode' && !hadExplicitMode) continue;
+        if (k === 'telegramEvents' && !hadExplicitEvents) continue;
+        this._config[k] = v;
+      }
+    }
+    if (this._config.telegramSymbols) {
+      setSymbolSet(this._config.telegramSymbols);
+    }
+    const c = this._config;
+    const token = c.telegramToken || process.env.TELEGRAM_BOT_TOKEN || null;
+    const chatId = c.telegramChatId ?? process.env.TELEGRAM_CHAT_ID ?? null;
+    const events = hadExplicitEvents ? c.telegramEvents : undefined;
+    this.telegram.discardBacklog = c.telegramDiscardBacklog === true && hadExplicitEvents;
+    this.telegram.commandTtlSec = c.telegramCommandTtlSec ?? 120;
+    this.telegram.configure(token, chatId, events);
     this._tgMsgs = (c.telegramMessages && typeof c.telegramMessages === 'object') ? { ...c.telegramMessages } : {};
-    this.telegramLogs.resetMessage(); // đổi token/chat -> file log tạo lại ở chat mới
+    this.telegramLogs.resetMessage();
     this._applyTelegramLogConfig();
     this._armTelegram();
   }
-  // Log runtime -> Telegram (1 file chứa log của tất cả bot, sửa tại chỗ theo chu kỳ). Config (config.json, gốc):
-  //   telegramLogs (true) bật/tắt · telegramLogLevels (mặc định "all" = mọi mức trừ chat; "info"|"warn"|"err"|["warn","err",...])
-  //   telegramLogBots (null = mọi bot | ["bot-1",...]) · telegramLogEverySec (10; 2s..24h — chu kỳ cập nhật file) · telegramLogSilent (true = tin đầu không rung)
-  //   telegramLogMaxPerMin (10, tối đa số lần cập nhật/phút) · telegramLogKeepLines (1000; 50..5000 — số dòng mới nhất giữ trong file)
+
   _applyTelegramLogConfig() {
     const c = this._config || {};
     this.telegramLogs.configure({
@@ -568,28 +539,24 @@ class BotManager {
       keepLines: c.telegramLogKeepLines ?? 1000,
     });
   }
+
   _armTelegram() {
     if (this._tgTimer) { clearInterval(this._tgTimer); this._tgTimer = null; }
     const c = this._config || {};
     if (!this.telegram.enabled) { this.telegram.stopPolling(); return; }
-    if (c.telegramCommands !== false) {
-      this.telegram.startPolling((ev) => this._onTelegramEvent(ev));
-      this.telegram.syncCommands(HelpCatalog.getTelegramBotCommands()).catch(e => dbg('BotManager', e));
-    } else {
-      this.telegram.stopPolling();
-    }
+    if (c.telegramCommands !== false) this.telegram.startPolling((ev) => this._onTelegramEvent(ev));
+    else this.telegram.stopPolling();
     const sec = c.telegramRefreshSec === undefined ? 1 : Math.max(0, Number(c.telegramRefreshSec) || 0);
-    if (sec > 0 && c.telegramMode !== 'new') { // mode 'new' mà sửa liên tục thì thành spam tin mới -> chỉ chạy ở mode 'edit'
+    if (sec > 0 && c.telegramMode !== 'new') {
       this._tgTimer = setInterval(() => { try { this._tgTick(); } catch (e) { dbg('BotManager', e); } }, Math.max(1, sec) * 1000);
       if (this._tgTimer.unref) this._tgTimer.unref();
     }
   }
-  // Nhịp cập nhật bảng. Telegram chỉ cho ~1 lệnh/giây/chat -> mỗi nhịp sửa ĐÚNG 1 bảng, xoay vòng giữa các bot
-  // (1 bot = mỗi giây, N bot = mỗi N giây/bảng). Bot offline không sửa liên tục — chỉ sửa khi trạng thái/thu nhập đổi.
+
   _tgTick() {
     const tg = this.telegram;
     if (!tg.enabled || this._config?.telegramMode === 'new') return;
-    if (tg.paused || tg.pending > 2) return; // đang bị 429 hoặc hàng đợi chưa kịp xử lý -> bỏ nhịp này
+    if (tg.paused || tg.pending > 2) return;
     const cands = [];
     for (const b of this.bots) {
       if (!this._panelRelevant(b)) continue;
@@ -599,7 +566,8 @@ class BotManager {
     }
     if (cands.length) this.sendTelegramPanel(cands[this._tgRR++ % cands.length]);
   }
-  static parseEverySec(text) { // "1s", "30s", "10m", "1h30m", "90" (số trần = giây) -> số giây; null nếu không hiểu
+
+  static parseEverySec(text) {
     const t = String(text || '').trim().toLowerCase();
     if (!t) return null;
     if (/^\d+$/.test(t)) return Number(t);
@@ -607,20 +575,24 @@ class BotManager {
     if (!m || (!m[1] && !m[2] && !m[3])) return null;
     return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
   }
-  // Lưu token/chat id (CLI `telegram set`) rồi bật lại polling/hẹn giờ
+
   setTelegram(token, chatId) {
     if (token !== undefined) { this._config.telegramToken = token || null; this.persistence.set('telegramToken', token || null); }
     if (chatId !== undefined) { this._config.telegramChatId = chatId ?? null; this.persistence.set('telegramChatId', chatId ?? null); }
     this._initTelegram();
   }
+
   setTelegramOption(key, value) {
     this._config[key] = value;
     this.persistence.set(key, value);
     if (key === 'telegramEvents') this.telegram.configure(this.telegram.token, this.telegram.chatId, value);
+    if (key === 'telegramSymbols') setSymbolSet(value);
     if (key.startsWith('telegramLog')) this._applyTelegramLogConfig();
     this._armTelegram();
   }
+
   _panelRelevant(bot) { return !!(bot._sellSpawnOn || this.revenue.stats(bot.cfg.id)); }
+
   _botPanelInfo(bot, now = Date.now()) {
     const id = bot.cfg.id;
     const up = this.revenue.uptime(id, now);
@@ -655,19 +627,20 @@ class BotManager {
       proxyStatus: hasProxy ? 'có' : 'không',
       macros: bot.scriptRunner?.list?.() || [],
       sellFailAgoMs: bot._sellFailAlertedAt ? now - bot._sellFailAlertedAt : null,
+      recentLimit: this._config?.telegramRecentLimit || 8,
       clock: TelegramPanel.fmtClock(now, tz, true),
     };
   }
+
   markPanelDirty(botId) {
     const bot = this.findBot(botId);
     if (bot && this._panelRelevant(bot)) this.sendTelegramPanel(bot);
   }
-  // Gửi/sửa bảng của 1 bot. opts.editId = sửa đúng tin đó (nút Làm mới); opts.fresh = luôn gửi tin mới.
+
   sendTelegramPanel(bot, opts = {}) {
     if (!this.telegram.enabled) return Promise.resolve(false);
     const id = String(bot.cfg.id);
     const nowOverride = opts.now;
-    // Xếp hàng theo từng bot: 2 yêu cầu sát nhau không tạo ra 2 bảng trùng (cái sau thấy message_id của cái trước)
     const run = async () => {
       this._tgBusy.add(id);
       try {
@@ -689,6 +662,7 @@ class BotManager {
     this._tgChain.set(id, chained);
     return chained;
   }
+
   refreshTelegramPanels(opts = {}) {
     let n = 0;
     for (const b of this.bots) {
@@ -697,63 +671,71 @@ class BotManager {
     }
     return n;
   }
-  // BotSession gọi sau mỗi vòng bán xong: cập nhật bảng (chống dội: tối thiểu telegramMinGapSec giây/bot)
+
   onSellCycle(bot) {
     if (!this.telegram.enabled) return;
-    if ((this._tgTimer && this._config?.telegramMode !== 'new')) return; // đang cập nhật theo nhịp giây -> bảng đã tự mới, khỏi sửa thêm
+    if ((this._tgTimer && this._config?.telegramMode !== 'new')) return;
     const gap = Math.max(0, Number(this._config?.telegramMinGapSec ?? 30)) * 1000;
     if (Date.now() - (this._tgLastAt.get(String(bot.cfg.id)) || 0) < gap) return;
     this.sendTelegramPanel(bot);
   }
-  // BotSession._notify gọi cho MỌI sự kiện (kick, hết reconnect, bán lỗi...) -> Telegram nếu sự kiện đó đang bật
+
+  // Giữ nguyên định dạng cảnh báo Telegram (vẫn đồng bộ bảng khi sự cố xảy ra)
   telegramAlert(bot, eventKey, title, description, headline) {
     if (!this.telegram.isEventOn(eventKey)) return;
     const h = (t) => TelegramNotifier.discordToHtml(t);
     const text = [headline ? h(headline) : null, `<b>${h(title)}</b>`, description ? h(description) : null].filter(Boolean).join('\n');
-    this.telegram.send(text); // tin mới -> có thông báo đẩy trên điện thoại
+    const silent = this.notifications ? !this.notifications.isLoudEvent(eventKey, undefined, false) : false;
+    this.telegram.send(text, silent ? { silent: true } : undefined);
     if (['disconnect', 'reconnectFailed', 'reconnectRecovered', 'sellFailed'].includes(eventKey) && this._panelRelevant(bot)) {
-      setTimeout(() => { try { this.sendTelegramPanel(bot); } catch (e) { dbg('BotManager', e); } }, 1500); // trạng thái đổi -> sửa bảng cho khớp
+      setTimeout(() => { try { this.sendTelegramPanel(bot); } catch (e) { dbg('BotManager', e); } }, 1500);
     }
   }
+
+  /**
+   * Đấu nối đầy đủ mọi sự kiện Telegram (cả command /... và nút bấm p:/c:/e:/r:/lg:)
+   * qua TelegramControl v2 (RBAC, rate-limit, xác nhận 30s, 24 lệnh & menu điều khiển).
+   */
   async _onTelegramEvent(ev) {
-    if (!ev) return;
+    if (!ev) return null;
     const res = await this.telegramControl.handleEvent(ev);
-    if (!res || res.silentIgnore) return;
+    if (!res || res.silentIgnore) return res;
 
     if (ev.type === 'button') {
-      if (res.editMessage && ev.messageId && res.text) {
-        const isLivePanelMsg = Object.values(this._tgMsgs || {}).includes(ev.messageId);
-        const isOpeningBotMenu = ev.cmd === 'p' && String(ev.arg || '').endsWith(':m');
-        if (isLivePanelMsg && isOpeningBotMenu) {
-          if (typeof ev.reply === 'function') await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
-          else await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
+      if (res.editMessage && res.text && ev.messageId) {
+        await this.telegram.edit(ev.messageId, res.text, { keyboard: res.keyboard, priority: 1 });
+      } else if (res.text && !res.noReply && !res.editMessage) {
+        if (typeof ev.reply === 'function') {
+          await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
         } else {
-          await this.telegram.edit(ev.messageId, res.text, { keyboard: res.keyboard, priority: 1 });
+          await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
         }
-      } else if (res.text && !res.editMessage && !res.noReply) {
-        if (typeof ev.reply === 'function') await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
-        else await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
+      }
+      if (Array.isArray(res.refresh)) {
+        for (const id of res.refresh) this.markPanelDirty(id);
       }
       if (typeof ev.answer === 'function') {
         await ev.answer(res.callbackText || '');
       }
-    } else if (ev.type === 'command') {
-      if (!res.noReply && res.text) {
-        if (typeof ev.reply === 'function') await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
-        else await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
-      }
+      return res;
     }
 
-    if (Array.isArray(res.refresh) && res.refresh.length) {
-      for (const botId of res.refresh) {
-        this.markPanelDirty(botId);
+    if (ev.type === 'command') {
+      if (res.text && !res.noReply) {
+        if (typeof ev.reply === 'function') {
+          await ev.reply(res.text, res.keyboard ? { keyboard: res.keyboard } : undefined);
+        } else {
+          await this.telegram.send(res.text, { keyboard: res.keyboard, priority: 1 });
+        }
+      }
+      if (Array.isArray(res.refresh)) {
+        for (const id of res.refresh) this.markPanelDirty(id);
       }
     }
     return res;
   }
 
   // ===== Log runtime -> Telegram: lệnh =====
-  // "bot-1 50" | "50" | "bot-1" | "" -> { id, n }.  Số trần là SỐ DÒNG, trừ khi đúng là id của 1 bot (vd bot tên "123").
   _parseLogsTarget(parts) {
     const rest = parts.filter(Boolean);
     let id = null, n = 25;
@@ -762,6 +744,7 @@ class BotManager {
     if (id && id.toLowerCase() === 'system') id = TelegramLogger.SYSTEM;
     return { id, n };
   }
+
   _logsStatusLines() {
     const s = this.telegramLogs.status();
     const lv = s.preset ? `${s.preset} (${s.levels.join(', ')})` : s.levels.join(', ');
@@ -774,7 +757,7 @@ class BotManager {
       `Đã tạo ${s.created} file · cập nhật ${s.updates} lần · file có ${s.lines} dòng · bỏ ${s.dropped} dòng cũ · gửi lỗi ${s.failed} lần · chờ ${s.buffered} mục mới`,
     ];
   }
-  // CLI: "telegram logs ..." -> [[kind, text], ...] (kind: ok | warn | err | muted) để main.js tô màu. Không bao giờ throw.
+
   async telegramLogsCommand(args = []) {
     const out = [];
     const say = (kind, text) => out.push([kind, '  ' + text]);
@@ -851,7 +834,7 @@ class BotManager {
         const on = onOff(val);
         if (on === null) say('warn', 'Cú pháp: telegram logs silent on|off  (on = tin log không rung điện thoại)');
         else { this.setTelegramOption('telegramLogSilent', on); say('ok', '✓ Tin log: ' + (on ? 'im lặng (không rung)' : 'có rung điện thoại')); }
-      } else if (sub === 'send' || sub === 'now') {
+      } else if (sub === 'send') {
         if (!this.telegram.enabled) say('warn', 'Chưa cấu hình Telegram — dùng: telegram set <token>');
         else {
           const { id, n } = this._parseLogsTarget(args.slice(1));
@@ -870,7 +853,7 @@ class BotManager {
     }
     return out;
   }
-  // Telegram: /logs [id] [n] · /logs on|off|status
+
   async _tgLogsCommand(ev) {
     const L = this.telegramLogs;
     const e = TelegramNotifier.escapeHtml;
@@ -896,18 +879,18 @@ class BotManager {
   }
 
   // ===== Báo cáo doanh thu TỔNG HỢP (gộp tất cả bot) =====
-  // Webhook riêng (webhook revenue set <url>) nếu có, không thì webhook chung (sự kiện "revenue").
   _revenueSink() {
     if (this.revenueNotifier?.enabled) return { n: this.revenueNotifier, ev: null, via: 'webhook doanh thu riêng' };
     if (this.notifier?.isEventOn('revenue')) return { n: this.notifier, ev: 'revenue', via: 'webhook chung' };
     return null;
   }
+
   _revenueTotalCycles() {
     let c = 0;
     for (const b of this.bots) c += (this.revenue.stats(b.cfg.id)?.cycles || 0) + (this.revenue.stats(b.cfg.id + '#macro')?.cycles || 0);
     return c;
   }
-  // Gộp thống kê auto-sell spawn + auto-sell macro của cùng 1 bot
+
   _mergeRevStats(list) {
     if (list.length === 1) return list[0];
     const sum = f => list.reduce((t, s) => t + (f(s) || 0), 0);
@@ -921,6 +904,7 @@ class BotManager {
       daily: list[0].daily.map((d, i) => ({ label: d.label, amount: sum(s => s.daily[i]?.amount) })),
     };
   }
+
   _discordPrimaryUsername() {
     for (const b of this.bots) {
       const u = String(b?.cfg?.username || '');
@@ -928,13 +912,15 @@ class BotManager {
     }
     return '';
   }
+
   _discordAuthor(label = Notifier.BRAND) {
     return DiscordTheme.buildAuthor(label, this._discordPrimaryUsername());
   }
+
   _discordThumb() {
     return DiscordTheme.buildThumbnail(this._discordPrimaryUsername());
   }
-  // Tổng hợp cả dàn bot — cùng bố cục với báo cáo từng bot (bảng chi tiết từng bot nằm ở phần mô tả)
+
   buildRevenueSummaryEmbed(now = Date.now()) {
     const money = RevenueTracker.formatMoneyDollar;
     const rows = [];
@@ -984,6 +970,7 @@ class BotManager {
       timestamp: new Date(now).toISOString(),
     }, 'revenueSummary');
   }
+
   sendRevenueSummary() {
     const embed = this.buildRevenueSummaryEmbed();
     if (!embed) return { ok: false, message: 'Chưa có dữ liệu doanh thu của bot nào' };
@@ -993,7 +980,7 @@ class BotManager {
     this._revSummaryLastCycles = this._revenueTotalCycles();
     return { ok: true, via: sink.via };
   }
-  // Hẹn giờ gửi định kỳ (phút, 0 = tắt). Tới hạn mà không có vòng bán mới nào thì bỏ qua, khỏi gửi trùng.
+
   _armRevenueSummary() {
     if (this._revSummaryTimer) { clearInterval(this._revSummaryTimer); this._revSummaryTimer = null; }
     const min = Number(this._config?.revenueSummaryEveryMin) || 0;
@@ -1006,6 +993,7 @@ class BotManager {
     }, Math.max(1, min) * 60000);
     if (this._revSummaryTimer.unref) this._revSummaryTimer.unref();
   }
+
   setRevenueSummaryEvery(min) {
     min = Math.max(0, Number(min) || 0);
     this._config.revenueSummaryEveryMin = min;
@@ -1013,7 +1001,7 @@ class BotManager {
     this._armRevenueSummary();
     return min;
   }
-  // "30m", "1h", "1h30m", "90" (số trần = phút) -> số phút; null nếu không hiểu
+
   static parseEveryMin(text) {
     const t = String(text || '').trim().toLowerCase();
     if (!t) return null;
@@ -1022,6 +1010,7 @@ class BotManager {
     if (!m || (!m[1] && !m[2])) return null;
     return Number(m[1] || 0) * 60 + Number(m[2] || 0);
   }
+
   _nowMinutes() {
     const tz = this._scheduleTz();
     let parts;
@@ -1034,13 +1023,13 @@ class BotManager {
     const m = Number(parts.find(p => p.type === 'minute').value);
     return h * 60 + m;
   }
+
   setSchedule(enabled, outTime, inTime) {
     const out = this._normHM(outTime), inn = this._normHM(inTime);
     const sched = { enabled: !!enabled && !!out && !!inn && out !== inn, outTime: out, inTime: inn };
     const wasEnabled = !!this._config?.schedule?.enabled;
     this._config.schedule = sched;
     this.persistence.set('schedule', sched);
-    // tắt lịch giữa lúc đang nghỉ -> cho bot vô lại luôn, đừng để kẹt offline
     if (!sched.enabled && (wasEnabled || this._inRest)) {
       if (this._inRest) this._doScheduledIn({ inTime: 'ngay (đã tắt lịch)' });
       this._inRest = false;
@@ -1048,9 +1037,11 @@ class BotManager {
     if (sched.enabled) setTimeout(() => this._scheduleTick(), 500);
     return sched;
   }
+
   getSchedule() {
     return this._config?.schedule || { enabled: false, outTime: null, inTime: null };
   }
+
   _scheduleTick() {
     const sched = this._config?.schedule;
     if (!sched?.enabled) return;
@@ -1060,8 +1051,6 @@ class BotManager {
     const inRest = o < i ? (n >= o && n < i) : (n >= o || n < i);
     const s = { ...sched, outTime: out, inTime: inn };
     if (inRest) {
-      // Trong giờ nghỉ: bot nào còn chạy (kể cả bot vừa được start muộn sau
-      // khi khởi động) thì out; chỉ báo Discord ở lần chuyển trạng thái đầu.
       const count = this._doScheduledOut(s);
       if (!this._inRest) {
         this._inRest = true;
@@ -1072,10 +1061,11 @@ class BotManager {
       this._doScheduledIn(s);
     }
   }
+
   _doScheduledOut(sched) {
     let count = 0;
     for (const bot of this.bots) {
-      if (bot._disabled && bot.state.connState === CS.DISCONNECTED) continue; // đã tắt sẵn
+      if (bot._disabled && bot.state.connState === CS.DISCONNECTED) continue;
       if (bot.state.connState !== CS.DISCONNECTED || bot.isOnline) {
         bot._scheduledOut = true;
         bot.log('sys', `Lịch nghỉ: tự out (sẽ vô lại lúc ${sched.inTime})`);
@@ -1085,6 +1075,7 @@ class BotManager {
     }
     return count;
   }
+
   _notifyRest(sched, count) {
     const theme = DiscordTheme.getTheme('scheduleOut');
     const tot = Math.max(1, this.bots.length || count || 1);
@@ -1102,6 +1093,7 @@ class BotManager {
       timestamp: new Date().toISOString(),
     }, 'scheduleOut'));
   }
+
   _doScheduledIn(sched) {
     let count = 0;
     for (const bot of this.bots) {
@@ -1129,6 +1121,7 @@ class BotManager {
       timestamp: new Date().toISOString(),
     }, 'scheduleIn'));
   }
+
   async flushGracefulShutdown(timeoutMs = 3000) {
     let timer;
     try {
@@ -1139,6 +1132,7 @@ class BotManager {
     } catch (e) { dbg('BotManager', e); } finally { clearTimeout(timer); }
     try { this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); }
   }
+
   shutdown() {
     for (const bot of this.bots) bot.shutdown();
     try { this.revenue.flush(); } catch (e) { dbg('BotManager', e); }
@@ -1155,4 +1149,5 @@ class BotManager {
     this.bots = [];
   }
 }
+
 module.exports = BotManager;

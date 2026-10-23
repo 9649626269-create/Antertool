@@ -1,10 +1,10 @@
 'use strict';
 /**
- * TeleportHandler — tách logic teleport (/home), đứng yên chờ, HUD filter từ BotSession.
- * this._tp (TeleportWatch) vẫn thuộc session; handler điều phối.
+ * TeleportHandler — điều phối teleport (/home), giữ đứng yên trước khi gửi lệnh, và lọc thông báo HUD.
+ * this._tp (TeleportWatch) thuộc về BotSession; handler này quản lý việc thả phím và ghi nhận HUD.
  */
 const { TP } = require('./constants');
-const { nowMs, sleep } = require('./utils');
+const { nowMs } = require('./utils');
 const { dbg } = require('./debug');
 
 class TeleportHandler {
@@ -15,18 +15,30 @@ class TeleportHandler {
     this.s = session;
   }
 
-  /** Thả phím + giữ đứng yên trước khi gõ lệnh teleport */
+  /** Thả hết phím AFK + giữ đứng yên trước khi gõ lệnh teleport */
   holdBeforeSend(now = nowMs()) {
     const s = this.s;
     s._tp.hold(now, TP.PRESEND_MS + 400);
+    for (const k of ['afkJumpOff', 'afkSneak', 'wafkKey', 'wafkJump']) s._clearTimer(k);
+    try {
+      for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) {
+        s.mc?.setControlState(k, false);
+      }
+    } catch (e) {
+      dbg('TeleportHandler', e);
+    }
   }
 
-  /** Ghi nhận tin action bar / title liên quan teleport */
-  noteHud(text, now = nowMs()) {
+  /** Ghi nhận và hiển thị tin action bar / title liên quan teleport (chống lặp trong 4s) */
+  noteHud(text, label = 'ActionBar', now = nowMs()) {
     const s = this.s;
-    const t = String(text || '');
+    const t = String(text || '').trim();
+    if (!t) return false;
     s._tp.note(t, now);
     if (!(s._tp.active || s._tp.frozen(now) || TP.HUD_RE.test(t))) return false;
+    if (s._hudLast && s._hudLast.text === t && now - s._hudLast.at < 4000) return false;
+    s._hudLast = { text: t, at: now };
+    s.log('chat', `[${label}] ${t}`);
     return true;
   }
 
@@ -37,8 +49,6 @@ class TeleportHandler {
   isActive() {
     return this.s._tp.active;
   }
-
-  // TODO: chuyển _homeAndWait, _faceBlock, _aimCheckBlock sang đây.
 }
 
 module.exports = TeleportHandler;

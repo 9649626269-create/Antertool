@@ -1,27 +1,23 @@
-MANIFEST — Antertool Discord Webhook Notification Redesign & Telegram v2 Sync
-Base build: Antertool-Update-Notification.zip (antares-manager@1.0.0)
+MANIFEST — Antertool Discord Webhook Notification Redesign & Telegram v2 Sync (Optimized & Logic-Audited Build)
+Base build: Antertool-Discord-Redesign.zip (antares-manager@1.0.0)
 
-Files:
+Files & Logic Fixes:
 [NEW] src/core/DiscordTheme.js — Module giao diện tập trung cho Discord Webhook: ánh xạ mọi eventKey tới { emoji, color, severity, label }, định dạng Title Case tiếng Việt kèm emoji, author + avatar mc-heads, thanh tiến độ (▰▰▰▱▱ 60%), timestamp tương đối (<t:unix:R>), blockquote lý do kick, code block lệnh/log, định dạng tiền ($41.35K), che thông tin nhạy cảm và cắt chuỗi an toàn theo code point trong giới hạn Discord
-[MODIFIED] src/core/Notifier.js — Tích hợp DiscordTheme vào finish(), test(), testMention(), bổ sung lệnh preview() gửi mẫu thử mọi loại sự kiện và kiểm tra giới hạn an toàn cho content/embed
-[MODIFIED] src/core/BotSession.js — Nâng cấp _alertTitle, _alertEmbed và _buildRevenueEmbed với author, thumbnail, trường Thời gian treo, blockquote, <t:unix:R>, progress bar và code block mà vẫn giữ nguyên 100% chuỗi gốc gửi sang Telegram
-[MODIFIED] src/services/BotManager.js — Đồng bộ giao diện mới cho buildRevenueSummaryEmbed, _notifyRest, _doScheduledIn và kết nối đầy đủ TelegramPanel v2 / TelegramControl / NotificationCenter
-[MODIFIED] main.js — Bổ sung lệnh console `webhook preview [sự_kiện]`
-[MODIFIED] src/core/HelpCatalog.js — Bổ sung hướng dẫn lệnh `webhook preview` và các lệnh Telegram v2 (không chứa ký tự emoji)
-[MODIFIED] src/core/ConfigValidator.js — Bổ sung hằng số và hàm chuẩn hoá/di trú cấu hình Telegram v2
-[MODIFIED] src/core/TelegramPanel.js — Đồng bộ bảng Auto sell spawner v2, menu bot, shortId 5 ký tự base36 và định dạng thời gian
-[MODIFIED] src/core/TelegramNotifier.js — Đồng bộ hàng đợi ưu tiên P0-P5, xử lý bảng mã lỗi Telegram và lọc backlog/TTL
-[MODIFIED] src/core/TelegramLogger.js — Bổ sung redactStatic che thông tin nhạy cảm và chuyển ký hiệu mã nguồn sang Unicode escape
-[MODIFIED] README.md — Cập nhật tài liệu tiếng Việt cho hệ thống thông báo Discord Webhook mới và lệnh `webhook preview`
-[MODIFIED] test/discord-embed.test.js — Mở rộng kiểm tra cho DiscordTheme, toàn bộ sự kiện, giới hạn độ dài, cắt surrogate an toàn, che bí mật, tính bất biến của Telegram và lệnh `webhook preview`
-[MODIFIED] test/notification-center.test.js — Cập nhật kiểm tra tương thích Discord với DiscordTheme & Notifier.finish
-[MODIFIED] test/telegram.test.js — Đồng bộ kiểm tra bảng Telegram với bộ ký hiệu Symbols v2
-
-- src/core/TelegramNotifier.js:
-  + Bổ sung syncCommands() và clearCommands() gọi setMyCommands + setChatMenuButton (hiển thị gợi ý 29 lệnh khi gõ '/' và nút Menu trong Telegram).
-- src/services/BotManager.js:
-  + Tự động đồng bộ danh sách lệnh '/' (syncCommands) khi khởi động Telegram và chuyển toàn bộ sự kiện lệnh/nút bấm (_onTelegramEvent) qua TelegramControl.handleEvent().
-- src/core/TelegramControl.js:
-  + Hỗ trợ điều khiển trực tiếp khi bấm gợi ý '/' không kèm tên bot (tự chọn bot nếu dàn có 1 bot, hoặc mở danh sách chọn bot nếu có nhiều bot) và hỗ trợ quyền điều khiển mặc định trong nhóm chat đã cấu hình khi chưa đặt RBAC riêng.
-- src/core/HelpCatalog.js:
-  + Mở rộng TELEGRAM_BOT_COMMANDS lên đầy đủ 29 lệnh xem & điều khiển từ xa trên Telegram.
+[MODIFIED] src/services/BotManager.js —
+  • Đấu nối hoàn chỉnh `_onTelegramEvent(ev)` qua `TelegramControl.handleEvent(ev)` cho cả 24 lệnh `/command` và mọi nút bấm `p:<bid>:<act>`, `c:<token>:<y|n>`, `e:<key>:<op>`, `r:<id>`, `lg:now`
+  • Gọi `normalizeTelegramConfig()` và `setSymbolSet()` trong `_initTelegram()` và `setTelegramOption()`
+  • Hợp nhất `_createBotFromConfig()` và `_createBotFromData()` qua `_buildBotConfig()`, khắc phục lỗi thiếu `respawn: true` và `resolveBotPassword()` khi tạo bot qua CLI/Web
+[MODIFIED] src/core/BotSession.js —
+  • Bổ sung hàm `getProtectStatus()` và theo dõi `_spLastScanAt` / `_spThreatCount` để bảng Telegram hiển thị đúng trạng thái bảo vệ lồng
+  • Tích hợp `BotActivity` (`initSessionActivity`, `setActivity`, `endActivity`, `clearActivities`) và xoá toàn bộ cờ bận (`_sellSpawnBusy`, `_sellRecovering`, `_spawnerBusy`, `_nextSellAt`) trong `_cleanupOnDisconnect()` để triệt tiêu lỗi race condition `offline_but_busy` khi bị kick giữa vòng bán
+  • Chuyển `windowOpen` và `_afkPaused` sang kiểm tra `this.autoOrder?.isWorking` thay vì `this.autoOrder?.active` để không khoá oan GUI /tpa, /stats, captcha và AFK khi AutoOrder đang ngủ chờ item
+  • Uỷ quyền `_logHud()` và `_tpHoldStill()` sang `TeleportHandler`, xoá nhánh kiểm tra custom command trùng lặp trong `cmd()`, và bổ sung lưu cấu hình bền vững cho lệnh CLI `goal`, `addspawner`, `removespawner`
+[MODIFIED] src/core/AutoSellHandler.js — Cập nhật đầy đủ `_nextSellAt`, `_sellCycleCount`, `_sellCurrentIdx`, `_sellCycleStartedAt`, `_sellRecoveryAttempt`, `_sellHomeTries` và phát sự kiện `BotActivity` theo thời gian thực
+[MODIFIED] src/core/ReconnectHandler.js — Cập nhật đầy đủ `attempt`, `maxRetries`, `scheduledAt`, `nextAttemptAt`, `lastError` phục vụ hiển thị đếm ngược kết nối lại
+[MODIFIED] src/core/ScriptRunner.js — Cập nhật `_currentStep`, `_totalSteps`, `_startedAt` khi chạy từng bước macro và sửa lỗi import `{ WindowRouter }` khi đóng GUI còn sót
+[MODIFIED] src/core/AutoOrder.js — Bổ sung getter `isWorking` và `ownsWindows()` để phân biệt trạng thái đang nghỉ chờ item (`chờ item`) với trạng thái đang thao tác GUI `/order`
+[MODIFIED] src/core/CommandRegistry.js — Sửa nhánh `_customCommands` trong `run()` để thực thi trực tiếp `mc.chat()` khi bot đang online
+[MODIFIED] src/core/TeleportHandler.js — Hoàn thiện `holdBeforeSend()` và `noteHud()` thay cho bộ khung TODO rỗng
+[MODIFIED] src/core/Notifier.js — Loại bỏ bản sao fallback `DiscordTheme` 40 dòng dư thừa, dùng trực tiếp module `DiscordTheme.js`
+[MODIFIED] main.js — Bổ sung đầy đủ các lệnh CLI `telegram users`, `telegram mute`, `telegram control`, `telegram symbols` khớp với `HelpCatalog.js`; tái sử dụng `EnvironmentDetector` và tránh log lặp cảnh báo `validateConfig` lúc khởi động
+[MODIFIED] test/audit-fixes.test.js — Bổ sung bộ kiểm thử hồi quy cho `CommandRegistry`, `AutoOrder.isWorking`, `BotSession.getProtectStatus`, `_cleanupOnDisconnect` và `BotManager._onTelegramEvent`

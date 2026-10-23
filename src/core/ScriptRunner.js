@@ -45,20 +45,6 @@ const { dbg } = require('./debug');
  *   confirm <câu hỏi>            hỏi có/không, chỉ tiếp tục nếu người dùng
  *                                trả lời có (yes/y/co/có/ok/đồng ý/xác nhận)
  *                                — dùng để chặn lại trước bước bấm mua thật.
- *
- * Macro được khai báo trong config.json, mục "macros":
- *   "macros": {
- *     "ten_macro": {
- *       "next": "ten_macro_ke_tiep",   // optional — tự chạy tiếp khi xong
- *       "steps": "chat /shop\ndelay 1000\nwinclick 15 1"
- *     }
- *   }
- *
- * Biến có sẵn: $owner (chủ bot), $bot (tên bot).
- * Dùng qua CLI/web (giống các lệnh khác): cmd <id> macro <ten_macro>
- * Trả lời câu hỏi đang chờ: cmd <id> answer <nội dung>
- * Dừng giữa chừng: cmd <id> stopmacro — ngắt ngay cả khi đang ở giữa
- * bước "delay"/"waitmsg"/"ask", không cần chờ bước đó tự hết giờ.
  */
 class ScriptRunner {
   constructor(bot) {
@@ -66,6 +52,9 @@ class ScriptRunner {
     this._running = false;
     this._stopRequested = false;
     this._currentMacro = null;
+    this._currentStep = 0;
+    this._totalSteps = 0;
+    this._startedAt = 0;
     this._stopEmitter = new EventEmitter();
     this._stopEmitter.setMaxListeners(0);
     this._vars = {};
@@ -75,8 +64,6 @@ class ScriptRunner {
   _getMacro(name) {
     const key = String(name || '').trim().toLowerCase();
     const all = this.bot.cfg.macros || {};
-    // không phân biệt hoa/thường; nếu không khớp y hệt thì thử bỏ dấu _ - và
-    // khoảng trắng (vd gõ "Tpa_Owner" hay "tpaowner" đều ra macro tpa_owner)
     const squash = v => String(v).toLowerCase().replace(/[\s_\-]+/g, '');
     const foundKey = Object.keys(all).find(k => k.toLowerCase() === key)
       || Object.keys(all).find(k => squash(k) === squash(key));
@@ -97,8 +84,6 @@ class ScriptRunner {
     return true;
   }
 
-  // Trả lời 1 câu hỏi "ask"/"askmap"/"confirm" đang chờ. Trả về true nếu có
-  // câu hỏi đang chờ và đã nhận được trả lời, false nếu không có gì đang chờ.
   answer(text) {
     if (!this._pendingAsk) return false;
     const resolve = this._pendingAsk.resolve;
@@ -119,7 +104,6 @@ class ScriptRunner {
       this.bot.log('warn', `Macro "${name}" không tồn tại — kiểm tra config.json > macros`);
       return false;
     }
-    // Vòng auto-sell spawn đang điều khiển GUI -> yêu cầu nó dừng rồi chờ (tối đa 8s) trước khi macro chạy
     if (this.bot._sellSpawnBusy) {
       this.bot._sellSpawnAbort = true;
       const t0 = Date.now();
@@ -136,7 +120,10 @@ class ScriptRunner {
     this._running = true;
     this._stopRequested = false;
     this._currentMacro = name;
-    if (depth === 0) this._vars = {}; // reset biến khi bắt đầu 1 chuỗi macro mới (giữ lại qua các bước "next")
+    this._startedAt = Date.now();
+    this._currentStep = 0;
+    this._totalSteps = 0;
+    if (depth === 0) this._vars = {};
     this.bot.log('sys', `Macro: bắt đầu "${name}"`);
     let ok = true;
     let aborted = false;
@@ -151,13 +138,14 @@ class ScriptRunner {
     }
     this._running = false;
     this._currentMacro = null;
+    this._currentStep = 0;
+    this._totalSteps = 0;
+    this._startedAt = 0;
     this._pendingAsk = null;
-    // Nếu macro để sót 1 GUI đang mở (server không tự đóng), trả lại quyền
-    // xử lý cho WindowRouter để không bị treo/kẹt màn hình vô thời hạn.
     try {
       const win = this.bot.mc?.currentWindow;
       if (win) {
-        const WindowRouter = require('./WindowRouter');
+        const { WindowRouter } = require('./WindowRouter');
         this.bot.log('sys', 'Macro: còn GUI mở sau khi kết thúc — chuyển cho WindowRouter xử lý');
         WindowRouter.route(this.bot, win);
       }
@@ -169,8 +157,6 @@ class ScriptRunner {
     return true;
   }
 
-  // Thay $tenBien trong 1 dòng bằng giá trị biến đã lưu (vd từ "ask").
-  // Có sẵn: $owner (ownerUsername của bot), $bot (username bot).
   _substituteVars(line) {
     const builtin = {
       owner: this.bot.cfg?.ownerUsername || '',
@@ -183,8 +169,6 @@ class ScriptRunner {
     });
   }
 
-  // Bỏ dấu tiếng Việt + hạ chữ thường để so khớp câu trả lời dễ hơn
-  // ("bo" khớp "bò", "nguoi sat" khớp "người sắt").
   _fold(text) {
     return String(text || '')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -192,7 +176,6 @@ class ScriptRunner {
       .toLowerCase().replace(/\s+/g, ' ').trim();
   }
 
-  // Tìm mục menu khớp câu trả lời: gõ SỐ (vd 9), hoặc gõ tên (heo / key gold / gold).
   _matchMenu(answer, items) {
     const a = this._fold(answer);
     if (!a) return null;
@@ -204,16 +187,15 @@ class ScriptRunner {
     return partial.length === 1 ? partial[0] : null;
   }
 
-  // Trả về true nếu macro bị NGẮT giữa chừng (do stopif / stop theo yêu cầu
-  // / bot offline / huỷ ở ask-confirm) — báo cho run() biết không nên chạy
-  // tiếp "next".
   async _runSteps(scriptText) {
     const lines = String(scriptText)
       .split('\n')
       .map(l => l.trim())
       .filter(Boolean);
+    this._totalSteps = lines.length;
     let loopStart = -1, loopMax = 500, loopCount = 0, iterStart = 0;
     for (let pc = 0; pc < lines.length; pc++) {
+      this._currentStep = pc + 1;
       let line = lines[pc];
       if (this._stopRequested) {
         this.bot.log('sys', 'Macro: đã dừng theo yêu cầu');
@@ -294,7 +276,7 @@ class ScriptRunner {
         this.bot.log('sys', `Macro: xong lượt ${loopCount}, chưa thấy "${text}" — mua tiếp`);
         await this._sleep(500);
         iterStart = Date.now();
-        pc = loopStart; // vòng for tự +1 => chạy tiếp từ dòng ngay sau "loop"
+        pc = loopStart;
         continue;
       } else if (op === 'closewin') {
         try { const w = this.bot.mc?.currentWindow; if (w) this.bot.mc.closeWindow(w); } catch (e) { dbg('ScriptRunner', e); }
@@ -348,7 +330,6 @@ class ScriptRunner {
           return true;
         }
       } else if (op === 'askmenu') {
-        // askmenu <tiêu đề> || NHÓM1: giá_trị=nhãn, ... || NHÓM2: giá_trị=nhãn, ...
         const segs = line.slice(line.indexOf(' ') + 1).split('||').map(x => x.trim());
         const title = segs.shift() || 'Chọn:';
         const groups = [];
@@ -404,10 +385,6 @@ class ScriptRunner {
     return false;
   }
 
-  // Dò tin nhắn chat GẦN ĐÂY (không chỉ đúng 1 dòng cuối cùng, để không bị
-  // "trượt" nếu có tin nhắn khác — vd người chơi khác chat — xen vào ngay
-  // sau phản hồi thật sự cần kiểm tra) trong vài giây gần nhất, dùng cho
-  // bước "stopif".
   _lastChatContains(text, windowMs = 4000, maxScan = 6) {
     const lower = text.toLowerCase();
     const logs = this.bot.getLogs ? this.bot.getLogs() : [];
@@ -446,8 +423,6 @@ class ScriptRunner {
     });
   }
 
-  // Dừng macro lại, hỏi người dùng 1 câu và chờ lệnh "answer" trả lời —
-  // dùng cho "ask"/"askmap"/"confirm". null = hết giờ hoặc bị stop/huỷ.
   _waitForAnswer(question, timeoutMs, isMenu = false) {
     const qLines = Array.isArray(question) ? question : [question];
     if (isMenu) {

@@ -26,14 +26,20 @@ class CommandRegistry {
     const parts = trimmed.split(/\s+/);
     const key = parts[0].toLowerCase();
     if (this._customCommands.has(key)) {
-      try {
-        const c = this._customCommands.get(key);
-        this.bot.log('sys', `Custom cmd "${key}" → ${c}`);
-        return 'custom';
-      } catch (e) {
-        this.bot.log('err', `Lỗi custom cmd "${key}": ${e.message}`);
+      if (!this.bot.isOnline) {
+        this.bot.log('warn', 'Bot offline — không gửi được chat');
         return 'custom';
       }
+      try {
+        const c = this._customCommands.get(key);
+        if (this.bot.mc?.chat) {
+          this.bot.mc.chat(c.startsWith('/') ? c : `/${c}`);
+        }
+        this.bot.log('sys', `Custom cmd "${key}" → ${c}`);
+      } catch (e) {
+        this.bot.log('err', `Lỗi custom cmd "${key}": ${e.message}`);
+      }
+      return 'custom';
     }
     const entry = this._commands.get(key);
     if (entry) {

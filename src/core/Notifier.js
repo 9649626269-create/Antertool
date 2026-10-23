@@ -1,62 +1,7 @@
 'use strict';
 const https = require('https');
 const http = require('http');
-let DiscordTheme;
-try {
-  DiscordTheme = require('./DiscordTheme');
-} catch {
-  const RevenueTracker = require('./RevenueTracker');
-  const BRAND_FB = 'Antertool';
-  const SEV = Object.freeze({ success: 0x6ef16f, info: 0x38bdf8, warning: 0xf59e0b, critical: 0xef4444, report: 0xcf8338 });
-  const COL = Object.freeze({ ok: SEV.success, report: SEV.report, ...SEV });
-  const THEMES = Object.freeze({
-    disconnect: { emoji: '🔌', severity: 'critical', color: SEV.critical, label: 'Ngắt Kết Nối / Bị Kick', headline: '❌ BOT BỊ KICK' },
-    reconnectFailed: { emoji: '🛑', severity: 'critical', color: SEV.critical, label: 'Hết Lượt Reconnect', headline: '🔴 BOT HẾT LƯỢT RECONNECT' },
-    reconnectRecovered: { emoji: '🟢', severity: 'success', color: SEV.success, label: 'Đã Kết Nối Lại Ổn Định' },
-    moneyGoal: { emoji: '🎯', severity: 'success', color: SEV.success, label: 'Đạt Mục Tiêu Tiền' },
-    spawnerThreat: { emoji: '🚨', severity: 'critical', color: SEV.critical, label: 'Cảnh Báo Bảo Vệ Lồng Spawn', headline: '🚨 CẢNH BÁO LỒNG SPAWN' },
-    protectResult: { emoji: '🛡️', severity: 'success', color: SEV.success, label: 'Kết Quả Bảo Vệ Lồng' },
-    autoSell: { emoji: '🎒', severity: 'info', color: SEV.info, label: 'Túi Đồ Đầy (Auto-Sell)' },
-    schedule: { emoji: '🗓️', severity: 'info', color: SEV.info, label: 'Lịch Tự Out/Vào' },
-    scheduleOut: { emoji: '🌙', severity: 'warning', color: SEV.warning, label: 'Bắt Đầu Giờ Nghỉ' },
-    scheduleIn: { emoji: '☀️', severity: 'success', color: SEV.success, label: 'Hết Giờ Nghỉ' },
-    revenue: { emoji: '💰', severity: 'report', color: SEV.report, label: 'Báo Cáo Tổng Kết Auto-Sell Spawn' },
-    revenueMacro: { emoji: '📈', severity: 'report', color: SEV.report, label: 'Báo Cáo Tổng Kết Auto-Sell (Macro)' },
-    revenueSummary: { emoji: '📊', severity: 'report', color: SEV.report, label: 'Báo Cáo Tổng Kết Doanh Thu' },
-    featuresReady: { emoji: '✅', severity: 'success', color: SEV.success, label: 'Đã Bật Tính Năng' },
-    homeReturn: { emoji: '🏠', severity: 'warning', color: SEV.warning, label: 'Vị Trí Treo Lồng' },
-    autoOrder: { emoji: '📦', severity: 'report', color: SEV.report, label: 'Báo Cáo AutoOrder' },
-    sellFailed: { emoji: '🚨', severity: 'critical', color: SEV.critical, label: 'Auto-Sell Spawn Thất Bại', headline: '🚨 KHÔNG BÁN ĐƯỢC LỒNG' },
-    connected: { emoji: '✨', severity: 'success', color: SEV.success, label: 'Đã Vào Server' },
-    sellCycle: { emoji: '🔄', severity: 'info', color: SEV.info, label: 'Xong Vòng Bán' },
-    macro: { emoji: '⚙️', severity: 'info', color: SEV.info, label: 'Chạy Macro' },
-    proxy: { emoji: '🌐', severity: 'warning', color: SEV.warning, label: 'Xoay Proxy' },
-    posLost: { emoji: '🧭', severity: 'warning', color: SEV.warning, label: 'Lệch Vị Trí Treo Lồng' },
-    system: { emoji: '🖥️', severity: 'info', color: SEV.info, label: 'Hệ Thống' },
-    test: { emoji: '✅', severity: 'success', color: SEV.success, label: 'Kiểm Tra Kết Nối Webhook' },
-    testMention: { emoji: '🔔', severity: 'warning', color: SEV.warning, label: 'Bot Bị Kick (Tin Thử)', headline: '❌ BOT BỊ KICK (test)' },
-  });
-  const DEF_T = Object.freeze({ emoji: 'ℹ️', severity: 'info', color: SEV.info, label: 'Thông Báo' });
-  const trunc = (s, m = 1024) => { const a = Array.from(String(s ?? '')); return a.length <= m ? String(s ?? '') : a.slice(0, Math.max(0, m - 1)).join('') + '…'; };
-  DiscordTheme = {
-    BRAND: BRAND_FB, SEVERITY_COLORS: SEV, COLOR: COL, EVENT_THEMES: THEMES, DEFAULT_THEME: DEF_T,
-    getTheme: (k) => THEMES[k] || DEF_T,
-    inferEventKey: (t, fb) => fb || 'system',
-    formatEmbedTitle: (t, k) => trunc(`${(THEMES[k] || DEF_T).emoji} ${String(t || '').replace(/^[^\p{L}\p{N}/]+/u, '')}`.trim(), 256),
-    buildAuthor: (n, u) => (/^\w{1,16}$/.test(String(u || '')) ? { name: trunc(n || BRAND_FB, 256), icon_url: `https://mc-heads.net/avatar/${u}/100` } : { name: trunc(n || BRAND_FB, 256) }),
-    buildThumbnail: (u) => (/^\w{1,16}$/.test(String(u || '')) ? { url: `https://mc-heads.net/avatar/${u}/100` } : undefined),
-    progressBar: (c, t, w = 5) => { const r = t > 0 ? Math.max(0, Math.min(1, c / t)) : 0; const f = Math.round(r * w); return '▰'.repeat(f) + '▱'.repeat(w - f) + ` ${Math.round(r * 100)}%`; },
-    discordTimestamp: (ms = Date.now(), st = 'R') => `<t:${Math.floor((Number(ms) || Date.now()) / 1000)}:${st}>`,
-    formatMoney: (n) => RevenueTracker.formatMoneyDollar(n),
-    blockquote: (t) => String(t || '').split(/\r?\n/).filter(Boolean).map(l => `> ${l}`).join('\n'),
-    codeBlock: (t, l = '') => `\`\`\`${l}\n${String(t || '').trim()}\n\`\`\``,
-    redactSecrets: (s) => String(s ?? ''),
-    truncateCodePoints: trunc,
-    codePointLength: (s) => Array.from(String(s ?? '')).length,
-    enforceEmbedLimits: (e) => ({ ...e, author: e.author || { name: BRAND_FB }, footer: e.footer?.text ? e.footer : { text: BRAND_FB }, timestamp: e.timestamp || new Date().toISOString() }),
-    buildPreviewPayloads: () => [],
-  };
-}
+const DiscordTheme = require('./DiscordTheme');
 
 /**
  * Notifier — gửi thông báo tới 1 Discord webhook dùng chung cho cả dàn bot.
@@ -139,9 +84,6 @@ class Notifier {
     const e = { ...(embed || {}) };
     const inferredKey = DiscordTheme.inferEventKey(e.title, eventKey);
     const theme = DiscordTheme.getTheme(inferredKey);
-    if (e.title && !DiscordTheme.formatEmbedTitle) {
-      e.title = String(e.title);
-    }
     if (!e.author || !e.author.name) {
       e.author = DiscordTheme.buildAuthor(BRAND);
     }

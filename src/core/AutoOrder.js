@@ -31,6 +31,9 @@ class AutoOrder {
   }
 
   get active() { return this.running; }
+  /** Chỉ true khi đang thực sự thao tác với lệnh /order và GUI (không chặn GUI/AFK khi đang ngủ chờ item) */
+  get isWorking() { return this.running && this.state !== 'chờ item' && this.state !== 'idle'; }
+  ownsWindows() { return this.isWorking; }
   get mc() { return this.s.mc; }
 
   start(item) {

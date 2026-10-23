@@ -10,6 +10,7 @@ const TelegramNotifier = require('./src/core/TelegramNotifier');
 const HelpCatalog = require('./src/core/HelpCatalog');
 const ChatFilter = require('./src/core/ChatFilter');
 const FileLogger = require('./src/core/FileLogger');
+const EnvironmentDetector = require('./src/core/EnvironmentDetector');
 const WebDashboard = require('./src/web/WebDashboard');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
 const {
@@ -33,6 +34,7 @@ try {
 }
 
 const AUTO_EXE = process.env.AUTO_EXE === '1' || config.autoExe === true;
+const envDetector = new EnvironmentDetector(AUTO_EXE);
 
 let manager = null;
 let dashboard = null;
@@ -223,13 +225,13 @@ async function shutdown(code = 0) {
   try { if (dashCtrl) dashCtrl.stopLive(); } catch { /* ignore */ }
   try { writer.restoreTerminal(); } catch { /* ignore */ }
   logger.info('Shutting down...');
-  const watchdog = setTimeout(() => process.exit(code), 5000); // không để treo nếu đóng cổng chậm
+  const watchdog = setTimeout(() => process.exit(code), 5000);
   if (watchdog.unref) watchdog.unref();
   try { if (manager) manager.runtimeLog('sys', code === 42 ? 'Antertool đang tắt để cập nhật bản mới...' : 'Antertool đang tắt...'); } catch (e) { dbg('main', e); }
   try { if (dashboard) dashboard.shutdown(); } catch (e) { dbg('main', e); }
   try { if (manager) manager.shutdown(); } catch (e) { dbg('main', e); }
   try { if (dashboard) await dashboard.stop(); } catch (e) { dbg('main', e); }
-  try { if (manager) await manager.flushTelegramLogs(3000); } catch (e) { dbg('main', e); } // đẩy nốt log runtime lên Telegram trước khi thoát
+  try { if (manager) await manager.flushTelegramLogs(3000); } catch (e) { dbg('main', e); }
   try { writer.destroy(); caps.destroy(); } catch { /* ignore */ }
   process.exit(code);
 }
@@ -241,11 +243,9 @@ async function shutdown(code = 0) {
   let webOk = false;
 
   try {
-    // Step 1: Environment & Runtime check
+    // Step 1: Environment & Runtime check (tái sử dụng envDetector chung với BotManager)
     await startup.runStep('Environment', (ctx) => {
-      const EnvironmentDetector = require('./src/core/EnvironmentDetector');
-      const det = new EnvironmentDetector(AUTO_EXE);
-      const env = det.detect();
+      const env = envDetector.detect();
       ctx.ok(`Node ${env.nodeVersion} · ${env.platform}/${env.arch} · ${env.cpuCount} cores, ${env.totalMemMB}MB RAM`);
     });
 
@@ -297,13 +297,21 @@ async function shutdown(code = 0) {
     // Step 4: Core Modules & BotManager initialization
     await startup.runStep('Core Modules', async (ctx) => {
       const BotManager = require('./src/services/BotManager');
-      manager = new BotManager({
-        configPath: path.join(process.cwd(), 'config.json'),
-        autoExe: AUTO_EXE,
-        io,
-        onBotLog: printBotLog,
-      });
-      await manager.init();
+      const prevSilent = process.env.SILENT_CONFIG;
+      process.env.SILENT_CONFIG = '1'; // tránh log trùng cảnh báo config lần 2 vì Step 2 đã kiểm tra
+      try {
+        manager = new BotManager({
+          configPath: path.join(process.cwd(), 'config.json'),
+          autoExe: AUTO_EXE,
+          envDetector,
+          io,
+          onBotLog: printBotLog,
+        });
+        await manager.init();
+      } finally {
+        if (prevSilent === undefined) delete process.env.SILENT_CONFIG;
+        else process.env.SILENT_CONFIG = prevSilent;
+      }
       for (const b of manager.bots) wireBotEvents(b);
 
       const proxyCount = manager.proxyManager && Array.isArray(manager.proxyManager.list)
@@ -372,7 +380,7 @@ async function shutdown(code = 0) {
       manager.cliAsk = (msg) => logger.info(msg);
       rl.on('line', line => {
         const input = String(line || '').trim();
-        if (manager.hasWebhookPrompt && manager.answerWebhookPrompt(input)) { rl.prompt(); return; } // trả lời câu hỏi liên kết webhook
+        if (manager.hasWebhookPrompt && manager.answerWebhookPrompt(input)) { rl.prompt(); return; }
         if (!input) { rl.prompt(); return; }
         const parts = input.split(/\s+/);
         const cmd = parts[0].toLowerCase();
@@ -495,6 +503,7 @@ async function shutdown(code = 0) {
               const tgUsage = () => {
                 logger.info('Usage: telegram set <token> [chatId] | chatid | test | panel | off');
                 logger.info('       telegram every <1s|10s|10m|off>  (nhịp cập nhật bảng) | mode edit|new | events [a,b,c] | commands on|off');
+                logger.info('       telegram users [add|remove] [admin|viewer] <userId> | mute <30m|1h|off> | control on|off | symbols unicode|ascii');
                 logger.info('       telegram logs [on|off|level|chat|bots|every|keep|now|silent|send|test]  (log runtime gửi lên Telegram — gõ: telegram logs)');
               };
               if (sub === 'set' && args[1]) {
@@ -572,63 +581,56 @@ async function shutdown(code = 0) {
                   manager.setTelegramOption('telegramEvents', list);
                   logger.success('Đã đặt loại sự kiện: ' + list.join(', '));
                 }
-              } else if (sub === 'commands' || sub === 'cmd') {
-                const on = String(args[1] || 'sync').toLowerCase();
-                if (on === 'sync') {
-                  if (!tg.hasToken) { logger.warn('Chưa có token — dùng: telegram set <token>'); break; }
-                  cliSpinner.start('Đang đăng ký danh sách gợi ý lệnh / lên Telegram...');
-                  tg.syncCommands(HelpCatalog.getTelegramBotCommands()).then(r => {
-                    cliSpinner.stop();
-                    if (r && r.ok) logger.success(`Đã đăng ký ${HelpCatalog.TELEGRAM_BOT_COMMANDS.length} gợi ý lệnh '/' lên Telegram`);
-                    else logger.error('Không đăng ký được gợi ý lệnh: ' + (r?.description || 'lỗi'));
-                  });
-                } else if (on === 'on' || on === 'off') {
-                  manager.setTelegramOption('telegramCommands', on === 'on');
-                  if (on === 'off') tg.clearCommands().catch(() => {});
-                  logger.success('Nhận lệnh & gợi ý / trên Telegram: ' + (on === 'on' ? 'BẬT' : 'TẮT'));
-                } else {
-                  logger.warn('Cú pháp: telegram commands on|off|sync  (bật/tắt nhận lệnh và đồng bộ gợi ý / trên Telegram)');
-                }
+              } else if (sub === 'commands') {
+                const on = String(args[1] || '').toLowerCase();
+                if (on !== 'on' && on !== 'off') { logger.warn('Cú pháp: telegram commands on|off  (nhận lệnh từ Telegram)'); break; }
+                manager.setTelegramOption('telegramCommands', on === 'on');
+                logger.success('Nhận lệnh Telegram: ' + (on === 'on' ? 'BẬT' : 'TẮT'));
               } else if (sub === 'control') {
                 const on = String(args[1] || '').toLowerCase();
-                if (on !== 'on' && on !== 'off') {
-                  logger.info('Điều khiển bot qua Telegram: ' + (manager._config?.telegramControlEnabled !== false ? 'BẬT' : 'TẮT'));
-                  logger.info('Cú pháp: telegram control on|off');
-                  break;
-                }
+                if (on !== 'on' && on !== 'off') { logger.warn('Cú pháp: telegram control on|off  (bật/tắt quyền điều khiển bot qua Telegram)'); break; }
                 manager.setTelegramOption('telegramControlEnabled', on === 'on');
-                logger.success('Điều khiển bot qua Telegram: ' + (on === 'on' ? 'BẬT' : 'TẮT'));
-              } else if (sub === 'users' || sub === 'user') {
-                const act = String(args[1] || '').toLowerCase();
-                const roleArg = String(args[2] || '').toLowerCase();
-                const uid = String(args[3] || '').trim();
-                const admins = Array.isArray(manager._config?.telegramAdmins) ? [...manager._config.telegramAdmins.map(String)] : [];
-                const viewers = Array.isArray(manager._config?.telegramAllowedUsers) ? [...manager._config.telegramAllowedUsers.map(String)] : [];
-                if ((act === 'add' || act === 'remove') && (roleArg === 'admin' || roleArg === 'viewer') && /^-?\d+$/.test(uid)) {
-                  const key = roleArg === 'admin' ? 'telegramAdmins' : 'telegramAllowedUsers';
-                  const cur = new Set(roleArg === 'admin' ? admins : viewers);
-                  if (act === 'add') cur.add(uid); else cur.delete(uid);
-                  manager.setTelegramOption(key, [...cur]);
-                  logger.success(`Đã ${act === 'add' ? 'thêm' : 'gỡ'} ${roleArg} ${uid} (${key}: ${[...cur].join(', ') || 'trống'})`);
-                } else {
-                  logger.info('Admins: ' + (admins.length ? admins.join(', ') : '(mặc định: chủ chat)'));
-                  logger.info('Viewers: ' + (viewers.length ? viewers.join(', ') : '(mọi người trong chatId)'));
-                  logger.info('Usage: telegram users add|remove admin|viewer <userId>');
-                }
+                logger.success('Điều khiển bot từ Telegram: ' + (on === 'on' ? 'BẬT' : 'TẮT'));
+              } else if (sub === 'symbols') {
+                const mode = String(args[1] || '').toLowerCase();
+                if (mode !== 'unicode' && mode !== 'ascii') { logger.warn('Cú pháp: telegram symbols unicode|ascii'); break; }
+                manager.setTelegramOption('telegramSymbols', mode);
+                logger.success('Bộ ký hiệu Telegram: ' + mode);
               } else if (sub === 'mute') {
                 const v = String(args[1] || '').toLowerCase();
                 if (!v) {
                   const until = Number(manager._config?.telegramMuteUntil || 0);
-                  logger.info(until > Date.now() ? `Đang tắt tiếng còn ${Math.ceil((until - Date.now()) / 60000)} phút` : 'Đang bật âm báo bình thường');
-                  logger.info('Usage: telegram mute <30m|1h|off>');
+                  logger.info(until > Date.now() ? `Đang tắt tiếng tới ${new Date(until).toLocaleTimeString()}` : 'Đang bật âm báo bình thường');
+                  logger.info('Cú pháp: telegram mute <30m|1h|off>');
                 } else if (v === 'off' || v === '0') {
                   manager.setTelegramOption('telegramMuteUntil', 0);
                   logger.success('Đã bật lại âm báo Telegram');
                 } else {
-                  const sec = manager.constructor.parseEverySec(v);
-                  if (!sec) { logger.warn('Usage: telegram mute <30m|1h|off>'); break; }
-                  manager.setTelegramOption('telegramMuteUntil', Date.now() + sec * 1000);
-                  logger.success(`Đã tắt tiếng thông báo Telegram trong ${sec} giây`);
+                  const sec = manager.constructor.parseEverySec(args.slice(1).join(''));
+                  if (!sec || sec <= 0) { logger.warn('Cú pháp: telegram mute <30m|1h|off>'); break; }
+                  const until = Date.now() + sec * 1000;
+                  manager.setTelegramOption('telegramMuteUntil', until);
+                  logger.success(`Đã tắt tiếng thông báo Telegram trong ${sec}s`);
+                }
+              } else if (sub === 'users' || sub === 'user') {
+                const act = String(args[1] || '').toLowerCase();
+                const role = String(args[2] || '').toLowerCase();
+                const uid = String(args[3] || '').trim();
+                const admins = Array.isArray(manager._config?.telegramAdmins) ? [...manager._config.telegramAdmins] : [];
+                const viewers = Array.isArray(manager._config?.telegramAllowedUsers) ? [...manager._config.telegramAllowedUsers] : [];
+                if (!act) {
+                  logger.info(`Admins (${admins.length}): ${admins.join(', ') || '(trống)'}`);
+                  logger.info(`Viewers (${viewers.length}): ${viewers.join(', ') || '(mặc định: mọi thành viên trong chat)'}`);
+                  logger.info('Cú pháp: telegram users add|remove admin|viewer <userId>');
+                } else if ((act === 'add' || act === 'remove' || act === 'del') && (role === 'admin' || role === 'viewer') && uid) {
+                  const key = role === 'admin' ? 'telegramAdmins' : 'telegramAllowedUsers';
+                  const list = new Set((role === 'admin' ? admins : viewers).map(String));
+                  if (act === 'add') list.add(uid); else list.delete(uid);
+                  manager.setTelegramOption(key, [...list]);
+                  manager.telegramControl?.resetSecurityState?.();
+                  logger.success(`Đã ${act === 'add' ? 'thêm' : 'xoá'} ${role} ${uid} (${key}: ${[...list].join(', ') || 'trống'})`);
+                } else {
+                  logger.warn('Cú pháp: telegram users [add|remove] [admin|viewer] <userId>');
                 }
               } else {
                 tgUsage();

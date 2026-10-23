@@ -5,7 +5,6 @@
  */
 const { CS, TIMING } = require('./constants');
 const { nowMs, jit } = require('./utils');
-const { dbg } = require('./debug');
 
 class ReconnectHandler {
   /**
@@ -13,6 +12,11 @@ class ReconnectHandler {
    */
   constructor(session) {
     this.s = session;
+    this.attempt = 0;
+    this.maxRetries = TIMING.MAX_RECONNECT;
+    this.nextAttemptAt = 0;
+    this.scheduledAt = 0;
+    this.lastError = '';
   }
 
   schedule(reason) {
@@ -58,7 +62,12 @@ class ReconnectHandler {
     const savedFastKicks = s._fastKicks;
     s._cleanupOnDisconnect();
     s._destroyMc();
+    this.maxRetries = s._reconnectMaxRetries;
+    this.lastError = String(reason || '');
     if (s.state.reconnects >= s._reconnectMaxRetries) {
+      this.attempt = s.state.reconnects;
+      this.scheduledAt = now;
+      this.nextAttemptAt = now + 15 * 60 * 1000;
       s.log('err', `Đã đạt giới hạn ${s._reconnectMaxRetries} reconnect — thử lại sau 15 phút`);
       s._flushKickNotify(null);
       s._notify('reconnectFailed', `🔴 ${s.cfg.id}: hết lượt reconnect`,
@@ -69,6 +78,7 @@ class ReconnectHandler {
         if (s._disabled) return;
         s.log('warn', 'Thử kết nối lại sau giới hạn reconnect...');
         s.state.reconnects = 0;
+        this.attempt = 0;
         s._fastKicks = 0;
         s._reconnectScheduled = false;
         s.start();
@@ -94,6 +104,9 @@ class ReconnectHandler {
       ? antiBotDelay
       : (s._reconnectJitter ? jit(base, Math.round(base * 0.3)) : base);
     s.state.reconnects++;
+    this.attempt = s.state.reconnects;
+    this.scheduledAt = now;
+    this.nextAttemptAt = now + delay;
     const maxRetryStr = s._reconnectMaxRetries >= 999 ? '∞' : String(s._reconnectMaxRetries);
     s._flushKickNotify({ delay, attempt: s.state.reconnects, max: maxRetryStr });
     s.log('warn', `Mất kết nối${reason ? ' (' + reason + ')' : ''}${fastKick ? ' [FAST KICK x' + s._fastKicks + ']' : ''} — thử lại lần ${s.state.reconnects}/${maxRetryStr} sau ${(delay / 1000).toFixed(1)}s (backoff)`);
@@ -101,6 +114,7 @@ class ReconnectHandler {
     s._emitIO('disconnectReason', { id: s.cfg.id, reason, fastKick, retry: s.state.reconnects });
     s._setTimer('reconnect', () => {
       s._reconnectScheduled = false;
+      this.nextAttemptAt = 0;
       if (s._shouldNotRun) return;
       s.start();
     }, delay);
@@ -117,6 +131,8 @@ class ReconnectHandler {
     s._reconnectScheduled = false;
     s._reconnectTimestamps = [];
     s._lastReconnectTime = 0;
+    this.attempt = 0;
+    this.nextAttemptAt = 0;
     if (s.isReconnecting) s._setState(CS.DISCONNECTED);
   }
 
@@ -130,10 +146,14 @@ class ReconnectHandler {
     s._setState(CS.DISCONNECTED);
     s._cleanupOnDisconnect();
     s._destroyMc();
-    s._lastReconnectTime = nowMs();
+    const now = nowMs();
+    s._lastReconnectTime = now;
     s._reconnectScheduled = true;
+    this.scheduledAt = now;
+    this.nextAttemptAt = now + 500;
     s._setTimer('reconnect', () => {
       s._reconnectScheduled = false;
+      this.nextAttemptAt = 0;
       s.start();
     }, 500);
   }

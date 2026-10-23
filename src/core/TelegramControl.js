@@ -223,15 +223,6 @@ class TelegramControl {
     return { ...r, code: r.status };
   }
 
-  _resolveBotCmdArg(token, allowAll = false) {
-    const raw = String(token ?? '').trim();
-    const bots = this.mgr?.bots || [];
-    if (!raw && bots.length === 1) {
-      return { status: 'OK', code: 'OK', bot: bots[0] };
-    }
-    return resolveBot(bots, token, allowAll);
-  }
-
   resetSecurityState() {
     this._rateMap.clear();
     this._denyMap.clear();
@@ -279,9 +270,8 @@ class TelegramControl {
 
     const admins = new Set((cfg.telegramAdmins || []).map(String));
     const viewers = new Set((cfg.telegramAllowedUsers || []).map(String));
-    const hasExplicitRbac = Array.isArray(cfg.telegramAdmins) || Array.isArray(cfg.telegramAllowedUsers);
 
-    if (isGroup && admins.size === 0 && hasExplicitRbac && !this._groupEmptyAdminWarned) {
+    if (isGroup && admins.size === 0 && !this._groupEmptyAdminWarned) {
       this._groupEmptyAdminWarned = true;
       const warnMsg = 'Cảnh báo Telegram: đang ở nhóm chat nhưng telegramAdmins đang trống — mọi lệnh điều khiển đều bị từ chối. Dùng /whoami rồi chạy: telegram users add admin <id>';
       this.mgr?.runtimeLog?.('warn', warnMsg);
@@ -290,7 +280,7 @@ class TelegramControl {
       }
     }
 
-    const isAdmin = admins.has(fromId) || (isPrivate && fromId === chatId) || (isGroup && !hasExplicitRbac);
+    const isAdmin = admins.has(fromId) || (isPrivate && fromId === chatId);
     const isViewer = isAdmin || viewers.has(fromId) || viewers.size === 0;
     const role = isAdmin ? 'admin' : (isViewer ? 'viewer' : 'none');
     return { role, fromId, isGroup };
@@ -455,18 +445,9 @@ class TelegramControl {
       };
     }
 
-    const isSingleBot = Array.isArray(this.mgr?.bots) && this.mgr.bots.length === 1;
-    const isSellStatus = cmd === 'sell' && (
-      !parts.length
-      || String(parts[1] || '').toLowerCase() === 'status'
-      || (isSingleBot && String(parts[0] || '').toLowerCase() === 'status')
-    );
-    const isProtectStatus = cmd === 'protect' && (
-      !parts.length
-      || String(parts[1] || '').toLowerCase() === 'status'
-      || (isSingleBot && String(parts[0] || '').toLowerCase() === 'status')
-    );
-    const isView = VIEW_COMMANDS.has(cmd) || isSellStatus || isProtectStatus;
+    const isView = VIEW_COMMANDS.has(cmd)
+      || (cmd === 'sell' && String(parts[1] || '').toLowerCase() === 'status')
+      || (cmd === 'protect' && String(parts[1] || '').toLowerCase() === 'status');
 
     const neededRole = isView ? 'viewer' : 'admin';
 
@@ -508,12 +489,7 @@ class TelegramControl {
         return { code: 'OK', text: res.text, keyboard: res.keyboard };
       }
       case 'bot': {
-        if (!parts[0] && this.mgr.bots.length > 1) {
-          const infos = this.mgr.bots.map(b => this.mgr._botPanelInfo(b, now));
-          const res = buildBotsPage(infos, 1, 8);
-          return { code: 'OK', text: res.text, keyboard: res.keyboard };
-        }
-        const r = this._resolveBotCmdArg(parts[0]);
+        const r = resolveBot(this.mgr.bots, parts[0]);
         if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
         const menu = buildBotMenu(this.mgr._botPanelInfo(r.bot, now));
         return { code: 'OK', text: menu.text, keyboard: menu.keyboard };
@@ -556,28 +532,16 @@ class TelegramControl {
         return this._cmdStopBot(ev, role, parts[0], now);
       case 'reconnect':
         return this._cmdReconnect(ev, role, parts[0]);
-      case 'sell': {
-        if (isSingleBot && parts[0] && ['on', 'off', 'now', 'status', 'every'].includes(parts[0].toLowerCase()) && !this.mgr.findBot(parts[0])) {
-          return this._cmdSell(ev, role, this.mgr.bots[0].cfg.id, parts);
-        }
+      case 'sell':
         return this._cmdSell(ev, role, parts[0], parts.slice(1));
-      }
       case 'sellall':
         return this._cmdSellAll(ev, role, parts[0], now);
-      case 'protect': {
-        if (isSingleBot && parts[0] && ['on', 'off', 'status', 'level'].includes(parts[0].toLowerCase()) && !this.mgr.findBot(parts[0])) {
-          return this._cmdProtect(ev, role, this.mgr.bots[0].cfg.id, parts, now);
-        }
+      case 'protect':
         return this._cmdProtect(ev, role, parts[0], parts.slice(1), now);
-      }
       case 'home':
         return this._cmdHome(ev, role, parts[0]);
-      case 'afk': {
-        if (isSingleBot && parts[0] && ['jump', 'walk'].includes(parts[0].toLowerCase()) && !this.mgr.findBot(parts[0])) {
-          return this._cmdAfk(ev, role, this.mgr.bots[0].cfg.id, parts[0]);
-        }
+      case 'afk':
         return this._cmdAfk(ev, role, parts[0], parts[1] || 'jump');
-      }
       case 'stopafk':
         return this._cmdStopAfk(ev, role, parts[0]);
       case 'macro':
@@ -919,7 +883,7 @@ class TelegramControl {
   }
 
   _cmdInv(token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const safeId = escapeHtml(sanitizeExternal(bot.cfg.id, { max: 40 }));
@@ -956,7 +920,7 @@ class TelegramControl {
   }
 
   _cmdPos(token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const safeId = escapeHtml(sanitizeExternal(bot.cfg.id, { max: 40 }));
@@ -977,7 +941,7 @@ class TelegramControl {
   }
 
   _cmdBoard(token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const safeId = escapeHtml(sanitizeExternal(bot.cfg.id, { max: 40 }));
@@ -1000,7 +964,7 @@ class TelegramControl {
   }
 
   _cmdPing(token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const safeId = escapeHtml(sanitizeExternal(bot.cfg.id, { max: 40 }));
@@ -1017,7 +981,7 @@ class TelegramControl {
   // ===== Các lệnh điều khiển (Admin) =====
 
   _cmdStartBot(ev, role, token) {
-    const r = this._resolveBotCmdArg(token, true);
+    const r = resolveBot(this.mgr.bots, token, true);
     if (r.status === 'ALL') {
       const stopped = this.mgr.bots.filter(b => !b.isConnected && !b.isReconnecting && b.state?.connState !== CS.CONNECTING);
       if (!stopped.length) {
@@ -1051,7 +1015,7 @@ class TelegramControl {
   }
 
   _cmdStopBot(ev, role, token, now) {
-    const r = this._resolveBotCmdArg(token, true);
+    const r = resolveBot(this.mgr.bots, token, true);
     if (r.status === 'ALL') {
       const running = this.mgr.bots.filter(b => !b._disabled || b.state?.connState !== CS.DISCONNECTED);
       if (!running.length) {
@@ -1093,7 +1057,7 @@ class TelegramControl {
   }
 
   _cmdReconnect(ev, role, token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1108,7 +1072,7 @@ class TelegramControl {
   }
 
   _cmdSell(ev, role, token, subArgs = []) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1284,7 +1248,7 @@ class TelegramControl {
   }
 
   _cmdProtect(ev, role, token, subArgs = [], now = this._now()) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1370,7 +1334,7 @@ class TelegramControl {
   }
 
   _cmdHome(ev, role, token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1391,7 +1355,7 @@ class TelegramControl {
   }
 
   _cmdAfk(ev, role, token, mode = 'jump') {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1413,7 +1377,7 @@ class TelegramControl {
   }
 
   _cmdStopAfk(ev, role, token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1430,7 +1394,7 @@ class TelegramControl {
   }
 
   _cmdMacro(ev, role, token, macroNameRaw = '') {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1488,7 +1452,7 @@ class TelegramControl {
   }
 
   _cmdStopMacro(ev, role, token) {
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
@@ -1696,7 +1660,7 @@ class TelegramControl {
       this._recordDenied(String(ev.from?.id || 'local'), `Telegram: chặn lệnh nhạy cảm /cmd ${maskCommandForLog(rawCmdText, denylist)}`, now);
       return { code: 'DENIED', text: 'Lệnh này bị chặn qua Telegram.' };
     }
-    const r = this._resolveBotCmdArg(token);
+    const r = resolveBot(this.mgr.bots, token);
     if (r.status !== 'OK') return { code: r.status, text: `${sym('warn')} ${escapeHtml(r.text)}` };
     const bot = r.bot;
     const id = String(bot.cfg.id);
