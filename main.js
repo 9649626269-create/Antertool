@@ -710,48 +710,85 @@ async function shutdown(code = 0) {
             case 'webhook': {
               const notifier = manager.notifier;
               if (args[0] === 'revenue') {
-                const rn = manager.revenueNotifier;
                 if (args[1] === 'set' && args[2]) {
-                  rn.configure(args[2], ['all']);
-                  manager.persistence.set('revenueWebhookUrl', args[2]);
-                  logger.success('Đã lưu webhook doanh thu (riêng)');
+                  manager.setWebhookUrl(args[2]);
+                  logger.success('Đã lưu vào webhook chung (cảnh báo + doanh thu + bảng trực tiếp 10s đã được gộp làm 1)');
                 } else if (args[1] === 'off') {
-                  rn.configure(null, ['all']);
                   manager.persistence.set('revenueWebhookUrl', null);
-                  logger.success('Đã tắt webhook doanh thu riêng — báo cáo sẽ đi qua webhook chung (nếu có)');
+                  logger.success('Đã gộp doanh thu vào webhook chung');
                 } else if (args[1] === 'report' || args[1] === 'send') {
                   const r = manager.sendRevenueSummary();
-                  if (r.ok) logger.success(`Đã gửi báo cáo tổng hợp doanh thu (${r.via})`);
+                  if (r.ok) logger.success(`Đã cập nhật báo cáo tổng hợp doanh thu (${r.via})`);
                   else logger.warn(r.message);
                 } else if (args[1] === 'every') {
                   const v = String(args[2] || '').toLowerCase();
                   const min = (v === 'off' || v === '0') ? 0 : manager.constructor.parseEveryMin(args.slice(2).join(''));
                   if (min === null || min === undefined) { logger.warn('Cú pháp: webhook revenue every <30m|1h|1h30m|off>'); break; }
                   manager.setRevenueSummaryEvery(min);
-                  logger.success(min ? `Tự gửi báo cáo tổng hợp mỗi ${min >= 60 && min % 60 === 0 ? (min / 60) + ' giờ' : min + ' phút'} (chỉ gửi khi có vòng bán mới)` : 'Đã tắt tự gửi báo cáo tổng hợp');
+                  logger.success(min ? `Tự cập nhật báo cáo tổng hợp mỗi ${min >= 60 && min % 60 === 0 ? (min / 60) + ' giờ' : min + ' phút'} (chỉ cập nhật khi có vòng bán mới)` : 'Đã tắt tự gửi báo cáo tổng hợp');
                 } else if (args[1] === 'test') {
-                  if (!rn.enabled) { logger.warn('Chưa đặt webhook doanh thu riêng — dùng: webhook revenue set <url>'); break; }
-                  cliSpinner.start('Đang gửi test webhook doanh thu...');
-                  rn.test().then(ok => {
+                  if (!notifier.enabled) { logger.warn('Chưa đặt webhook — dùng: webhook set <url>'); break; }
+                  cliSpinner.start('Đang gửi test webhook Discord...');
+                  notifier.test().then(ok => {
                     cliSpinner.stop();
                     if (ok) logger.success('Đã gửi test, kiểm tra kênh Discord');
                     else logger.error('Gửi thất bại — kiểm tra lại URL');
                   });
                 } else {
-                  logger.info('Usage: webhook revenue set <url> | test | off | report | every <30m|1h|off>');
-                  logger.info('Tự gửi tổng hợp: ' + (manager._config?.revenueSummaryEveryMin ? `mỗi ${manager._config.revenueSummaryEveryMin} phút` : 'TẮT'));
-                  logger.info('Trạng thái: ' + (rn.enabled ? 'BẬT (webhook riêng)' : (notifier.enabled ? 'dùng webhook chung' : 'TẮT')));
+                  logger.info('Usage: webhook revenue report | every <30m|1h|off> | set <url> | test');
+                  logger.info('Tự cập nhật tổng hợp: ' + (manager._config?.revenueSummaryEveryMin ? `mỗi ${manager._config.revenueSummaryEveryMin} phút` : 'TẮT (đang có Bảng Trực Tiếp 10s)'));
+                  logger.info('Trạng thái: ' + (notifier.enabled ? 'BẬT (gộp chung 1 webhook)' : 'TẮT'));
                 }
                 break;
               }
               if (args[0] === 'set' && args[1]) {
-                notifier.configure(args[1], [...notifier.events]);
-                manager.persistence.set('webhookUrl', args[1]);
-                logger.success('Đã lưu webhook');
+                manager.setWebhookUrl(args[1]);
+                manager.sendDiscordPanel();
+                logger.success('Đã lưu webhook & khởi tạo Bảng Trạng Thái Trực Tiếp (tự sửa tại chỗ mỗi ' + manager.getDiscordRefreshSec() + 's)');
               } else if (args[0] === 'off') {
-                notifier.configure(null, [...notifier.events]);
-                manager.persistence.set('webhookUrl', null);
+                manager.setWebhookUrl(null);
                 logger.success('Đã tắt webhook');
+              } else if (args[0] === 'panel') {
+                if (!notifier.enabled) { logger.warn('Chưa cấu hình webhook — dùng: webhook set <url>'); break; }
+                const fresh = args[1] === 'fresh' || args[1] === 'new';
+                cliSpinner.start(fresh ? 'Đang tạo mới Bảng Trạng Thái Trực Tiếp Discord...' : 'Đang cập nhật Bảng Trạng Thái Trực Tiếp Discord...');
+                manager.sendDiscordPanel({ fresh }).then(ok => {
+                  cliSpinner.stop();
+                  if (ok) logger.success('Đã cập nhật Bảng Trạng Thái Trực Tiếp trên kênh Discord');
+                  else logger.error('Cập nhật bảng thất bại — kiểm tra lại URL webhook');
+                });
+              } else if (args[0] === 'refresh' || args[0] === 'every') {
+                const raw = args.slice(1).join('').trim().toLowerCase();
+                if (!raw) {
+                  const s = manager.getDiscordRefreshSec();
+                  logger.info('Chu kỳ cập nhật Bảng Trực Tiếp Discord hiện tại: ' + (s > 0 ? `mỗi ${s} giây` : 'TẮT'));
+                  logger.info('Usage: webhook refresh <5s|10s|30s|1m|off>');
+                  break;
+                }
+                const sec = (raw === 'off' || raw === '0') ? 0 : manager.constructor.parseEverySec(raw);
+                if (sec === null || sec === undefined || (sec > 0 && sec < 2)) {
+                  logger.warn('Cú pháp: webhook refresh <2s..1h|off> (khuyên dùng 10s)');
+                  break;
+                }
+                manager.setDiscordRefreshSec(sec);
+                logger.success(sec > 0 ? `Đã đặt chu kỳ cập nhật Bảng Trực Tiếp Discord: mỗi ${sec}s` : 'Đã tắt tự động cập nhật định kỳ Bảng Trực Tiếp Discord');
+              } else if (args[0] === 'mode') {
+                const m = String(args[1] || '').toLowerCase();
+                if (m === 'hybrid' || m === 'edit') {
+                  notifier.mode = 'hybrid';
+                  manager._config.webhookMode = 'hybrid';
+                  manager.persistence.set('webhookMode', 'hybrid');
+                  manager._armDiscordPanel();
+                  logger.success('Đã bật chế độ Hybrid (cập nhật tại chỗ, gộp tin trùng & chống tràn thông báo)');
+                } else if (m === 'new') {
+                  notifier.mode = 'new';
+                  manager._config.webhookMode = 'new';
+                  manager.persistence.set('webhookMode', 'new');
+                  manager._armDiscordPanel();
+                  logger.success('Đã chuyển sang chế độ gửi tin mới rời rạc (new)');
+                } else {
+                  logger.info(`Chế độ hiện tại: ${notifier.mode} — Đổi: webhook mode hybrid | new`);
+                }
               } else if (args[0] === 'test') {
                 if (!notifier.enabled) { logger.warn('Chưa cấu hình webhook — dùng: webhook set <url>'); break; }
                 cliSpinner.start('Đang gửi test webhook Discord...');
@@ -800,8 +837,9 @@ async function shutdown(code = 0) {
                   logger.success('Đã đặt loại sự kiện: ' + list.join(', '));
                 }
               } else {
-                logger.info('Usage: webhook set <url> | webhook test | webhook preview [sự_kiện] | webhook off | webhook events [a,b,c]');
-                logger.info('Trạng thái: ' + (notifier.enabled ? 'BẬT' : 'TẮT'));
+                const diag = notifier.getDiag();
+                logger.info('Usage: webhook set <url> | webhook panel [fresh] | webhook refresh <10s|off> | webhook mode <hybrid|new> | webhook test | webhook preview [sự_kiện] | webhook off | webhook events [a,b,c]');
+                logger.info(`Trạng thái: ${notifier.enabled ? 'BẬT' : 'TẮT'} · chế độ ${diag.mode} · cập nhật bảng mỗi ${manager.getDiscordRefreshSec()}s · đã gửi ${diag.sent} / sửa tại chỗ ${diag.edited}`);
               }
               break;
             }

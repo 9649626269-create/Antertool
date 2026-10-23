@@ -1412,18 +1412,11 @@ function renderSystem() {
       <div class="sys-grid">${env?Object.entries(env).map(([k,v])=>`<div class="sys-card"><div class="sys-card-label">${k}</div><div class="sys-card-value" style="font-size:13px">${typeof v==='boolean'?(v?'✅':'❌'):esc(String(v))}</div></div>`).join(''):'<div style="color:var(--text-3)">—</div>'}
       </div>
     </div>
-    <div class="sys-section"><div class="sys-section-title">Discord Webhook (chung cho cả dàn bot)</div>
+    <div class="sys-section"><div class="sys-section-title">Discord Webhook Hợp Nhất (Live Panel 10s + Cảnh báo + Doanh thu)</div>
       <div class="cfg-section">
         <div class="cfg-row"><span class="cfg-label">Webhook URL</span><input class="cfg-input" id="wh-url" placeholder="https://discord.com/api/webhooks/..." value="${esc(ST.webhook?.url||'')}"></div>
-        <div class="cfg-row"><button class="btn btn-primary btn-sm" onclick="saveWebhook()">Lưu</button><button class="btn btn-sm" onclick="testWebhookUI()">Gửi thử</button>
-          <span style="font-size:10px;color:${ST.webhook?.enabled?'var(--online)':'var(--text-3)'}">${ST.webhook?.enabled?'● Đang bật':'○ Chưa cấu hình'}</span></div>
-      </div>
-    </div>
-    <div class="sys-section"><div class="sys-section-title">Discord Webhook — Báo cáo doanh thu (riêng)</div>
-      <div class="cfg-section">
-        <div class="cfg-row"><span class="cfg-label">Webhook URL</span><input class="cfg-input" id="rwh-url" placeholder="${ST.revWebhook?.enabled?'(đã lưu — nhập URL mới để thay)':'https://discord.com/api/webhooks/...'}"></div>
-        <div class="cfg-row"><button class="btn btn-primary btn-sm" onclick="saveRevenueWebhook()">Lưu</button><button class="btn btn-sm" onclick="testRevenueWebhookUI()">Gửi thử</button><button class="btn btn-sm" onclick="clearRevenueWebhook()">Tắt</button>
-          <span style="font-size:10px;color:${ST.revWebhook?.enabled?'var(--online)':'var(--text-3)'}">${ST.revWebhook?.enabled?'● Đang bật (kênh riêng)':'○ Chưa đặt — báo cáo đi qua webhook chung'}</span></div>
+        <div class="cfg-row"><button class="btn btn-primary btn-sm" onclick="saveWebhook()">Lưu</button><button class="btn btn-sm" onclick="testWebhookUI()">Gửi thử</button><button class="btn btn-sm" onclick="SOCK.emit('sendDiscordPanel',{fresh:false},r=>toast(r?.ok?'Đã cập nhật Bảng Trực Tiếp Discord':'Cập nhật thất bại',r?.ok?'success':'error'))">Cập nhật Bảng</button>
+          <span style="font-size:10px;color:${ST.webhook?.enabled?'var(--online)':'var(--text-3)'}">${ST.webhook?.enabled?'● Đang bật (Hybrid Live 10s — chống tràn kênh)':'○ Chưa cấu hình'}</span></div>
       </div>
     </div>
     <div class="sys-section"><div class="sys-section-title">Lịch Tự Out/Vào</div>

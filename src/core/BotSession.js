@@ -297,7 +297,11 @@ class BotSession extends EventEmitter {
     try { this._manager?.telegramAlert?.(this, eventKey, title, description, headline); } catch { /* Telegram lỗi không được làm hỏng bot */ }
     const n = this._manager?.notifier;
     if (!n?.isEventOn(eventKey)) return;
-    n.send(eventKey, this._alertEmbed(title, description, color, eventKey, discordOpts), headline);
+    n.send(eventKey, this._alertEmbed(title, description, color, eventKey, discordOpts), headline, {
+      botId: String(this.cfg.id),
+      ...(discordOpts || {}),
+    });
+    try { this._manager?.markDiscordPanelDirty?.(); } catch { /* ignore */ }
   }
   // ----- Phong cách embed Discord (người chơi / server / thời gian treo / author + ảnh đầu / chân "Antertool • giờ") -----
   _playerLabel() {
@@ -1404,17 +1408,26 @@ class BotSession extends EventEmitter {
       timestamp: new Date().toISOString(),
     }, eventKey);
   }
-  // Gửi qua webhook RIÊNG nếu có, không thì qua webhook chung (sự kiện "revenue")
+  // Gửi qua webhook chung (cập nhật tại chỗ trên slot của bot — không làm tràn thông báo)
   _sendRevenueReport(cap, kind = 'spawn') {
     const embed = this._buildRevenueEmbed(cap, kind);
+    const eventKey = kind === 'macro' ? 'revenueMacro' : 'revenue';
+    const slotKey = `rev:${this.cfg.id}:${eventKey}`;
+    const n = this._manager?.notifier;
     const rn = this._manager?.revenueNotifier;
     let via = null;
-    if (rn?.enabled) { rn.send(null, embed); via = 'webhook doanh thu riêng'; }
-    else if (this._manager?.notifier?.isEventOn('revenue')) { this._manager.notifier.send('revenue', embed); via = 'webhook chung'; }
+    if (n?.isEventOn('revenue')) {
+      n.send('revenue', embed, null, { botId: String(this.cfg.id), slotKey });
+      via = 'webhook chung (cập nhật tại chỗ)';
+    } else if (rn?.enabled) {
+      rn.send(null, embed, null, { botId: String(this.cfg.id), slotKey });
+      via = 'webhook chung (cập nhật tại chỗ)';
+    }
     if (kind === 'macro') { this._macroRevLastReportAt = nowMs(); this._macroRevPending = { amount: 0, cycles: 0 }; }
     else { this._revLastReportAt = nowMs(); this._revPending = { amount: 0, cycles: 0 }; }
-    if (via) this.log('sys', `Đã gửi báo cáo doanh thu (${via})`);
-    else this.log('sys', 'Doanh thu đã ghi nhận — chưa cấu hình webhook nên không gửi Discord (webhook revenue set <url>)');
+    if (via) this.log('sys', `Đã cập nhật báo cáo doanh thu (${via})`);
+    else this.log('sys', 'Doanh thu đã ghi nhận — chưa cấu hình webhook nên không gửi Discord (webhook set <url>)');
+    try { this._manager?.markDiscordPanelDirty?.(); } catch { /* ignore */ }
     return !!via;
   }
   sendRevenueReportNow() {

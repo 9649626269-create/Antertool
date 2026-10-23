@@ -746,11 +746,11 @@ class WebDashboard {
         this._syncBotToConfig(b);
         if (cb) cb({ ok: true });
       });
-      // ===== Discord Webhook (toàn cục) =====
-      sock.on('setWebhook', ({ url, events }, cb) => {
-        this.manager.notifier.configure(url || null, Array.isArray(events) ? events : undefined);
-        this.manager.persistence.set('webhookUrl', url || null);
-        if (Array.isArray(events)) this.manager.persistence.set('webhookEvents', events);
+      // ===== Discord Webhook (Gộp chung 1 kênh: Cảnh báo + Doanh thu + Bảng Trực Tiếp 10s) =====
+      sock.on('setWebhook', ({ url, events, refreshSec }, cb) => {
+        this.manager.setWebhookUrl(url || null, Array.isArray(events) ? events : undefined);
+        if (refreshSec !== undefined) this.manager.setDiscordRefreshSec(refreshSec);
+        if (this.manager.notifier.enabled) this.manager.sendDiscordPanel();
         if (cb) cb({ ok: true });
       });
       sock.on('testWebhook', async (data, cb) => {
@@ -758,16 +758,20 @@ class WebDashboard {
         const ok = await this.manager.notifier.test();
         if (cb) cb({ ok });
       });
-      // ===== Webhook RIÊNG cho báo cáo doanh thu =====
+      sock.on('sendDiscordPanel', async (data, cb) => {
+        if (!this.manager.notifier.enabled) { if (cb) cb({ ok: false, message: 'Chưa cấu hình webhook' }); return; }
+        const ok = await this.manager.sendDiscordPanel({ fresh: !!(data && data.fresh) });
+        if (cb) cb({ ok });
+      });
+      // Tương thích ngược: gộp chung vào webhook chính
       sock.on('setRevenueWebhook', ({ url }, cb) => {
         const u = url ? String(url).trim() : null;
-        this.manager.revenueNotifier.configure(u || null, ['all']);
-        this.manager.persistence.set('revenueWebhookUrl', u || null);
-        if (cb) cb({ ok: true, enabled: !!u });
+        if (u) this.manager.setWebhookUrl(u);
+        if (cb) cb({ ok: true, enabled: !!this.manager.notifier.enabled });
       });
       sock.on('testRevenueWebhook', async (data, cb) => {
-        if (!this.manager.revenueNotifier.enabled) { if (cb) cb({ ok: false, message: 'Chưa đặt webhook doanh thu riêng' }); return; }
-        const ok = await this.manager.revenueNotifier.test();
+        if (!this.manager.notifier.enabled) { if (cb) cb({ ok: false, message: 'Chưa đặt webhook' }); return; }
+        const ok = await this.manager.notifier.test();
         if (cb) cb({ ok });
       });
       // ===== Lịch tự out/vào theo giờ =====

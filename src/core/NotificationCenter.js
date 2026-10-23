@@ -497,10 +497,13 @@ class NotificationCenter {
       const level = rawEvt.level || spec.level || 'info';
       const evt = this._enrichEventFromBot({ ...rawEvt, level, ts: now }, now);
 
-      // 1. Kênh Discord (giữ nguyên hành vi & payload của Notifier)
+      // 1. Kênh Discord (hỗ trợ Hybrid Live Update, Dedup in-place, Auto-Resolve & Slot Upsert)
       if (evt.discord && this.discord && this.discord.isEventOn(evt.key)) {
         try {
-          this.discord.send(evt.key, evt.discord.embed, evt.discord.headline);
+          this.discord.send(evt.key, evt.discord.embed, evt.discord.headline, {
+            botId: evt.bot || '',
+            ...(evt.discord.opts || {}),
+          });
         } catch (e) {
           dbg('NotificationCenter', e);
         }

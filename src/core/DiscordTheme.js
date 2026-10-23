@@ -1,8 +1,8 @@
 'use strict';
 /**
- * DiscordTheme.js — Hệ thống giao diện tập trung cho mọi thông báo Discord Webhook của Antertool.
+ * DiscordTheme.js — Hệ thống giao diện tập trung cho mọi thông báo & Bảng Trạng Thái Trực Tiếp (Live Dashboard) trên Discord Webhook của Antertool.
  *
- *  - Ánh xạ mọi eventKey tới { emoji, color, severity, label }.
+ *  - Ánh xạ mọi eventKey tới { emoji, color, severity, label, headline }.
  *  - Bảng màu theo mức độ (severity):
  *      • success  = 0x6ef16f (xanh lá — giữ chuẩn "Kiểm Tra Kết Nối Webhook")
  *      • info     = 0x38bdf8 (xanh dương)
@@ -13,6 +13,8 @@
  *    author + avatar mc-heads, thanh tiến độ (▰▰▰▱▱ 60%), timestamp tương đối (<t:unix:R>),
  *    blockquote cho lý do kick, code block cho lệnh/log, định dạng tiền ($41.35K),
  *    che thông tin nhạy cảm (secrets) và cắt chuỗi an toàn theo code point trong giới hạn Discord.
+ *  - Dựng Bảng Điều Khiển Trực Tiếp (Live Dashboard Embed) cập nhật tại chỗ mỗi 10s (`buildLivePanelEmbed`, `livePanelSig`)
+ *    và Bản Tin Gộp Chống Bão (`buildDigestEmbed`).
  */
 const RevenueTracker = require('./RevenueTracker');
 
@@ -38,7 +40,7 @@ const COLOR = Object.freeze({
 
 /**
  * Bảng chủ đề cho mọi khoá sự kiện (bao gồm toàn bộ Notifier.EVENT_LABELS,
- * NotificationCenter.EVENT_CATALOG và các biến thể báo cáo/lịch/kiểm tra).
+ * NotificationCenter.EVENT_CATALOG, Live Panel, Digest và các biến thể báo cáo/lịch/kiểm tra).
  */
 const EVENT_THEMES = Object.freeze({
   disconnect: {
@@ -121,6 +123,18 @@ const EVENT_THEMES = Object.freeze({
     severity: 'report',
     color: SEVERITY_COLORS.report,
     label: 'Báo Cáo Tổng Kết Doanh Thu',
+  },
+  livePanel: {
+    emoji: '📡',
+    severity: 'info',
+    color: SEVERITY_COLORS.info,
+    label: 'Bảng Trạng Thái & Doanh Thu Trực Tiếp',
+  },
+  digest: {
+    emoji: '📦',
+    severity: 'warning',
+    color: SEVERITY_COLORS.warning,
+    label: 'Gộp Thông Báo (Chống Tràn Kênh)',
   },
   featuresReady: {
     emoji: '✅',
@@ -284,6 +298,8 @@ function inferEventKey(title = '', fallbackKey = null) {
   const t = String(title || '').toLowerCase();
   if (t.includes('kiểm tra kết nối webhook')) return 'test';
   if (t.includes('tin thử') && t.includes('kick')) return 'testMention';
+  if (t.includes('bảng trạng thái') || t.includes('trực tiếp')) return 'livePanel';
+  if (t.includes('gộp thông báo') || t.includes('sự kiện đã gộp')) return 'digest';
   if (t.includes('auto-sell (macro)')) return 'revenueMacro';
   if (t.includes('auto-sell spawn') && t.includes('báo cáo')) return 'revenue';
   if (t.includes('báo cáo tổng kết doanh thu')) return 'revenueSummary';
@@ -330,12 +346,10 @@ function toTitleCaseVi(text) {
     .split(/(\s+)/)
     .map(tok => {
       if (/^\s+$/.test(tok)) return tok;
-      // Tách dấu ngoặc mở đầu nếu có (vd "(Macro)", "(2")
       const leadMatch = /^([(["“']*)/.exec(tok);
       const lead = leadMatch ? leadMatch[1] : '';
       const rest = tok.slice(lead.length);
       if (!rest) return tok;
-      // Giữ nguyên lệnh bắt đầu bằng '/' và tham số ngay sau lệnh đó (vd "/home treolong")
       if (rest.startsWith('/')) {
         afterSlashCmd = true;
         return tok;
@@ -345,11 +359,9 @@ function toTitleCaseVi(text) {
         return tok;
       }
       afterSlashCmd = false;
-      // Giữ nguyên tên kỹ thuật chứa dấu '_' hoặc từ viết tắt/camelCase (vd autosell_spawn, AutoOrder, GUI)
       if (rest.includes('_') || /^(?:spawnerprotect|spawnhome|autosell)$/i.test(rest) || /[a-z][A-Z]/.test(rest) || /^[A-Z0-9+-]{2,}$/.test(rest)) {
         return tok;
       }
-      // Xử lý từ ghép có dấu '-' (vd Auto-Sell)
       if (rest.includes('-') && !rest.startsWith('-')) {
         const parts = rest.split('-').map(p => (p ? p.charAt(0).toLocaleUpperCase('vi') + p.slice(1) : p));
         return lead + parts.join('-');
@@ -506,7 +518,6 @@ function enforceEmbedLimits(rawEmbed = {}, extraSecrets = []) {
     e.fields = cleanFields;
   }
 
-  // Kiểm tra tổng số code points <= 6000 (tính cả author.name, title, description, footer.text, fields)
   const calcTotal = () => {
     let sum = 0;
     sum += codePointLength(e.title);
@@ -543,6 +554,182 @@ function enforceEmbedLimits(rawEmbed = {}, extraSecrets = []) {
 }
 
 /**
+ * Tạo chữ ký trạng thái của Bảng Trực Tiếp (Live Panel) để phát hiện thay đổi.
+ * Khi tất cả bot đang nghỉ/offline và không có biến động doanh thu/sự kiện,
+ * Notifier có thể bỏ qua lệnh PATCH không cần thiết.
+ */
+function livePanelSig(snapshot = {}) {
+  const bots = Array.isArray(snapshot.bots) ? snapshot.bots : [];
+  const botSigs = bots.map(b => [
+    b.botId,
+    b.connState,
+    b.disabled ? 1 : 0,
+    b.scheduledOut ? 1 : 0,
+    b.reconnects || 0,
+    b.sellOn ? 1 : 0,
+    b.sellBusy ? 1 : 0,
+    b.activityText || '',
+    b.stats ? `${b.stats.total}:${b.stats.cycles}:${b.stats.lastAt || 0}` : '0',
+    b.protect?.on ? `${b.protect.level}:${b.protect.threats || 0}` : 'off',
+  ].join(':')).join('|');
+  const eventsSig = (snapshot.recentEvents || []).slice(0, 6).map(ev => `${ev.ts}:${ev.key}:${ev.botId || ''}:${ev.count || 1}`).join('|');
+  return `${botSigs}#${eventsSig}`;
+}
+
+/**
+ * Dựng Embed Bảng Điều Khiển & Doanh Thu Trực Tiếp (Live Dashboard) trên Discord.
+ * Tự động cập nhật tại chỗ (PATCH message) mỗi 10 giây mà không tạo tin nhắn mới.
+ */
+function buildLivePanelEmbed(snapshot = {}) {
+  const now = Number(snapshot.now) || Date.now();
+  const refreshSec = Number(snapshot.refreshSec) || 10;
+  const bots = Array.isArray(snapshot.bots) ? snapshot.bots : [];
+  const totalBots = bots.length;
+  const onlineBots = bots.filter(b => b.connState === 'ONLINE').length;
+  const reconnectingBots = bots.filter(b => b.connState === 'RECONNECTING' || b.connState === 'CONNECTING' || b.connState === 'AUTHENTICATING' || b.connState === 'SPAWNING').length;
+  const sellingBots = bots.filter(b => b.connState === 'ONLINE' && b.sellOn).length;
+
+  let color = SEVERITY_COLORS.success;
+  if (totalBots === 0) color = SEVERITY_COLORS.info;
+  else if (onlineBots === 0 && reconnectingBots > 0) color = SEVERITY_COLORS.warning;
+  else if (onlineBots === 0) color = SEVERITY_COLORS.critical;
+  else if (onlineBots < totalBots) color = SEVERITY_COLORS.warning;
+
+  let totalEarned = 0;
+  let totalToday = 0;
+  let totalLast1h = 0;
+  let totalCycles = 0;
+  let totalAvgPerHour = 0;
+  let hasRate = false;
+  let maxUptimeMs = 0;
+
+  for (const b of bots) {
+    if (b.totalUptimeMs > maxUptimeMs) maxUptimeMs = b.totalUptimeMs;
+    const s = b.stats;
+    if (s) {
+      totalEarned += Number(s.total) || 0;
+      totalToday += Number(s.today) || 0;
+      totalLast1h += Number(s.last1h) || 0;
+      totalCycles += Number(s.cycles) || 0;
+      if (s.avgPerHour != null) {
+        totalAvgPerHour += Number(s.avgPerHour) || 0;
+        hasRate = true;
+      }
+    }
+  }
+
+  const hosts = [...new Set(bots.map(b => String(b.host || '').trim()).filter(Boolean))];
+  const serverLabel = hosts.length === 1 ? hosts[0] : (hosts.length > 1 ? `${hosts.length} server` : '—');
+  const primaryUser = bots.find(b => /^\w{1,16}$/.test(String(b.account || '')))?.account || '';
+
+  const descParts = [];
+  descParts.push(
+    `🟢 **${onlineBots}/${totalBots}** trực tuyến • 🔄 **${sellingBots}** tự bán lồng • ⏱️ Cập nhật ${discordTimestamp(now, 'R')} *(chu kỳ ${refreshSec}s)*`
+  );
+
+  if (bots.length === 0) {
+    descParts.push(blockquote('Chưa có bot nào trong cấu hình. Dùng lệnh CLI hoặc Web Dashboard để thêm bot.'));
+  } else {
+    const botLines = [];
+    for (const b of bots.slice(0, 15)) {
+      let icon = '🟢';
+      let stateTag = 'Online';
+      if (b.disabled || b.connState === 'STOPPING') {
+        icon = '⚪';
+        stateTag = b.scheduledOut ? 'Nghỉ lịch' : 'Đã dừng';
+      } else if (b.connState === 'RECONNECTING') {
+        icon = '🟠';
+        stateTag = `Reconnect (${b.reconnects || 1})`;
+      } else if (b.connState === 'CONNECTING' || b.connState === 'AUTHENTICATING' || b.connState === 'SPAWNING') {
+        icon = '🟡';
+        stateTag = 'Đang vào';
+      } else if (b.connState !== 'ONLINE') {
+        icon = '🔴';
+        stateTag = 'Mất kết nối';
+      }
+
+      const s = b.stats;
+      const revStr = s && s.total > 0
+        ? `${formatMoney(s.total)} (${s.avgPerHour != null ? formatMoney(s.avgPerHour) + '/h' : 'chờ đo'})`
+        : '$0';
+      const actStr = truncateCodePoints(b.activityText || stateTag, 48);
+      const nextStr = (b.connState === 'ONLINE' && b.sellOn && b.nextSellAt > now)
+        ? ` • bán ${discordTimestamp(b.nextSellAt, 'R')}`
+        : '';
+      const guardStr = b.protect?.on ? ` • 🛡️M${b.protect.level || 2}` : '';
+      botLines.push(`${icon} **${b.botId}** (\`${b.account || b.botId}\`) — ${actStr}${nextStr}${guardStr} • 💰 **${revStr}**`);
+    }
+    if (bots.length > 15) {
+      botLines.push(`*… và ${bots.length - 15} bot khác*`);
+    }
+    descParts.push(botLines.join('\n'));
+  }
+
+  const recentEvents = Array.isArray(snapshot.recentEvents) ? snapshot.recentEvents.slice(0, 6) : [];
+  if (recentEvents.length > 0) {
+    const evLines = recentEvents.map(ev => {
+      const th = getTheme(ev.key);
+      const botPrefix = ev.botId ? `**${ev.botId}**: ` : '';
+      const countBadge = ev.count && ev.count > 1 ? ` \`×${ev.count}\`` : '';
+      return `• ${th.emoji} ${botPrefix}${truncateCodePoints(ev.summary || th.label, 70)}${countBadge} (${discordTimestamp(ev.lastTs || ev.ts || now, 'R')})`;
+    });
+    descParts.push(`**📋 Sự kiện gần đây:**\n${evLines.join('\n')}`);
+  }
+
+  const fields = [
+    { name: 'Trạng thái dàn', value: `${progressBar(onlineBots, Math.max(1, totalBots))} (${onlineBots}/${totalBots})`, inline: true },
+    { name: 'Server', value: serverLabel, inline: true },
+    { name: 'Thời gian treo', value: RevenueTracker.formatClock(maxUptimeMs), inline: true },
+    { name: 'Tổng thu nhập', value: formatMoney(totalEarned), inline: true },
+    { name: 'Tốc độ TB / Ngày', value: hasRate ? `${formatMoney(totalAvgPerHour)}/h (~${formatMoney(totalAvgPerHour * 24)}/d)` : '—', inline: true },
+    { name: '1h qua / Hôm nay', value: `${formatMoney(totalLast1h)} / ${formatMoney(totalToday)} (${totalCycles} vòng)`, inline: true },
+  ];
+
+  return enforceEmbedLimits({
+    title: formatEmbedTitle(`Bảng Trạng Thái & Doanh Thu Trực Tiếp (${totalBots} Bot)`, 'livePanel'),
+    description: descParts.join('\n\n'),
+    color,
+    author: buildAuthor(`${BRAND} Live Dashboard`, primaryUser),
+    thumbnail: buildThumbnail(primaryUser),
+    fields,
+    footer: { text: `${BRAND} • Tự động cập nhật tại chỗ mỗi ${refreshSec}s (không làm tràn thông báo)` },
+    timestamp: new Date(now).toISOString(),
+  });
+}
+
+/**
+ * Dựng Embed Gộp Sự Kiện (Storm Digest) khi có nhiều thông báo bắn dồn dập trong thời gian ngắn.
+ */
+function buildDigestEmbed(digest = {}, now = Date.now()) {
+  const items = Array.isArray(digest.items) ? digest.items : [];
+  const count = Number(digest.count) || items.length;
+  const lines = items.slice(0, 12).map(it => {
+    const th = getTheme(it.key);
+    const botTag = it.botId ? `**${it.botId}**: ` : '';
+    const mult = it.count > 1 ? ` \`×${it.count}\`` : '';
+    return `• ${th.emoji} ${botTag}${truncateCodePoints(it.summary || it.title || th.label, 80)}${mult} (${discordTimestamp(it.lastTs || now, 'R')})`;
+  });
+  if (count > lines.length) {
+    lines.push(`*… và ${count - lines.length} sự kiện khác đã được gộp*`);
+  }
+  return enforceEmbedLimits({
+    title: formatEmbedTitle(`Gộp ${count} Sự Kiện Trong 60 Giây`, 'digest'),
+    description: [
+      `Hệ thống tự động gộp các thông báo liên tiếp vào cùng 1 tin nhắn để tránh tràn kênh Discord (${discordTimestamp(now, 'R')}).`,
+      lines.join('\n'),
+    ].filter(Boolean).join('\n\n'),
+    color: SEVERITY_COLORS.warning,
+    author: buildAuthor(BRAND),
+    fields: [
+      { name: 'Tổng sự kiện gộp', value: `${count} sự kiện`, inline: true },
+      { name: 'Cửa sổ chống tràn', value: '60 giây', inline: true },
+      { name: 'Cập nhật cuối', value: discordTimestamp(now, 'R'), inline: true },
+    ],
+    timestamp: new Date(now).toISOString(),
+  });
+}
+
+/**
  * Tạo bộ mẫu thử (preview) cho toàn bộ các loại sự kiện Discord để người dùng kiểm tra giao diện.
  */
 function buildPreviewPayloads(opts = {}) {
@@ -561,6 +748,32 @@ function buildPreviewPayloads(opts = {}) {
   ];
 
   const items = [
+    {
+      key: 'livePanel',
+      content: '',
+      embed: buildLivePanelEmbed({
+        now,
+        refreshSec: 10,
+        bots: [
+          {
+            botId,
+            account: username,
+            host: server,
+            connState: 'ONLINE',
+            sellOn: true,
+            nextSellAt: now + 180000,
+            activityText: 'Đứng canh lồng, chờ vòng bán kế tiếp',
+            totalUptimeMs: 11565000,
+            protect: { on: true, level: 2, threats: 0 },
+            stats: { total: 41350, today: 41350, last1h: 12500, cycles: 8, avgPerHour: 12500, lastAt: now - 60000 },
+          },
+        ],
+        recentEvents: [
+          { key: 'featuresReady', botId, summary: 'Đã bật spawnerprotect + autosell_spawn', ts: now - 120000, count: 1 },
+          { key: 'revenue', botId, summary: 'Vòng bán +$3.35K (5/5 lồng)', ts: now - 60000, count: 1 },
+        ],
+      }),
+    },
     {
       key: 'test',
       content: '',
@@ -733,7 +946,7 @@ function buildPreviewPayloads(opts = {}) {
         thumbnail,
         fields: [
           ...baseInline,
-          { name: ' Toạ độ', value: '`120.0, 64.0, -48.0`', inline: true },
+          { name: 'Toạ độ', value: '`120.0, 64.0, -48.0`', inline: true },
         ],
         timestamp: iso,
       }),
@@ -829,7 +1042,8 @@ function buildPreviewPayloads(opts = {}) {
         title: formatEmbedTitle('Bắt Đầu Giờ Nghỉ', 'scheduleOut'),
         description: `Đã out 2 bot (${progressBar(2, 2)}). Sẽ tự vô lại lúc **06:00** (${discordTimestamp(now + 7 * 3600000, 'R')}).`,
         color: EVENT_THEMES.scheduleOut.color,
-        author: buildAuthor(BRAND),
+        author: buildAuthor(BRAND, username),
+        thumbnail,
         fields: [
           { name: 'Giờ nghỉ', value: '23:00', inline: true },
           { name: 'Vô lại lúc', value: '06:00', inline: true },
@@ -869,5 +1083,8 @@ module.exports = {
   truncateCodePoints,
   codePointLength,
   enforceEmbedLimits,
+  livePanelSig,
+  buildLivePanelEmbed,
+  buildDigestEmbed,
   buildPreviewPayloads,
 };

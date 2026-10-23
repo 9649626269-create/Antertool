@@ -1,23 +1,26 @@
-MANIFEST — Antertool Discord Webhook Notification Redesign & Telegram v2 Sync (Optimized & Logic-Audited Build)
+MANIFEST — Antertool Discord Webhook Hybrid v2 (Live Dashboard 10s + Anti-Spam + Unified Webhook)
 Base build: Antertool-Discord-Redesign.zip (antares-manager@1.0.0)
 
-Files & Logic Fixes:
-[NEW] src/core/DiscordTheme.js — Module giao diện tập trung cho Discord Webhook: ánh xạ mọi eventKey tới { emoji, color, severity, label }, định dạng Title Case tiếng Việt kèm emoji, author + avatar mc-heads, thanh tiến độ (▰▰▰▱▱ 60%), timestamp tương đối (<t:unix:R>), blockquote lý do kick, code block lệnh/log, định dạng tiền ($41.35K), che thông tin nhạy cảm và cắt chuỗi an toàn theo code point trong giới hạn Discord
-[MODIFIED] src/services/BotManager.js —
-  • Đấu nối hoàn chỉnh `_onTelegramEvent(ev)` qua `TelegramControl.handleEvent(ev)` cho cả 24 lệnh `/command` và mọi nút bấm `p:<bid>:<act>`, `c:<token>:<y|n>`, `e:<key>:<op>`, `r:<id>`, `lg:now`
-  • Gọi `normalizeTelegramConfig()` và `setSymbolSet()` trong `_initTelegram()` và `setTelegramOption()`
-  • Hợp nhất `_createBotFromConfig()` và `_createBotFromData()` qua `_buildBotConfig()`, khắc phục lỗi thiếu `respawn: true` và `resolveBotPassword()` khi tạo bot qua CLI/Web
-[MODIFIED] src/core/BotSession.js —
-  • Bổ sung hàm `getProtectStatus()` và theo dõi `_spLastScanAt` / `_spThreatCount` để bảng Telegram hiển thị đúng trạng thái bảo vệ lồng
-  • Tích hợp `BotActivity` (`initSessionActivity`, `setActivity`, `endActivity`, `clearActivities`) và xoá toàn bộ cờ bận (`_sellSpawnBusy`, `_sellRecovering`, `_spawnerBusy`, `_nextSellAt`) trong `_cleanupOnDisconnect()` để triệt tiêu lỗi race condition `offline_but_busy` khi bị kick giữa vòng bán
-  • Chuyển `windowOpen` và `_afkPaused` sang kiểm tra `this.autoOrder?.isWorking` thay vì `this.autoOrder?.active` để không khoá oan GUI /tpa, /stats, captcha và AFK khi AutoOrder đang ngủ chờ item
-  • Uỷ quyền `_logHud()` và `_tpHoldStill()` sang `TeleportHandler`, xoá nhánh kiểm tra custom command trùng lặp trong `cmd()`, và bổ sung lưu cấu hình bền vững cho lệnh CLI `goal`, `addspawner`, `removespawner`
-[MODIFIED] src/core/AutoSellHandler.js — Cập nhật đầy đủ `_nextSellAt`, `_sellCycleCount`, `_sellCurrentIdx`, `_sellCycleStartedAt`, `_sellRecoveryAttempt`, `_sellHomeTries` và phát sự kiện `BotActivity` theo thời gian thực
-[MODIFIED] src/core/ReconnectHandler.js — Cập nhật đầy đủ `attempt`, `maxRetries`, `scheduledAt`, `nextAttemptAt`, `lastError` phục vụ hiển thị đếm ngược kết nối lại
-[MODIFIED] src/core/ScriptRunner.js — Cập nhật `_currentStep`, `_totalSteps`, `_startedAt` khi chạy từng bước macro và sửa lỗi import `{ WindowRouter }` khi đóng GUI còn sót
-[MODIFIED] src/core/AutoOrder.js — Bổ sung getter `isWorking` và `ownsWindows()` để phân biệt trạng thái đang nghỉ chờ item (`chờ item`) với trạng thái đang thao tác GUI `/order`
-[MODIFIED] src/core/CommandRegistry.js — Sửa nhánh `_customCommands` trong `run()` để thực thi trực tiếp `mc.chat()` khi bot đang online
-[MODIFIED] src/core/TeleportHandler.js — Hoàn thiện `holdBeforeSend()` và `noteHud()` thay cho bộ khung TODO rỗng
-[MODIFIED] src/core/Notifier.js — Loại bỏ bản sao fallback `DiscordTheme` 40 dòng dư thừa, dùng trực tiếp module `DiscordTheme.js`
-[MODIFIED] main.js — Bổ sung đầy đủ các lệnh CLI `telegram users`, `telegram mute`, `telegram control`, `telegram symbols` khớp với `HelpCatalog.js`; tái sử dụng `EnvironmentDetector` và tránh log lặp cảnh báo `validateConfig` lúc khởi động
-[MODIFIED] test/audit-fixes.test.js — Bổ sung bộ kiểm thử hồi quy cho `CommandRegistry`, `AutoOrder.isWorking`, `BotSession.getProtectStatus`, `_cleanupOnDisconnect` và `BotManager._onTelegramEvent`
+Kiến trúc & Cải tiến mới (Hybrid Live Update + Chống tràn thông báo):
+1. [REBUILT] src/core/Notifier.js — Đập đi xây lại toàn bộ engine gửi Discord Webhook theo kiến trúc Hybrid v2:
+   • Hỗ trợ `POST <webhookUrl>?wait=true` (lấy `message.id` thật từ Discord), `PATCH <webhookUrl>/messages/<id>` (sửa tin nhắn tại chỗ, không tạo thông báo mới, không làm tràn kênh) và `DELETE <webhookUrl>/messages/<id>`.
+   • Tự động fallback thông minh: nếu tin nhắn cũ bị xoá trên Discord (`HTTP 404 Unknown Message`), tự động gửi lại tin mới và lưu ID mới vào `webhookMessages`.
+   • Quản lý Rate-limit chuẩn xác: đọc `retry_after` khi gặp `HTTP 429` và tự động đợi rồi thử lại.
+   • **Upsert tại chỗ theo Slot (`slotKey`)**: Toàn bộ báo cáo doanh thu (`revenue`, `revenueMacro`, `revenueSummary`), lịch nghỉ (`scheduleOut`/`scheduleIn`), trạng thái tính năng (`featuresReady`, `homeReturn`, `autoOrder`, `autoSell`, `moneyGoal`, `protectResult`) đều tự động sửa đè trên đúng 1 tin nhắn cố định của slot đó thay vì bắn tin mới sau mỗi chu kỳ.
+   • **Gộp tin cảnh báo trùng (In-place Dedup)**: Khi cùng 1 cảnh báo (`disconnect`, `spawnerThreat`, `sellFailed`...) lặp lại trên cùng 1 bot trong cửa sổ chống trùng (`dedupWindowMs = 60s`), hệ thống tự động `PATCH` tin nhắn trước đó kèm dòng `🔄 Đã lặp lại ×N lần • Lần gần nhất <t:unix:R>`.
+   • **Tự hồi phục thông minh (Auto-Resolve)**: Khi bot `reconnectRecovered` (đã kết nối lại ổn định), hệ thống tự động `PATCH` ngay chính tin nhắn báo `disconnect` / `reconnectFailed` trước đó của bot đó thành trạng thái `🟢 Đã Kết Nối Lại Ổn Định` (xoá dòng tag báo động đỏ phía trên), giúp kênh Discord luôn sạch sẽ.
+   • **Chống bão thông báo (Storm Control / Digest)**: Tự động gộp các thông báo dồn dập trong 60s vào 1 bản tin Digest sửa tại chỗ.
+2. [MODIFIED] src/core/DiscordTheme.js —
+   • Bổ sung `buildLivePanelEmbed(snapshot)` và `livePanelSig(snapshot)` dựng **Bảng Trạng Thái & Doanh Thu Trực Tiếp (Live Dashboard)** cho cả dàn bot: hiển thị số bot trực tuyến, số bot đang tự bán lồng, trạng thái/việc đang làm của từng bot, đếm ngược vòng bán kế tiếp (`<t:unix:R>`), mức bảo vệ lồng, tốc độ thu nhập (`$/h`, `~/ngày`), tổng thu nhập và **Nhật ký 6 sự kiện gần nhất**.
+   • Bổ sung `buildDigestEmbed(digest)` cho bản tin gộp chống bão.
+3. [MODIFIED] src/services/BotManager.js —
+   • **Gộp chung 1 Webhook duy nhất**: Hợp nhất `revenueNotifier` và `notifier` về chung 1 luồng Webhook (`this.revenueNotifier = this.notifier`), tự động chuyển đổi `revenueWebhookUrl` cũ sang `webhookUrl` chung.
+   • **Tự động cập nhật mỗi 10 giây (`webhookRefreshSec = 10`)**: Bổ sung bộ đếm `_discordPanelTimer` tự động cập nhật tại chỗ Bảng Trạng Thái & Doanh Thu Trực Tiếp mỗi 10 giây (bỏ qua lệnh `PATCH` nếu toàn bộ bot đang nghỉ và chữ ký dữ liệu `livePanelSig` không đổi để tiết kiệm rate-limit).
+   • Đồng bộ tức thì Bảng Trực Tiếp khi xong vòng bán (`onSellCycle`) hoặc khi có sự kiện trạng thái mới.
+4. [MODIFIED] src/core/BotSession.js & src/core/NotificationCenter.js —
+   • Đấu nối `botId` và `slotKey` từ `_notify()` và `_sendRevenueReport()` sang `Notifier.send()` để kích hoạt In-place Upsert, Dedup và Auto-Resolve.
+5. [MODIFIED] main.js, src/core/HelpCatalog.js, src/core/ConfigValidator.js, src/ui/dashboard.js, src/web/WebDashboard.js, src/web/public/app.js —
+   • Bổ sung các lệnh CLI mới: `webhook panel [fresh]`, `webhook refresh <10s|off>`, `webhook mode <hybrid|new>`.
+   • Cập nhật giao diện Web Dashboard & Terminal Dashboard hiển thị trạng thái Discord Webhook Hợp Nhất (Hybrid Live 10s).
+6. [MODIFIED] test/discord-embed.test.js & test/ai-controller.test.js —
+   • Mở rộng bộ test kiểm tra toàn diện `POST ?wait=true`, `PATCH /messages/:id`, fallback `404`, Live Dashboard 10s, In-place Revenue Upsert, Dedup `×N`, và Auto-Resolve `disconnect -> reconnectRecovered` (36/36 bộ test pass 100%).

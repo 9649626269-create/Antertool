@@ -222,6 +222,9 @@ function validateConfig(cfg) {
   if (cfg.color !== undefined && !isBool(cfg.color)) errors.push('color phải là boolean');
   if (cfg.unicode !== undefined && !isBool(cfg.unicode)) errors.push('unicode phải là boolean');
   if (cfg.ui !== undefined && !isObj(cfg.ui)) errors.push('ui phải là object');
+  if (cfg.webhookRefreshSec !== undefined && (!isNum(cfg.webhookRefreshSec) || cfg.webhookRefreshSec < 0)) errors.push('webhookRefreshSec phải là số >= 0');
+  if (cfg.webhookMode !== undefined && !isStr(cfg.webhookMode)) errors.push('webhookMode phải là string');
+  if (cfg.webhookMessages !== undefined && !isObj(cfg.webhookMessages)) errors.push('webhookMessages phải là object');
 
   // settings
   if (cfg.settings !== undefined) {

@@ -1,11 +1,18 @@
 'use strict';
-// Kiểm tra toàn diện hệ thống thông báo Discord Webhook mới (DiscordTheme + Notifier + BotSession + BotManager):
-// - Bảng chủ đề DiscordTheme phủ kín mọi eventKey (Notifier.EVENT_LABELS + NotificationCenter.EVENT_CATALOG)
+// Kiểm tra toàn diện hệ thống thông báo Discord Webhook Hybrid v2 (DiscordTheme + Notifier + BotSession + BotManager):
+// - Bảng chủ đề DiscordTheme phủ kín mọi eventKey (Notifier.EVENT_LABELS + NotificationCenter.EVENT_CATALOG + livePanel + digest)
 // - Bố cục chuẩn: tiêu đề Title Case kèm emoji, author (tên bot + icon mc-heads), thumbnail, inline fields, footer "Antertool", ISO timestamp
 // - Định dạng phong phú: <t:unix:R>, blockquote lý do kick, code block lệnh/log, thanh tiến độ (▰▰▰▱▱ 60%), tiền tệ ($41.35K)
 // - Giới hạn ký tự Discord (256/4096/1024/25/6000/1900), cắt an toàn theo code point (không vỡ surrogate pair), che bí mật
 // - Giữ nguyên 100% logic allowed_mentions, mentionEvents, và đầu ra Telegram (telegramAlert byte-identical)
-// - Kiểm tra lệnh `webhook preview` (Notifier.preview)
+// - Kiểm tra cơ chế Hybrid v2:
+//     • Bảng Trạng Thái & Doanh Thu Trực Tiếp (Live Dashboard) tự động sửa tại chỗ (PATCH /messages/:id) mỗi 10s
+//     • Gộp chung 1 Webhook duy nhất (revenueNotifier hợp nhất vào notifier)
+//     • Upsert tại chỗ cho các báo cáo doanh thu / sự kiện định kỳ (không tạo tin mới làm tràn kênh)
+//     • Gộp tin cảnh báo trùng (Dedup in-place: ×N lần)
+//     • Tự hồi phục (Auto-Resolve): khi reconnectRecovered tự động sửa (PATCH) ngay trên tin báo kick trước đó
+//     • Tự động gửi lại tin mới nếu tin nhắn cũ bị xoá trên Discord (HTTP 404 Unknown Message)
+//     • Chống bão thông báo (Storm Control / Digest)
 const assert = require('assert');
 const http = require('http');
 const fs = require('fs');
@@ -69,20 +76,71 @@ function checkLimits(e) {
 
 const F = (e, name) => (e.fields.find(f => f.name === name) || {}).value;
 
+// Mock Discord Webhook Server hỗ trợ đầy đủ POST ?wait=true, PATCH /messages/:id, DELETE /messages/:id và mô phỏng 404
 function startHook() {
   const got = [];
+  const messages = new Map();
+  const deletedIds = new Set();
+  let seq = 1000;
+
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', c => raw += c);
     req.on('end', () => {
-      got.push(JSON.parse(raw));
+      const body = raw ? JSON.parse(raw) : null;
+      const u = new URL(req.url, 'http://127.0.0.1');
+      const patchMatch = /\/messages\/([^/]+)$/.exec(u.pathname);
+
+      if (req.method === 'POST') {
+        const id = String(++seq);
+        const record = { ...body, _method: 'POST', _id: id, _url: req.url };
+        messages.set(id, record);
+        got.push(record);
+        if (u.searchParams.get('wait') === 'true') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ id, channel_id: '1' }));
+        } else {
+          res.statusCode = 204;
+          res.end();
+        }
+        return;
+      }
+
+      if (req.method === 'PATCH' && patchMatch) {
+        const id = decodeURIComponent(patchMatch[1]);
+        if (deletedIds.has(id) || !messages.has(id)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: 'Unknown Message', code: 10008 }));
+          return;
+        }
+        const record = { ...body, _method: 'PATCH', _id: id, _url: req.url };
+        messages.set(id, record);
+        got.push(record);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id, channel_id: '1' }));
+        return;
+      }
+
+      if (req.method === 'DELETE' && patchMatch) {
+        const id = decodeURIComponent(patchMatch[1]);
+        deletedIds.add(id);
+        messages.delete(id);
+        got.push({ _method: 'DELETE', _id: id, _url: req.url });
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
       res.statusCode = 204;
       res.end();
     });
   });
+
   return new Promise(r => server.listen(0, '127.0.0.1', () => r({
     server,
     got,
+    messages,
+    deletedIds,
     url: `http://127.0.0.1:${server.address().port}/api/webhooks/1/x`,
   })));
 }
@@ -112,7 +170,7 @@ function startHook() {
   const allEventKeys = new Set([
     ...Object.keys(Notifier.EVENT_LABELS),
     ...Object.keys(EVENT_CATALOG),
-    'test', 'testMention', 'revenueMacro', 'revenueSummary', 'scheduleOut', 'scheduleIn',
+    'test', 'testMention', 'revenueMacro', 'revenueSummary', 'scheduleOut', 'scheduleIn', 'livePanel', 'digest',
   ]);
   for (const key of allEventKeys) {
     const entry = DiscordTheme.EVENT_THEMES[key];
@@ -148,12 +206,14 @@ function startHook() {
   assert.strictEqual(Notifier.finish({ title: 't' }).footer.text, 'Antertool');
   assert.strictEqual(Notifier.finish({ title: 't' }).author.name, 'Antertool');
 
-  // 4) Báo cáo doanh thu của 1 bot (spawn & macro)
+  // 4) Báo cáo doanh thu của 1 bot (spawn & macro) + Gộp chung 1 Webhook + Cập nhật tại chỗ (In-place Upsert)
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dce-'));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ bots: [] }));
   const mgr = new BotManager({ configPath: path.join(dir, 'config.json') });
   await mgr.init();
-  mgr.notifier.configure(hook.url, ['all']);
+  assert.strictEqual(mgr.revenueNotifier, mgr.notifier, 'revenueNotifier phải được gộp chung vào mgr.notifier');
+  assert.strictEqual(mgr.getDiscordRefreshSec(), 10, 'Mặc định tự động cập nhật bảng trực tiếp mỗi 10s');
+  mgr.setWebhookUrl(hook.url, ['all']);
   const bot = new BotSession({ id: 'bot-1', host: 'donutsmp.net', port: 25565, username: 'Steve_01', autoSellSpawnRevenue: false }, 'teal', null);
   bot._manager = mgr;
   bot.state.connState = CS.ONLINE;
@@ -194,13 +254,31 @@ function startHook() {
   assert.strictEqual(e.author.icon_url, undefined, 'tên không hợp lệ thì không gắn icon_url');
   checkLimits(e);
 
-  // gửi thật qua Notifier: payload tới webhook đúng cấu trúc
+  // Gửi thật qua Notifier: lần 1 là POST ?wait=true, lần 2 là PATCH trên cùng messageId (không làm tràn kênh!)
   hook.got.length = 0;
   assert.strictEqual(bot._sendRevenueReport({ sum: 3350, done: 5, total: 5, hits: 5 }), true);
   await mgr.notifier._queue;
-  const sent = hook.got.at(-1).embeds[0];
-  assert.strictEqual(sent.title, '💰 Báo Cáo Tổng Kết Auto-Sell Spawn');
-  checkLimits(sent);
+  const revMsg1 = hook.got.at(-1);
+  assert.strictEqual(revMsg1._method, 'POST', 'Lần báo cáo đầu tiên phải POST để tạo tin');
+  assert.strictEqual(revMsg1.embeds[0].title, '💰 Báo Cáo Tổng Kết Auto-Sell Spawn');
+  checkLimits(revMsg1.embeds[0]);
+
+  mgr.revenue.record('bot-1', 5000, { now: t0 - 1 * M, intervalMs: 5 * M, hits: 5 });
+  assert.strictEqual(bot._sendRevenueReport({ sum: 5000, done: 5, total: 5, hits: 5 }), true);
+  await mgr.notifier._queue;
+  const revMsg2 = hook.got.at(-1);
+  assert.strictEqual(revMsg2._method, 'PATCH', 'Lần báo cáo thứ 2 phải PATCH sửa tại chỗ, không tạo tin mới');
+  assert.strictEqual(revMsg2._id, revMsg1._id, 'Phải sửa đúng trên messageId của lần 1');
+  assert.strictEqual(F(revMsg2.embeds[0], 'Tổng thu nhập'), '$46.35K');
+  checkLimits(revMsg2.embeds[0]);
+
+  // Nếu người dùng xoá tin nhắn trên Discord (404 Unknown Message), lần tiếp theo tự động POST tạo lại
+  hook.deletedIds.add(revMsg1._id);
+  assert.strictEqual(bot._sendRevenueReport({ sum: 2000, done: 5, total: 5, hits: 5 }), true);
+  await mgr.notifier._queue;
+  const revMsg3 = hook.got.at(-1);
+  assert.strictEqual(revMsg3._method, 'POST', 'Khi tin cũ bị xoá (404), phải tự động POST lại tin mới');
+  assert.notStrictEqual(revMsg3._id, revMsg1._id);
 
   // macro revenue report
   bot._macroRevPending = { amount: 0, cycles: 0 };
@@ -211,7 +289,7 @@ function startHook() {
   assert.ok(F(e, 'Trạng thái').includes('macro "sell"'));
   checkLimits(e);
 
-  // 5) Cảnh báo & sự kiện bot: tiêu đề Title Case + emoji, blockquote, <t:unix:R>, progress bar, code block
+  // 5) Cảnh báo & sự kiện bot + Dedup tại chỗ + Auto-Resolve khi kết nối lại
   e = bot._alertEmbed('🟠 bot-1: bị kick', 'Bạn đã bị kick khỏi server\n⏰ 10:00:00 PM\n🔄 Reconnecting in 15s... (lần thứ 2/5)', 0xf97316, 'disconnect');
   assert.strictEqual(e.title, '🔌 Bị Kick');
   assert.strictEqual(e.color, DiscordTheme.COLOR.critical);
@@ -229,7 +307,7 @@ function startHook() {
   assert.strictEqual(bot._alertEmbed('⚠️ bot-1: đã bật spawnerprotect + autosell_spawn', 'x', 1).title, '✅ Đã Bật spawnerprotect + autosell_spawn');
   assert.strictEqual(bot._alertEmbed('Cảnh báo lạ không có id', 'x', 1).title, 'ℹ️ Cảnh Báo Lạ Không Có Id');
 
-  // Kiểm tra _notify giữ nguyên 100% đầu ra Telegram (byte-identical) đồng thời gửi embed mới lên Discord
+  // Kiểm tra _notify giữ nguyên 100% đầu ra Telegram (byte-identical) đồng thời hỗ trợ Dedup + Auto-Resolve trên Discord
   const tgCaptured = [];
   const origTgAlert = mgr.telegramAlert.bind(mgr);
   mgr.telegramAlert = (b, key, title, desc, hl) => {
@@ -242,12 +320,32 @@ function startHook() {
   bot._notify('disconnect', '🟠 bot-1: bị kick', 'Mất kết nối máy chủ\n⏰ 10:00:00 PM', 0xf97316, '❌ BOT BỊ KICK');
   await mgr.notifier._queue;
   const k = hook.got.at(-1);
+  assert.strictEqual(k._method, 'POST');
   assert.strictEqual(k.content, '❌ BOT BỊ KICK <@123456789012345678>');
   assert.deepStrictEqual(k.allowed_mentions, { parse: [], users: ['123456789012345678'], roles: [] });
   assert.strictEqual(k.embeds[0].title, '🔌 Bị Kick');
   assert.strictEqual(tgCaptured.at(-1).title, '🟠 bot-1: bị kick', 'Telegram nhận nguyên vẹn chuỗi title gốc');
   assert.strictEqual(tgCaptured.at(-1).desc, 'Mất kết nối máy chủ\n⏰ 10:00:00 PM', 'Telegram nhận nguyên vẹn chuỗi description gốc');
   assert.strictEqual(tgCaptured.at(-1).hl, '❌ BOT BỊ KICK', 'Telegram nhận nguyên vẹn chuỗi headline gốc');
+
+  // Bắn tiếp 1 sự kiện disconnect trùng cho cùng bot-1 trong cửa sổ dedup -> phải PATCH sửa tại chỗ kèm ×2
+  bot._notify('disconnect', '🟠 bot-1: bị kick', 'Mất kết nối máy chủ (lần 2)\n⏰ 10:00:05 PM', 0xf97316, '❌ BOT BỊ KICK');
+  await mgr.notifier._queue;
+  const kDedup = hook.got.at(-1);
+  assert.strictEqual(kDedup._method, 'PATCH', 'Cảnh báo kick lặp lại trong cửa sổ dedup phải PATCH tại chỗ');
+  assert.strictEqual(kDedup._id, k._id, 'Phải sửa đúng trên tin nhắn kick ban đầu');
+  assert.ok(kDedup.embeds[0].description.includes('×2 lần'), 'Phải hiển thị bộ đếm ×2 lần');
+  checkLimits(kDedup.embeds[0]);
+
+  // Khi bot kết nối lại ổn định (reconnectRecovered) -> phải tự động PATCH ngay tin báo kick đó thành 🟢 Đã Kết Nối Lại Ổn Định (Auto-Resolve!)
+  bot._notify('reconnectRecovered', '🟢 bot-1: đã kết nối lại ổn định', 'Sau 2 lần thử.', 0x22c55e);
+  await mgr.notifier._queue;
+  const kResolved = hook.got.at(-1);
+  assert.strictEqual(kResolved._method, 'PATCH', 'reconnectRecovered phải tự động PATCH lên tin báo kick trước đó');
+  assert.strictEqual(kResolved._id, k._id, 'Phải sửa đúng trên messageId của tin báo kick');
+  assert.strictEqual(kResolved.embeds[0].title, '🟢 Đã Kết Nối Lại Ổn Định');
+  assert.strictEqual(kResolved.content, '', 'Khi đã hồi phục thì xoá dòng headline báo động đỏ phía trên');
+  checkLimits(kResolved.embeds[0]);
 
   // Kiểm tra tất cả các loại sự kiện khác qua _alertEmbed
   const sampleAlerts = [
@@ -269,7 +367,7 @@ function startHook() {
     assert.ok(emb.title.startsWith(DiscordTheme.getTheme(evKey).emoji), `Tiêu đề của ${evKey} phải bắt đầu bằng emoji theme`);
   }
 
-  // 6) Báo cáo tổng hợp cả dàn (buildRevenueSummaryEmbed)
+  // 6) Bảng Trạng Thái & Doanh Thu Trực Tiếp (Live Dashboard 10s) + Báo cáo tổng hợp cả dàn
   const bot3 = new BotSession({ id: 'bot-2', host: 'donutsmp.net', port: 25565, username: 'Alex_02', autoSellSpawnRevenue: false }, 'teal', null);
   bot3._manager = mgr;
   bot3.state.connState = CS.ONLINE;
@@ -277,6 +375,22 @@ function startHook() {
   mgr.revenue.markOnline('bot-2', t0 - 3600000);
   mgr.revenue.record('bot-2', 5e6, { now: t0 - 10 * M, intervalMs: 5 * M, hits: 3 });
   mgr.revenue.record('bot-2', 4e6, { now: t0 - 5 * M, intervalMs: 5 * M, hits: 3 });
+
+  hook.got.length = 0;
+  await mgr.sendDiscordPanel();
+  const panel1 = hook.got.at(-1);
+  assert.strictEqual(panel1._method, 'POST', 'Lần đầu gửi Bảng Trực Tiếp phải là POST');
+  assert.strictEqual(panel1.embeds[0].title, '📡 Bảng Trạng Thái & Doanh Thu Trực Tiếp (2 Bot)');
+  assert.ok(panel1.embeds[0].description.includes('bot-1') && panel1.embeds[0].description.includes('bot-2'));
+  assert.ok(panel1.embeds[0].footer.text.includes('10s'));
+  checkLimits(panel1.embeds[0]);
+
+  await mgr.sendDiscordPanel();
+  const panel2 = hook.got.at(-1);
+  assert.strictEqual(panel2._method, 'PATCH', 'Lần cập nhật Bảng Trực Tiếp tiếp theo phải là PATCH tại chỗ');
+  assert.strictEqual(panel2._id, panel1._id, 'Phải sửa đúng trên messageId của Bảng Trực Tiếp');
+  checkLimits(panel2.embeds[0]);
+
   e = mgr.buildRevenueSummaryEmbed(t0);
   assert.strictEqual(e.title, '📊 Báo Cáo Tổng Kết Doanh Thu (2 Bot)');
   assert.deepStrictEqual(e.fields.map(f => f.name), ['Số bot', 'Server', 'Thời gian treo', 'Tổng thu nhập', 'Tốc độ trung bình', 'Số lượt bán', 'Trạng thái']);
@@ -287,12 +401,17 @@ function startHook() {
   assert.ok(e.description.startsWith('```') && e.description.includes('$'));
   checkLimits(e);
 
-  // 7) Lịch nghỉ (_notifyRest & _doScheduledIn)
+  // 7) Lịch nghỉ (_notifyRest & _doScheduledIn) cập nhật tại chỗ trên cùng slot 'schedule:main'
   hook.got.length = 0;
   mgr._notifyRest({ outTime: '02:00', inTime: '08:00' }, 2);
   mgr._doScheduledIn({ inTime: '08:00' });
   await mgr.notifier._queue;
-  const [rest, back] = hook.got.map(x => x.embeds[0]);
+  const [restMsg, backMsg] = hook.got;
+  assert.strictEqual(restMsg._method, 'POST');
+  assert.strictEqual(backMsg._method, 'PATCH', 'Hết giờ nghỉ tự động sửa đè trên tin Bắt Đầu Giờ Nghỉ để không làm rác kênh');
+  assert.strictEqual(backMsg._id, restMsg._id);
+  const rest = restMsg.embeds[0];
+  const back = backMsg.embeds[0];
   assert.strictEqual(rest.title, '🌙 Bắt Đầu Giờ Nghỉ');
   assert.strictEqual(rest.color, DiscordTheme.COLOR.warning);
   assert.strictEqual(F(rest, 'Số bot'), '2');
@@ -339,7 +458,7 @@ function startHook() {
   hook.got.length = 0;
   const prevAll = await mgr.notifier.preview();
   assert.strictEqual(prevAll.ok, true);
-  assert.ok(prevAll.sent >= 12, `Phải gửi đủ các mẫu sự kiện (đã gửi ${prevAll.sent})`);
+  assert.ok(prevAll.sent >= 13, `Phải gửi đủ các mẫu sự kiện kể cả livePanel (đã gửi ${prevAll.sent})`);
   for (const item of hook.got) {
     checkLimits(item.embeds[0]);
   }

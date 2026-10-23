@@ -9,6 +9,7 @@ const Persistence = require('../core/Persistence');
 const SharedPool = require('../core/SharedPool');
 const Notifier = require('../core/Notifier');
 const DiscordTheme = require('../core/DiscordTheme');
+const { describeActivity } = require('../core/BotActivity');
 const TelegramControl = require('../core/TelegramControl');
 const NotificationCenter = require('../core/NotificationCenter');
 const RevenueTracker = require('../core/RevenueTracker');
@@ -35,8 +36,17 @@ class BotManager {
     this.persistence = new Persistence(this.configPath);
     this.proxyManager = new ProxyManager(this.io, this.persistence);
     this.sharedPool = SharedPool.global();
-    this.notifier = new Notifier({});
-    this.revenueNotifier = new Notifier({}); // webhook RIÊNG cho báo cáo doanh thu (không đặt thì dùng webhook chung)
+    this.notifier = new Notifier({
+      onMessagesChange: (msgs) => {
+        if (this._config) {
+          this._config.webhookMessages = msgs;
+          this.persistence.set('webhookMessages', msgs);
+        }
+      },
+    });
+    // Gộp chung 1 Webhook duy nhất: revenueNotifier trỏ thẳng về this.notifier (giữ tương thích ngược)
+    this.revenueNotifier = this.notifier;
+    this._discordPanelTimer = null;
     this.revenue = new RevenueTracker(path.join(path.dirname(this.configPath), 'revenue.json'), () => this._scheduleTz());
     this.telegram = new TelegramNotifier({}); // bảng Auto sell spawner + cảnh báo qua Telegram (không đặt token thì không làm gì)
     this._tgMsgs = {};                        // botId -> message_id của bảng (để sửa tại chỗ, khỏi spam)
@@ -67,7 +77,10 @@ class BotManager {
       getTz: () => this._scheduleTz(),
       redact: s => this.telegramLogs._redact(s),
       getBots: () => this.bots,
-      onIncidentPanelRefresh: b => { if (this._panelRelevant(b)) this.sendTelegramPanel(b); },
+      onIncidentPanelRefresh: b => {
+        if (this._panelRelevant(b)) this.sendTelegramPanel(b);
+        this.markDiscordPanelDirty();
+      },
     });
     this.dashboard = null;
     this._config = null;
@@ -82,10 +95,20 @@ class BotManager {
     this._config = this.persistence.load();
     this._migrateWebhookEvents();
     this._applyFileLogConfig();
-    this.notifier.configure(this._config.webhookUrl, this._config.webhookEvents);
+    // Gộp chung 1 Webhook: nếu chưa có webhookUrl nhưng có revenueWebhookUrl cũ thì tự động gộp sang webhookUrl
+    const unifiedUrl = this._config.webhookUrl || this._config.revenueWebhookUrl || null;
+    if (!this._config.webhookUrl && this._config.revenueWebhookUrl) {
+      this._config.webhookUrl = this._config.revenueWebhookUrl;
+      this.persistence.set('webhookUrl', unifiedUrl);
+    }
+    this.notifier.configure(unifiedUrl, this._config.webhookEvents, {
+      mode: this._config.webhookMode || 'hybrid',
+      webhookMessages: this._config.webhookMessages,
+    });
     this.notifier.setMention(this._config.webhookMention, this._config.webhookMentionEvents);
-    this.revenueNotifier.configure(this._config.revenueWebhookUrl, ['all']);
+    this.revenueNotifier = this.notifier;
     this._armRevenueSummary();
+    this._armDiscordPanel();
     this._initTelegram();
     this._initAi();
     this.autoExe = this._config.autoExe === true || this.autoExe;
@@ -479,23 +502,126 @@ class BotManager {
   askRevenueWebhook(botId) {
     if (typeof this.cliAsk !== 'function') return;
     if (this._webhookPrompt) return;
-    if (this.revenueNotifier?.enabled || this.notifier?.isEventOn('revenue')) return;
+    if (this.notifier?.enabled) return;
     this._webhookPrompt = { botId };
-    this.cliAsk('🔗 Liên kết webhook Discord để nhận báo cáo doanh thu? Dán link vào đây rồi Enter — hoặc Enter trống để bỏ qua (tool vẫn chạy bình thường).');
+    this.cliAsk('🔗 Liên kết webhook Discord (dùng chung cho cả cảnh báo, doanh thu & bảng trực tiếp 10s)? Dán link vào đây rồi Enter — hoặc Enter trống để bỏ qua (tool vẫn chạy bình thường).');
   }
   get hasWebhookPrompt() { return !!this._webhookPrompt; }
   answerWebhookPrompt(input) {
     if (!this._webhookPrompt) return false;
     this._webhookPrompt = null;
     const text = String(input || '').trim();
-    if (!text) { this.cliAsk?.('Đã bỏ qua — chạy bình thường. Muốn liên kết sau: webhook revenue set <url>'); return true; }
+    if (!text) { this.cliAsk?.('Đã bỏ qua — chạy bình thường. Muốn liên kết sau: webhook set <url>'); return true; }
     if (/^https?:\/\/(?:[\w-]+\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+/i.test(text)) {
-      this.revenueNotifier.configure(text, ['all']);
-      this.persistence.set('revenueWebhookUrl', text);
-      this.cliAsk?.('✓ Đã liên kết webhook Discord cho báo cáo doanh thu. Thử: webhook revenue test');
+      this.setWebhookUrl(text);
+      this.cliAsk?.('✓ Đã liên kết webhook Discord (tự động cập nhật bảng trạng thái & doanh thu mỗi 10s). Thử: webhook test');
       return true;
     }
     return false;
+  }
+
+  // ===== Discord Hybrid v2: Gộp 1 Webhook + Bảng Live Dashboard tự động cập nhật mỗi 10s =====
+  setWebhookUrl(url, events) {
+    if (!this._config) this._config = {};
+    const clean = url ? String(url).trim() : null;
+    this.notifier.configure(clean, Array.isArray(events) ? events : [...this.notifier.events]);
+    this._config.webhookUrl = clean;
+    this.persistence.set('webhookUrl', clean);
+    if (this._config.revenueWebhookUrl) {
+      this._config.revenueWebhookUrl = null;
+      this.persistence.set('revenueWebhookUrl', null);
+    }
+    if (Array.isArray(events)) {
+      this._config.webhookEvents = events;
+      this.persistence.set('webhookEvents', events);
+    }
+    this._armDiscordPanel();
+  }
+
+  setDiscordRefreshSec(sec) {
+    if (!this._config) this._config = {};
+    const n = Math.max(0, Number(sec) || 0);
+    this._config.webhookRefreshSec = n;
+    this.persistence.set('webhookRefreshSec', n);
+    this._armDiscordPanel();
+    return n;
+  }
+
+  getDiscordRefreshSec() {
+    const v = this._config?.webhookRefreshSec;
+    return v === undefined || v === null ? 10 : Math.max(0, Number(v) || 0);
+  }
+
+  _armDiscordPanel() {
+    if (this._discordPanelTimer) {
+      clearInterval(this._discordPanelTimer);
+      this._discordPanelTimer = null;
+    }
+    if (!this.notifier?.enabled) return;
+    const sec = this.getDiscordRefreshSec();
+    if (sec <= 0 || this.notifier.mode === 'new') return;
+    this._discordPanelTimer = setInterval(() => {
+      try {
+        this._discordPanelTick();
+      } catch (e) {
+        dbg('BotManager', e);
+      }
+    }, Math.max(2, sec) * 1000);
+    if (this._discordPanelTimer.unref) this._discordPanelTimer.unref();
+  }
+
+  _buildDiscordPanelSnapshot(now = Date.now()) {
+    const bots = this.bots.map(b => {
+      const id = String(b.cfg.id);
+      const up = this.revenue.uptime(id, now);
+      const list = [this.revenue.stats(id, now), this.revenue.stats(id + '#macro', now)].filter(Boolean);
+      const stats = list.length ? this._mergeRevStats(list) : null;
+      const act = describeActivity(b, now);
+      const protect = typeof b.getProtectStatus === 'function' ? b.getProtectStatus() : undefined;
+      return {
+        botId: id,
+        account: b.cfg.username || '',
+        host: b.cfg.host || '',
+        connState: b.state.connState,
+        disabled: !!b._disabled,
+        scheduledOut: !!b._scheduledOut,
+        reconnects: b.state?.reconnects || 0,
+        sellOn: !!b._sellSpawnOn,
+        sellBusy: !!b._sellSpawnBusy,
+        nextSellAt: b._nextSellAt || 0,
+        activityText: act?.text || '',
+        totalUptimeMs: up.totalMs,
+        protect,
+        stats,
+      };
+    });
+    return {
+      now,
+      refreshSec: this.getDiscordRefreshSec() || 10,
+      bots,
+      recentEvents: this.notifier.getRecentEvents(6),
+    };
+  }
+
+  _discordPanelTick() {
+    if (!this.notifier?.enabled || this.notifier.mode === 'new') return;
+    if (this.bots.length === 0 && !this.notifier.getSlotMessageId('panel:main')) return;
+    const snap = this._buildDiscordPanelSnapshot(Date.now());
+    this.notifier.updateLivePanel(snap);
+  }
+
+  sendDiscordPanel(opts = {}) {
+    if (!this.notifier?.enabled) return Promise.resolve(false);
+    const snap = this._buildDiscordPanelSnapshot(opts.now ?? Date.now());
+    return this.notifier.updateLivePanel(snap, { force: true, fresh: !!opts.fresh });
+  }
+
+  markDiscordPanelDirty() {
+    if (!this.notifier?.enabled || this.notifier.mode === 'new') return;
+    // Chỉ tự động đồng bộ lại bảng khi bảng Live Panel đã từng được khởi tạo (tránh bắn tin thừa trong bài test đơn lẻ)
+    if (!this.notifier.getSlotMessageId('panel:main')) return;
+    const snap = this._buildDiscordPanelSnapshot(Date.now());
+    this.notifier.updateLivePanel(snap);
   }
 
   // ===== Telegram v2: bảng Auto sell spawner + cảnh báo + điều khiển từ xa =====
@@ -709,6 +835,7 @@ class BotManager {
   }
 
   onSellCycle(bot) {
+    this.markDiscordPanelDirty();
     if (!this.telegram.enabled) return;
     if ((this._tgTimer && this._config?.telegramMode !== 'new')) return;
     const gap = Math.max(0, Number(this._config?.telegramMinGapSec ?? 30)) * 1000;
@@ -914,10 +1041,10 @@ class BotManager {
     if (!r.count) ev.reply(id ? `Chưa có log nào của "${e(id)}".` : 'Chưa có log nào.');
   }
 
-  // ===== Báo cáo doanh thu TỔNG HỢP (gộp tất cả bot) =====
+  // ===== Báo cáo doanh thu TỔNG HỢP (gộp chung vào 1 Webhook) =====
   _revenueSink() {
-    if (this.revenueNotifier?.enabled) return { n: this.revenueNotifier, ev: null, via: 'webhook doanh thu riêng' };
-    if (this.notifier?.isEventOn('revenue')) return { n: this.notifier, ev: 'revenue', via: 'webhook chung' };
+    if (this.notifier?.isEventOn('revenue')) return { n: this.notifier, ev: 'revenue', via: 'webhook chung (cập nhật tại chỗ)' };
+    if (this.revenueNotifier?.enabled) return { n: this.revenueNotifier, ev: null, via: 'webhook chung (cập nhật tại chỗ)' };
     return null;
   }
 
@@ -1011,8 +1138,8 @@ class BotManager {
     const embed = this.buildRevenueSummaryEmbed();
     if (!embed) return { ok: false, message: 'Chưa có dữ liệu doanh thu của bot nào' };
     const sink = this._revenueSink();
-    if (!sink) return { ok: false, message: 'Chưa cấu hình webhook (webhook revenue set <url> hoặc webhook set <url>)' };
-    sink.n.send(sink.ev, embed);
+    if (!sink) return { ok: false, message: 'Chưa cấu hình webhook (dùng: webhook set <url>)' };
+    sink.n.send(sink.ev, embed, null, { slotKey: 'rev:summary' });
     this._revSummaryLastCycles = this._revenueTotalCycles();
     return { ok: true, via: sink.via };
   }
@@ -1176,6 +1303,7 @@ class BotManager {
     if (this._poolPruneInterval) clearInterval(this._poolPruneInterval);
     if (this._scheduleInterval) clearInterval(this._scheduleInterval);
     if (this._revSummaryTimer) clearInterval(this._revSummaryTimer);
+    if (this._discordPanelTimer) clearInterval(this._discordPanelTimer);
     if (this._tgTimer) clearInterval(this._tgTimer);
     try { this.telegramLogs.stop(); } catch (e) { dbg('BotManager', e); }
     try { this.fileLogs.flushSync(); } catch (e) { dbg('BotManager', e); }

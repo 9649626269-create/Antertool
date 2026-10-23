@@ -117,7 +117,8 @@ const SECTIONS = [
     key: 'notify', title: 'Thông báo & Lịch', desc: 'webhook Discord, Telegram, lịch tự out/vào',
     aliases: ['webhook', 'schedule', 'discord', 'lich', 'telegram', 'tg'],
     con: [
-      { name: 'webhook', usage: 'webhook set <url>', desc: 'lưu webhook Discord (báo disconnect, reconnect, goal, bảo vệ lồng)' },
+      { name: 'webhook', usage: 'webhook set <url>', desc: 'lưu 1 webhook Discord duy nhất (gộp chung cảnh báo, doanh thu & bảng trực tiếp 10s)' },
+      { name: 'webhook', usage: 'webhook panel [fresh] | refresh <10s|off> | mode <hybrid|new>', desc: 'cập nhật Bảng Trạng Thái Trực Tiếp tại chỗ / đặt chu kỳ (mặc định 10s) / chế độ chống tràn' },
       { name: 'webhook', usage: 'webhook test | preview [sự_kiện] | off', desc: 'gửi thử kết nối / xem trước mẫu thông báo / tắt webhook' },
       { name: 'webhook', usage: 'webhook events [a,b,c]', desc: 'xem/đặt loại sự kiện được báo' },
       { name: 'webhook', usage: 'webhook mention <ID|@tên|off> | test', desc: 'tag người nhận ở cuối thông báo kick/hết reconnect/cảnh báo lồng (dùng ID số để ping)' },

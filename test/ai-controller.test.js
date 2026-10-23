@@ -151,7 +151,7 @@ test('AiController: gọi OmniRouter /v1/chat/completions với Bearer API key v
       model: 'gpt-4o-mini',
     });
 
-    const res = await mgr.askAi('Dev: khởi động 2 bot số 1 và 2');
+    const res = await mgr.askAi('Dev: sao 2 bot số 1 và 2 chưa vào được vậy, khởi động giùm đi?');
     assert.equal(res.ok, true);
     assert.equal(res.via, 'omnirouter');
     assert.equal(capturedAuth, 'Bearer sk-omnirouter-test-secret-9999');
