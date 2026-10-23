@@ -83,6 +83,7 @@ class TelegramNotifier {
     this._onCommand = null;
     this._backlogCleared = !this.discardBacklog;
     this._serverClockOffsetMs = 0;
+    this.allowDirectAi = cfg.allowDirectAi !== undefined ? !!cfg.allowDirectAi : false;
 
     this.lastError = null;
     this._lastSuccessAt = 0;
@@ -105,6 +106,11 @@ class TelegramNotifier {
   get hasToken() { return !!this.token; }
   get paused() { return Date.now() < this._pauseUntil; }
   isEventOn(key) { return this.enabled && (!key || this.events.has(key) || this.events.has('all')); }
+
+  sendChatAction(action = 'typing') {
+    if (!this.enabled || !this.chatId) return Promise.resolve(null);
+    return this._call('sendChatAction', { chat_id: this.chatId, action });
+  }
   static get EVENT_LABELS() { return EVENT_LABELS; }
   static get DEFAULT_EVENTS() { return DEFAULT_EVENTS; }
   static escapeHtml(s) { return escapeHtml(s); }
@@ -492,13 +498,29 @@ class TelegramNotifier {
       return;
     }
     const text = String(msg?.text || '').trim();
+    if (!text) return;
     const m = /^\/(\w+)(?:@(\w+))?(?:\s+([\s\S]*))?$/.exec(text);
-    if (!m) return;
-    if (m[2] && this.botUsername && m[2].toLowerCase() !== this.botUsername.toLowerCase()) return;
+    let cmd = '';
+    let arg = '';
+    if (m) {
+      if (m[2] && this.botUsername && m[2].toLowerCase() !== this.botUsername.toLowerCase()) return;
+      cmd = m[1].toLowerCase();
+      arg = (m[3] || '').trim();
+    } else if (this.allowDirectAi) {
+      // Tin nhắn văn bản tự nhiên (không gõ /): tự động chuyển thẳng cho AI xử lý!
+      cmd = 'ai';
+      arg = text;
+    } else {
+      return;
+    }
+
+    // Gửi chatAction 'typing' ngay lập tức để người dùng nhận được phản hồi tức thì
+    this.sendChatAction('typing').catch(() => {});
+
     await this._onCommand({
       type: 'command',
-      cmd: m[1].toLowerCase(),
-      arg: (m[3] || '').trim(),
+      cmd,
+      arg,
       rawText: text,
       from,
       chat,

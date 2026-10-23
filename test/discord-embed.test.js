@@ -211,7 +211,7 @@ function startHook() {
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ bots: [] }));
   const mgr = new BotManager({ configPath: path.join(dir, 'config.json') });
   await mgr.init();
-  assert.strictEqual(mgr.revenueNotifier, mgr.notifier, 'revenueNotifier phải được gộp chung vào mgr.notifier');
+  assert.notStrictEqual(mgr.revenueNotifier, mgr.notifier, 'revenueNotifier và notifier phải là 2 kênh độc lập để không trộn lẫn thông báo');
   assert.strictEqual(mgr.getDiscordRefreshSec(), 10, 'Mặc định tự động cập nhật bảng trực tiếp mỗi 10s');
   mgr.setWebhookUrl(hook.url, ['all']);
   const bot = new BotSession({ id: 'bot-1', host: 'donutsmp.net', port: 25565, username: 'Steve_01', autoSellSpawnRevenue: false }, 'teal', null);
@@ -462,6 +462,28 @@ function startHook() {
   for (const item of hook.got) {
     checkLimits(item.embeds[0]);
   }
+
+  // 11) Kiểm tra tách riêng 2 kênh Webhook (Kênh Cảnh Báo vs Kênh Bảng Doanh Thu / Live Panel 10s)
+  const revHook = await startHook();
+  mgr.setRevenueWebhookUrl(revHook.url);
+  hook.got.length = 0;
+  revHook.got.length = 0;
+
+  // Khi gửi Bảng Trực Tiếp 10s & Báo cáo doanh thu -> chỉ đi vào revHook, KHÔNG làm bẩn kênh cảnh báo (hook)
+  await mgr.sendDiscordPanel();
+  bot._sendRevenueReport({ sum: 4000, done: 5, total: 5, hits: 5 });
+  await mgr.revenueNotifier._queue;
+  assert.strictEqual(hook.got.length, 0, 'Kênh Cảnh Báo không được nhận Bảng Doanh Thu khi đã tách kênh riêng');
+  assert.ok(revHook.got.length >= 2, 'Kênh Doanh Thu riêng nhận đúng Bảng Trực Tiếp 10s + Báo cáo doanh thu');
+  assert.ok(revHook.got[0].embeds[0].description.includes('```'), 'Bảng Trực Tiếp 10s dùng bảng Monospace thẳng hàng, gọn gàng');
+
+  // Khi có cảnh báo sự cố -> chỉ đi vào kênh Cảnh Báo (hook), KHÔNG làm bẩn kênh Doanh Thu (revHook)
+  revHook.got.length = 0;
+  bot._notify('spawnerThreat', '⚠️ bot-1: người lạ gần lồng', 'Người lạ: Hacker_01 (3.5m)', 0xf59e0b, '🚨 CẢNH BÁO LỒNG SPAWN');
+  await mgr.notifier._queue;
+  assert.strictEqual(hook.got.length, 1, 'Kênh Cảnh Báo nhận đúng thông báo khẩn cấp');
+  assert.strictEqual(revHook.got.length, 0, 'Kênh Doanh Thu không bị xen ngang bởi tin cảnh báo');
+  revHook.server.close();
 
   hook.server.close();
   try { mgr.shutdown(); } catch { }

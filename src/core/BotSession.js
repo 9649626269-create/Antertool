@@ -557,6 +557,14 @@ class BotSession extends EventEmitter {
     }
     return true;
   }
+  /** Đọc stats người chơi qua GUI /stats <player> */
+  async checkStats(player, timeoutMs) {
+    return this.statsReader.request(player, timeoutMs);
+  }
+  /** Đọc số dư người chơi qua lệnh /bal <player> */
+  async checkBal(player, timeoutMs) {
+    return this.statsReader.requestBal(player, timeoutMs);
+  }
   _updateShard(n) {
     if (n === null || n === this.state.shard) return;
     const prev = this.state.shard;
@@ -978,6 +986,7 @@ class BotSession extends EventEmitter {
         this.autoLogin.onMessage(text);
         this.beggarGuard.onMessage(text, pos);
         this.statsReader.onMessage(text);
+        this.statsReader.onBalMessage(text);
         if (this._sellCap) this._captureSellRevenue(text, pos);
         if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         if (this.autoOrder?.active) this.autoOrder.onMessage(text);
@@ -990,7 +999,10 @@ class BotSession extends EventEmitter {
       }
     });
     mc.on('messagestr', (msg, pos) => {
-      try { if (pos === 'gameInfo') this.tryChatShard(msg); } catch (e) { dbg('BotSession', e); }
+      try {
+        if (pos === 'gameInfo') this.tryChatShard(msg);
+        this.statsReader?.onBalMessage(msg);
+      } catch (e) { dbg('BotSession', e); }
     });
     // Title / subtitle: nhiều server báo "Teleport bị hủy / Đừng di chuyển" bằng title chứ không phải chat
     mc.on('title', (text, type) => {
@@ -3098,12 +3110,22 @@ class BotSession extends EventEmitter {
       const name = String(args[0] || '').trim();
       if (!name) { this.log('warn', 'Cú pháp: checkstats <người chơi>'); return; }
       if (!this.requireOnline('checkstats')) return;
-      this.statsReader.request(name).then(r => {
+      this.checkStats(name).then(r => {
         this.log('ok', `Stats của ${r.player}${r.title ? ` [${r.title}]` : ''}:`);
         for (const l of r.lines) this.log('sys', `  ${l}`);
         this.emit('playerStats', { id: this.cfg.id, ...r });
         this._emitIO('playerStats', { id: this.cfg.id, ...r });
       }).catch(e => this.log('warn', `checkstats ${name}: ${e.message}`));
+    });
+    r.register('checkbal', 'Xem số dư của người chơi khác (/bal <tên>): checkbal <người chơi>', (args) => {
+      const name = String(args[0] || '').trim();
+      if (!name) { this.log('warn', 'Cú pháp: checkbal <người chơi>'); return; }
+      if (!this.requireOnline('checkbal')) return;
+      this.checkBal(name).then(r => {
+        this.log('ok', `Số dư của ${r.player}: ${r.balance}`);
+        this.emit('playerBalance', { id: this.cfg.id, ...r });
+        this._emitIO('playerBalance', { id: this.cfg.id, ...r });
+      }).catch(e => this.log('warn', `checkbal ${name}: ${e.message}`));
     });
     r.register('autologin', 'Auto Login & Antibot & Auto Join: autologin on|off|status|now', (args) => {
       const sub = String(args[0] || 'status').toLowerCase();

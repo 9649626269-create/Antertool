@@ -14,16 +14,19 @@
  *   6. Thiếu bot mục tiêu cho lệnh nguy hiểm (stop/reconnect/cmd/macro) => hỏi lại, nhớ ngữ cảnh.
  *   7. Có lịch sử hội thoại ngắn: hiểu "bot đó", "làm lại đi".
  */
+const fs = require('fs');
+const path = require('path');
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const { DEFAULT_CMD_DENYLIST } = require('./ConfigValidator');
+const { describeActivity } = require('./BotActivity');
 const { maskSecret } = require('../ui/text');
 
 const DEFAULT_BASE_URL = 'https://omnirouter.li/v1';
 const DEFAULT_MODEL = 'agy/gemini-3.8-flash-medium';
 const DEFAULT_TIMEOUT_MS = 25000; // model "medium" có thể suy nghĩ lâu hơn
-const DEFAULT_HISTORY_TURNS = 6;
+const DEFAULT_HISTORY_TURNS = 20;
 const MAX_ACTIONS = 8;
 const PENDING_TTL_MS = 5 * 60 * 1000;
 
@@ -34,10 +37,12 @@ const ALLOWED_TYPES = new Set([
   'protect_on', 'protect_off',
   'afk_jump', 'afk_walk', 'afk_stop',
   'home', 'macro', 'stop_macro', 'cmd',
+  'inv', 'pos', 'activity', 'ping', 'chat',
+  'checkstats', 'bal',
 ]);
 // Các lệnh nguy hiểm: không bao giờ mặc định "cả dàn bot" khi thiếu mục tiêu.
-const NEEDS_TARGET = new Set(['stop', 'reconnect', 'cmd', 'macro', 'stop_macro']);
-const INFO_TYPES = new Set(['logs', 'status']);
+const NEEDS_TARGET = new Set(['stop', 'reconnect', 'cmd', 'macro', 'stop_macro', 'chat']);
+const INFO_TYPES = new Set(['logs', 'status', 'inv', 'pos', 'activity', 'ping', 'checkstats', 'bal']);
 
 const CLARIFY_VERB = {
   stop: 'dừng',
@@ -45,6 +50,7 @@ const CLARIFY_VERB = {
   cmd: 'gửi lệnh cho',
   macro: 'chạy macro trên',
   stop_macro: 'dừng macro trên',
+  chat: 'gửi chat từ',
 };
 
 const QUESTION_RE = /\?|\b(sao|tai sao|vi sao|co phai|lieu|bao nhieu|la gi|the nao|nhu the nao|bi gi|co nen|hay khong)\b/;
@@ -284,8 +290,10 @@ function pickTargets(text, bots, ctx = {}) {
   const t = resolveTargetBots(text, bots);
   if (t.length) return { ids: t.map(b => b.cfg.id), explicit: true };
   const f = foldVi(text);
-  if (ctx.lastTargetIds?.length && /\b(?:bot|con)\s+(?:do|nay|kia|vua roi)\b|\bnhu cu\b/.test(f)) {
-    return { ids: [...ctx.lastTargetIds], explicit: true };
+  if (ctx.lastTargetIds?.length) {
+    if (/\b(?:bot|con|em|dua)\s+(?:do|nay|kia|day|ay|vua roi|vua noi)\b|\b(?:no|han|em no|tui no|chung no|nhu cu)\b/.test(f)) {
+      return { ids: [...ctx.lastTargetIds], explicit: true };
+    }
   }
   return { ids: [], explicit: false };
 }
@@ -308,11 +316,76 @@ function classifySegment(seg, bots, ctx = {}) {
     return { type: 'greet', ids: [], explicit: false };
   }
 
+  // 1a. CheckStats người chơi (checkstats)
+  // Các mẫu: "check stats <player>", "xem stats của <player>", "chỉ số của <player>", "thống kê <player>", "stats player <player>"
+  const statsPatterns = [
+    /(?:^|\b)(?:check\s*stats|checkstats)\s+([A-Za-z0-9_.*]{1,32})\b/i,
+    /(?:^|\b)(?:xem\s+stats|xem\s+thống\s+kê|xem\s+thong\s+ke|thống\s+kê|thong\s+ke|chỉ\s+số|chi\s+so)(?:\s+(?:của|cua))?\s+([A-Za-z0-9_.*]{1,32})\b/i,
+    /(?:^|\b)(?:stats\s+player|stats\s+(?:của|cua))\s+([A-Za-z0-9_.*]{1,32})\b/i,
+    /(?:^|\b)stats\s+([A-Za-z0-9_.*]{1,32})\b/i,
+  ];
+  for (const re of statsPatterns) {
+    const sm = re.exec(raw);
+    if (sm) {
+      const pName = sm[1].trim();
+      const bad = new Set(['bot', 'dan', 'all', 'ca', 'cua', 'he', 'thong', 'status', 'may', 'cac']);
+      if (!bad.has(foldVi(pName))) {
+        return mk('checkstats', pName);
+      }
+    }
+  }
+
+  // 1b. Bal người chơi (bal)
+  // Các mẫu: "check bal <player>", "số dư của <player>", "xem tiền của <player>", "bal <player>", "<player> có bao nhiêu tiền", "tiền của <player>"
+  const balSuffixMatch = /\b([A-Za-z0-9_.*]{1,32})\s+(?:có|co)\s+(?:bao\s+nhiêu|bao\s+nhieu|mấy|may)\s+(?:tiền|tien)\b/i.exec(raw);
+  if (balSuffixMatch) {
+    const pName = balSuffixMatch[1].trim();
+    const bad = new Set(['bot', 'dan', 'all', 'ca', 'cua', 'he', 'thong', 'may', 'cac']);
+    if (!bad.has(foldVi(pName))) {
+      return mk('bal', pName);
+    }
+  }
+
+  const balPrePatterns = [
+    /(?:^|\b)(?:check\s*bal|checkbal|số\s+dư|so\s+du|xem\s+tiền|xem\s+tien|tiền|tien|bal)(?:\s+(?:của|cua))?\s+([A-Za-z0-9_.*]{1,32})\b/i,
+  ];
+  for (const re of balPrePatterns) {
+    const bm = re.exec(raw);
+    if (bm) {
+      const pName = bm[1].trim();
+      const bad = new Set(['bot', 'dan', 'all', 'ca', 'cua', 'he', 'thong', 'status', 'may', 'cac', 'bao', 'nhieu']);
+      if (!bad.has(foldVi(pName))) {
+        return mk('bal', pName);
+      }
+    }
+  }
+
   // 2. Tóm tắt log / lịch sử
   if (/\b(tom tat|noi dung log|xem log|doc log|log cua|nhat ky|lich su)\b/.test(n)) return mk('logs');
 
   // 3. Trạng thái / báo cáo
   if (/\b(trang thai|status|tinh hinh|bao cao|doanh thu|kiem tra|danh sach)\b/.test(n)) return mk('status');
+
+  // 3a. Xem túi đồ / vật phẩm (inv)
+  if (/\b(tui do|kho do|ruong do|xem do|inventory|inv|vat pham|do trong tui)\b/.test(n)) return mk('inv');
+
+  // 3b. Toạ độ / vị trí (pos)
+  if (/\b(toa do|vi tri|o dau|dung dau|dung cho nao|coords?|pos|position)\b/.test(n)) return mk('pos');
+
+  // 3c. Hoạt động hiện tại (activity)
+  if (/\b(dang lam gi|hoat dong|activity|tinh hinh hoat dong)\b/.test(n)) return mk('activity');
+
+  // 3d. Ping / độ trễ / mạng (ping)
+  if (/\b(ping|do tre|latency|mang meo|lag khong|co lag khong)\b/.test(n)) return mk('ping');
+
+  // 3e. Chat trong game (chat)
+  const chatMatch = /^(?:chat|noi|bao)\s+(?:trong\s+game\s+)?(["'`“‘](.+?)["'`”’]|.+)$/i.exec(raw);
+  if (chatMatch && !/\b(bot|tat ca|toan bo)\b/.test(chatMatch[1])) {
+    const chatMsg = (chatMatch[2] || chatMatch[1] || '').trim();
+    if (chatMsg && !/^(lenh|cmd|\/)/i.test(chatMsg)) {
+      return mk('chat', chatMsg);
+    }
+  }
 
   // 4. Autosell_spawn (bán lồng)
   if (/\b(autosell_spawn|autosell|ban long|auto sell|tu ban)\b/.test(n)
@@ -357,6 +430,20 @@ function classifySegment(seg, bots, ctx = {}) {
   // 11. Dừng / tắt
   const nStop = n.replace(/\b(tom tat|noi dung|ap dung|suy nghi|de nghi|nghi ngo)\b/g, ' ');
   if (/\b(dung|tat(?! ca\b)|ngung|ngat|stop|out|disconnect|thoat|nghi|kick)\b/.test(nStop)) return mk('stop');
+
+  // 12. Tiếp nối hành động lượt trước cho bot khác hoặc player khác ("còn bot 2?", "thế còn bot 2 thì sao?", "còn Alex?")
+  const followMatch = /^(?:the\s+)?con\s+(?:lai\s+)?(?:bot\s+|con\s+|#)?(\d+|[a-zA-Z0-9_-]+)(?:\s*(?:thi\s+sao|nhu\s+nao|the\s+nao|nua))?[?\s.]*$/i.exec(n);
+  if (followMatch && ctx.lastActions?.length) {
+    const nextTargetStr = followMatch[1];
+    const prevAct = ctx.lastActions[0];
+    if (prevAct && prevAct.type && prevAct.type !== 'greet') {
+      if (['checkstats', 'bal'].includes(prevAct.type)) {
+        return { type: prevAct.type, ids: [], arg: nextTargetStr, explicit: true, followUp: true };
+      }
+      const targetQuery = /^\d+$/.test(nextTargetStr) ? `bot ${nextTargetStr}` : nextTargetStr;
+      return { ...mk(prevAct.type, prevAct.arg, targetQuery), followUp: true };
+    }
+  }
 
   return null;
 }
@@ -416,11 +503,15 @@ function parseNaturalCommand(rawInput, bots = [], ctx = {}) {
     }
     let ids = p.ids;
     if (!ids.length) {
-      if (NEEDS_TARGET.has(p.type) && allIds.length > 1) {
+      if (ctx.lastTargetIds?.length === 1 && !/\b(tat ca|toan bo|ca dan|all)\b/.test(foldVi(cleaned))) {
+        // Tự động mượn bot vừa tương tác ở lượt trước nếu người dùng ra lệnh không nêu rõ tên bot
+        ids = [...ctx.lastTargetIds];
+      } else if (NEEDS_TARGET.has(p.type) && allIds.length > 1) {
         pendingActions.push({ type: p.type, ...(p.arg ? { arg: p.arg } : {}) });
         continue;
+      } else {
+        ids = allIds;
       }
-      ids = allIds;
     }
     const key = `${p.type}|${p.arg || ''}|${ids.join(',')}`;
     if (seen.has(key)) continue;
@@ -429,6 +520,7 @@ function parseNaturalCommand(rawInput, bots = [], ctx = {}) {
   }
 
   const out = { cleaned, actions };
+  if (parsed.some(p => p.followUp)) out.followUp = true;
   if (pendingActions.length) {
     out.pendingActions = pendingActions;
     out.clarify = buildClarifyQuestion(pendingActions, bots);
@@ -447,14 +539,20 @@ class AiController {
     this.baseUrl = DEFAULT_BASE_URL;
     this.model = DEFAULT_MODEL;
     this.timeoutMs = DEFAULT_TIMEOUT_MS;
-    this.historyTurns = DEFAULT_HISTORY_TURNS;
+    this.historyTurns = opts.historyTurns !== undefined ? Number(opts.historyTurns) : DEFAULT_HISTORY_TURNS;
     this._httpPost = opts.httpPost || null; // cho phép inject mock trong unit test
     this._jsonMode = true;                  // tự tắt nếu model/router không hỗ trợ response_format
     this._history = new Map();              // chatId -> [{role, content}]
+    this._memory = new Map();               // k -> v (thông tin người dùng / ngữ cảnh dài hạn)
     this._pending = null;                   // câu hỏi làm rõ đang chờ trả lời
     this._lastTargets = [];
     this._lastActions = [];
+    this._historyFile = opts.historyFile !== undefined
+      ? opts.historyFile
+      : (this.mgr?.configPath ? path.join(path.dirname(this.mgr.configPath), 'ai_history.json') : path.join(process.cwd(), 'ai_history.json'));
+    this._saveTimer = null;
     this.configure(opts);
+    this._loadHistoryFromDisk();
   }
 
   configure(opts = {}) {
@@ -473,7 +571,10 @@ class AiController {
       this.timeoutMs = Number(opts.timeoutMs);
     }
     if (opts.historyTurns !== undefined && Number.isFinite(Number(opts.historyTurns)) && Number(opts.historyTurns) >= 0) {
-      this.historyTurns = Math.min(20, Number(opts.historyTurns));
+      this.historyTurns = Math.min(50, Number(opts.historyTurns));
+    }
+    if (opts.historyFile !== undefined) {
+      this._historyFile = opts.historyFile;
     }
     return this;
   }
@@ -498,13 +599,84 @@ class AiController {
     };
   }
 
+  _loadHistoryFromDisk() {
+    if (!this._historyFile) return;
+    try {
+      if (fs.existsSync(this._historyFile)) {
+        const raw = fs.readFileSync(this._historyFile, 'utf8');
+        const data = JSON.parse(raw);
+        if (data && typeof data === 'object') {
+          if (data.history && typeof data.history === 'object') {
+            for (const [cid, msgs] of Object.entries(data.history)) {
+              if (Array.isArray(msgs)) this._history.set(String(cid), msgs.slice(-this.historyTurns * 2));
+            }
+          }
+          if (data.memory && typeof data.memory === 'object') {
+            for (const [k, v] of Object.entries(data.memory)) {
+              if (v !== undefined) this._memory.set(String(k), String(v));
+            }
+          }
+          if (Array.isArray(data.lastTargets) && data.lastTargets.length) {
+            this._lastTargets = data.lastTargets;
+          }
+          if (Array.isArray(data.lastActions) && data.lastActions.length) {
+            this._lastActions = data.lastActions;
+          }
+        }
+      }
+    } catch { /* ignore corrupted disk file */ }
+  }
+
+  flushHistoryToDisk() {
+    if (!this._historyFile) return;
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    try {
+      const histObj = {};
+      for (const [k, v] of this._history.entries()) {
+        histObj[k] = v.slice(-this.historyTurns * 2);
+      }
+      const memObj = {};
+      for (const [k, v] of this._memory.entries()) {
+        memObj[k] = v;
+      }
+      const data = {
+        history: histObj,
+        memory: memObj,
+        lastTargets: this._lastTargets,
+        lastActions: this._lastActions,
+        updatedAt: Date.now(),
+      };
+      const dir = path.dirname(this._historyFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const tmp = this._historyFile + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+      fs.renameSync(tmp, this._historyFile);
+    } catch { /* ignore disk save errors */ }
+  }
+
+  _saveHistoryToDisk() {
+    if (!this._historyFile) return;
+    if (this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this.flushHistoryToDisk();
+    }, 500);
+    if (this._saveTimer.unref) this._saveTimer.unref();
+  }
+
   resetHistory(chatId) {
     if (chatId === undefined) {
       this._history.clear();
+      this._memory.clear();
+      this._lastTargets = [];
+      this._lastActions = [];
     } else {
       this._history.delete(String(chatId));
     }
     this._pending = null;
+    this.flushHistoryToDisk();
     return this;
   }
 
@@ -512,35 +684,47 @@ class AiController {
 
   _getHistory(chatId) {
     if (!this.historyTurns) return [];
-    return this._history.get(chatId) || [];
+    const key = String(chatId || 'default');
+    const arr = this._history.get(key) || [];
+    return arr.slice(-this.historyTurns * 2);
   }
 
   _pushHistory(chatId, role, content) {
     if (!this.historyTurns) return;
-    const text = String(content || '').trim().slice(0, 600);
+    const text = String(content || '').trim().slice(0, 800);
     if (!text) return;
-    const arr = this._history.get(chatId) || [];
+    const key = String(chatId || 'default');
+    const arr = this._history.get(key) || [];
     arr.push({ role, content: text });
     while (arr.length > this.historyTurns * 2) arr.shift();
-    this._history.set(chatId, arr);
+    this._history.set(key, arr);
+    this._saveHistoryToDisk();
   }
 
   /* ---------------- dàn bot ---------------- */
 
   _buildFleetSnapshot() {
     const bots = Array.isArray(this.mgr?.bots) ? this.mgr.bots : [];
-    return bots.map((b, i) => ({
-      index: i + 1,
-      id: b.cfg?.id || `bot-${i + 1}`,
-      username: b.cfg?.username || '',
-      state: b.state?.connState || 'DISCONNECTED',
-      online: Boolean(b.isOnline),
-      sellOn: Boolean(b.autoSell?.spawnOn),
-      protectOn: Boolean(b.spawnerProtectOn),
-      afkMode: b.state?.afkMode || 'off',
-      money: b.state?.money ?? 0,
-      shard: b.state?.shard ?? 0,
-    }));
+    return bots.map((b, i) => {
+      const p = b.mc?.entity?.position;
+      const coords = p ? `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : null;
+      const invCount = Array.isArray(b.state?.inventory) ? b.state.inventory.length : (b.mc?.inventory?.items?.().length ?? 0);
+      return {
+        index: i + 1,
+        id: b.cfg?.id || `bot-${i + 1}`,
+        username: b.cfg?.username || '',
+        state: b.state?.connState || 'DISCONNECTED',
+        online: Boolean(b.isOnline),
+        sellOn: Boolean(b.autoSell?.spawnOn),
+        protectOn: Boolean(b.spawnerProtectOn),
+        afkMode: b.state?.afkMode || 'off',
+        money: b.state?.money ?? 0,
+        shard: b.state?.shard ?? 0,
+        ping: b.mc?.player?.ping ?? 0,
+        coords,
+        invUsed: invCount,
+      };
+    });
   }
 
   _resolveActionTargets(rawTargets) {
@@ -617,6 +801,10 @@ class AiController {
         rejected.push('Tên macro không hợp lệ hoặc bị thiếu.');
         continue;
       }
+      if ((type === 'checkstats' || type === 'bal') && !arg) {
+        rejected.push(`Thiếu tên người chơi cho hành động "${type}".`);
+        continue;
+      }
 
       let tokens = raw.targets;
       if (tokens == null || tokens === '') tokens = [];
@@ -653,7 +841,7 @@ class AiController {
   /**
    * Thực thi danh sách hành động điều khiển bot và trả về kết quả chi tiết.
    */
-  executeActions(actions = []) {
+  async executeActions(actions = []) {
     const bots = Array.isArray(this.mgr?.bots) ? this.mgr.bots : [];
     const results = [];
     const indexMap = new Map(bots.map((b, i) => [b.cfg.id, i + 1]));
@@ -671,7 +859,7 @@ class AiController {
 
       const targets = this._resolveActionTargets(act.targets);
 
-      if (!targets.length && !['status', 'greet'].includes(type)) {
+      if (!targets.length && !['status', 'greet', 'checkstats', 'bal'].includes(type)) {
         results.push({ type, ok: false, summary: 'Không tìm thấy bot phù hợp để thực hiện.' });
         continue;
       }
@@ -869,6 +1057,206 @@ class AiController {
           });
           break;
         }
+        case 'inv': {
+          const lines = [];
+          const data = [];
+          for (const b of targets) {
+            const id = b.cfg?.id || 'bot';
+            if (!b.isOnline) {
+              lines.push(`• Bot ${id}: Đang OFFLINE, không thể xem túi đồ.`);
+              continue;
+            }
+            const rawItems = Array.isArray(b.state?.inventory) && b.state.inventory.length
+              ? b.state.inventory
+              : (b.mc?.inventory?.items?.() || []).map(it => ({
+                  name: it.customName || it.displayName || it.name || 'Unknown',
+                  count: it.count || 1,
+                }));
+            const usedSlots = rawItems.length;
+            const freeSlots = Math.max(0, 36 - usedSlots);
+            const byName = new Map();
+            for (const it of rawItems) {
+              const k = it.name || 'Unknown';
+              byName.set(k, (byName.get(k) || 0) + (Number(it.count) || 1));
+            }
+            const topList = [...byName.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+            const summaryText = topList.length
+              ? topList.map(([name, count]) => `${name} x${count}`).join(', ')
+              : 'Trống';
+            lines.push(`• Bot ${id}: Đã dùng ${usedSlots}/36 ô (${freeSlots} ô trống) · ${summaryText}`);
+            data.push({ id, usedSlots, freeSlots, topItems: topList });
+          }
+          results.push({
+            type,
+            ok: true,
+            data,
+            summary: `Túi đồ của ${targets.length} bot:\n${lines.join('\n')}`,
+          });
+          break;
+        }
+        case 'pos': {
+          const lines = [];
+          const data = [];
+          for (const b of targets) {
+            const id = b.cfg?.id || 'bot';
+            if (!b.isOnline) {
+              lines.push(`• Bot ${id}: Đang OFFLINE, không có toạ độ.`);
+              continue;
+            }
+            const p = b.mc?.entity?.position;
+            const dim = b.mc?.game?.dimension || 'overworld';
+            if (!p) {
+              lines.push(`• Bot ${id}: Chưa tải xong toạ độ.`);
+              continue;
+            }
+            const coordsStr = `X: ${Math.round(p.x)}, Y: ${Math.round(p.y)}, Z: ${Math.round(p.z)}`;
+            lines.push(`• Bot ${id}: ${coordsStr} (${dim})`);
+            data.push({ id, x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z), dimension: dim });
+          }
+          results.push({
+            type,
+            ok: true,
+            data,
+            summary: `Toạ độ của ${targets.length} bot:\n${lines.join('\n')}`,
+          });
+          break;
+        }
+        case 'activity': {
+          const lines = [];
+          const data = [];
+          for (const b of targets) {
+            const id = b.cfg?.id || 'bot';
+            const act = typeof describeActivity === 'function' ? describeActivity(b) : (b.isOnline ? 'Đang online' : 'Offline');
+            const up = this.mgr?.revenue?.uptime ? this.mgr.revenue.uptime(id) : null;
+            const upStr = up?.totalMs ? `${Math.round(up.totalMs / 60000)}p uptime` : 'offline';
+            lines.push(`• Bot ${id}: ${act} (Uptime: ${upStr})`);
+            data.push({ id, activity: act, uptime: upStr, online: Boolean(b.isOnline) });
+          }
+          results.push({
+            type,
+            ok: true,
+            data,
+            summary: `Hoạt động của ${targets.length} bot:\n${lines.join('\n')}`,
+          });
+          break;
+        }
+        case 'ping': {
+          const lines = [];
+          const data = [];
+          for (const b of targets) {
+            const id = b.cfg?.id || 'bot';
+            if (!b.isOnline) {
+              lines.push(`• Bot ${id}: Offline`);
+              continue;
+            }
+            const ping = b.mc?.player?.ping ?? 0;
+            lines.push(`• Bot ${id}: Ping ${ping}ms`);
+            data.push({ id, ping });
+          }
+          results.push({
+            type,
+            ok: true,
+            data,
+            summary: `Độ trễ (ping) của ${targets.length} bot:\n${lines.join('\n')}`,
+          });
+          break;
+        }
+        case 'chat': {
+          const chatMsg = String(act.arg || '').trim();
+          if (!chatMsg) {
+            results.push({ type, ok: false, summary: 'Thiếu nội dung tin nhắn chat.' });
+            break;
+          }
+          const done = [];
+          for (const b of targets) {
+            if (b.isOnline && b.mc?.chat) {
+              b.mc.chat(chatMsg);
+              done.push(fmtBot(b));
+            }
+          }
+          results.push({
+            type,
+            ok: done.length > 0,
+            targets: done,
+            summary: done.length ? `đã gửi chat "${chatMsg}" từ ${done.join(', ')}` : 'Các bot đang offline không thể chat',
+          });
+          break;
+        }
+        case 'checkstats': {
+          const player = String(act.arg || '').trim();
+          if (!player) {
+            results.push({ type, ok: false, summary: 'Thiếu tên người chơi cần kiểm tra stats.' });
+            break;
+          }
+          const activeBot = targets.find(b => b.isOnline) || bots.find(b => b.isOnline);
+          if (!activeBot) {
+            results.push({ type, ok: false, summary: 'Không có bot nào đang online để kiểm tra stats.' });
+            break;
+          }
+          try {
+            const res = typeof activeBot.checkStats === 'function'
+              ? await activeBot.checkStats(player, 12000)
+              : await activeBot.statsReader.request(player, 12000);
+
+            let linesSummary = '';
+            if (Array.isArray(res.items) && res.items.length) {
+              linesSummary = res.items
+                .map(it => `• ${it.labelVi || it.title || it.label || it.name}: ${it.value || (Array.isArray(it.lore) ? it.lore.join(', ') : '') || '—'}`)
+                .join('\n');
+            } else if (Array.isArray(res.lines) && res.lines.length) {
+              linesSummary = res.lines.map(l => `• ${l}`).join('\n');
+            } else {
+              linesSummary = 'Không có dữ liệu chi tiết.';
+            }
+            const titlePart = res.title ? ` [${res.title}]` : '';
+            const summary = `Stats của ${res.player || player}${titlePart}:\n${linesSummary}`;
+            results.push({
+              type,
+              ok: true,
+              data: res,
+              summary,
+            });
+          } catch (err) {
+            results.push({
+              type,
+              ok: false,
+              summary: `Kiểm tra stats cho ${player} thất bại: ${err.message || err}`,
+            });
+          }
+          break;
+        }
+        case 'bal': {
+          const player = String(act.arg || '').trim();
+          if (!player) {
+            results.push({ type, ok: false, summary: 'Thiếu tên người chơi cần xem số dư.' });
+            break;
+          }
+          const activeBot = targets.find(b => b.isOnline) || bots.find(b => b.isOnline);
+          if (!activeBot) {
+            results.push({ type, ok: false, summary: 'Không có bot nào đang online để kiểm tra số dư.' });
+            break;
+          }
+          try {
+            const res = typeof activeBot.checkBal === 'function'
+              ? await activeBot.checkBal(player, 8000)
+              : await activeBot.statsReader.requestBal(player, 8000);
+
+            const summary = `Số dư của ${res.player || player}: ${res.balance || '0'}`;
+            results.push({
+              type,
+              ok: true,
+              data: res,
+              summary,
+            });
+          } catch (err) {
+            results.push({
+              type,
+              ok: false,
+              summary: `Kiểm tra số dư cho ${player} thất bại: ${err.message || err}`,
+            });
+          }
+          break;
+        }
         default:
           results.push({ type, ok: false, summary: `Hành động "${type}" chưa được hỗ trợ.` });
       }
@@ -882,6 +1270,8 @@ class AiController {
   _buildSystemPrompt() {
     const fleet = this._buildFleetSnapshot();
     const lastNames = this._lastTargets.length ? this._lastTargets.join(', ') : '(chưa có)';
+    const memoryEntries = [...this._memory.entries()];
+    const memoryStr = memoryEntries.length ? memoryEntries.map(([k, v]) => `${k}: ${v}`).join('; ') : '(chưa có)';
     return [
       'Bạn là AI-Anter, trợ lý điều khiển dàn bot Minecraft của hệ thống Antertool. Người vận hành nói tiếng Việt (có thể không dấu, viết tắt).',
       'Nhiệm vụ: hiểu yêu cầu và LẬP KẾ HOẠCH. Trả về DUY NHẤT một JSON hợp lệ, không markdown, theo cấu trúc:',
@@ -891,7 +1281,9 @@ class AiController {
       '- "targets": mảng id bot hoặc số thứ tự (1-based). Chỉ dùng ["all"] khi người dùng nói rõ "tất cả/cả dàn".',
       '- Câu có nhiều thao tác => nhiều phần tử trong "actions", đúng thứ tự.',
       '- Thiếu bot mục tiêu cho stop/reconnect/cmd/macro/stop_macro khi có nhiều bot => actions rỗng + "clarify" hỏi lại. Tuyệt đối không tự đoán "tất cả".',
-      '- "bot đó", "con đó", "như cũ" = bot được nhắc ở lượt trước.',
+      '- "bot đó", "con đó", "nó", "hắn", "em nó", "như cũ" = bot được nhắc ở lượt trước.',
+      '- Luôn duy trì bộ nhớ ngữ cảnh từ các lượt hội thoại trước trong lịch sử trò chuyện (tên người dùng, bot đang được trao đổi, câu hỏi trước). Trả lời tiếp nối một cách tự nhiên.',
+      '- Các tin nhắn trước của assistant trong lịch sử hội thoại có thể là câu trả lời tiếng Việt cho người dùng (ví dụ: "AI-Anter: Đã nhận..."). Bạn vẫn luôn trả về DUY NHẤT một JSON hợp lệ để lập kế hoạch hoặc trò chuyện.',
       '- Câu hỏi nguyên nhân/tình trạng ("sao bot 2 treo?", "doanh thu thế nào?") => dùng "logs" hoặc "status" để lấy dữ liệu thật; hệ thống sẽ diễn giải sau.',
       '- Trò chuyện thường (không liên quan điều khiển) => actions rỗng, trả lời ngắn trong "reply".',
       '- TUYỆT ĐỐI không gửi lệnh login/register/changepassword/pay.',
@@ -913,15 +1305,31 @@ class AiController {
       '- "cmd": gửi lệnh bot (lệnh ở "arg")',
       '- "logs": lấy log hoạt động gần nhất của bot',
       '- "status": lấy trạng thái dàn bot',
+      '- "inv": kiểm tra túi đồ (vật phẩm, số ô trống)',
+      '- "pos": xem toạ độ vị trí hiện tại (x, y, z)',
+      '- "activity": xem hoạt động hiện tại (đang làm gì)',
+      '- "ping": kiểm tra độ trễ mạng (ping ms)',
+      '- "chat": gửi tin nhắn chat trong game Minecraft (nội dung ở "arg")',
+      '- "checkstats": kiểm tra thống kê stats của người chơi (tên người chơi ở "arg")',
+      '- "bal": xem số dư/tiền của người chơi (tên người chơi ở "arg")',
       'VÍ DỤ:',
       'U: khởi động 2 bot số 1 và 2 => {"reply":"","actions":[{"type":"start","targets":["1","2"]}],"clarify":""}',
       'U: bat ban long bot 1 roi bao ve long luon => {"reply":"","actions":[{"type":"sell_on","targets":["1"]},{"type":"protect_on","targets":["1"]}],"clarify":""}',
+      'U: xem túi đồ bot 1 => {"reply":"","actions":[{"type":"inv","targets":["1"]}],"clarify":""}',
+      'U: check stats Steve => {"reply":"","actions":[{"type":"checkstats","arg":"Steve"}],"clarify":""}',
+      'U: xem tiền của Alex => {"reply":"","actions":[{"type":"bal","arg":"Alex"}],"clarify":""}',
+      'U: Steve có bao nhiêu tiền => {"reply":"","actions":[{"type":"bal","arg":"Steve"}],"clarify":""}',
+      'U: bot 2 đang ở đâu => {"reply":"","actions":[{"type":"pos","targets":["2"]}],"clarify":""}',
+      'U: bot 1 đang làm gì => {"reply":"","actions":[{"type":"activity","targets":["1"]}],"clarify":""}',
+      'U: kiểm tra ping các bot => {"reply":"","actions":[{"type":"ping","targets":["all"]}],"clarify":""}',
+      'U: bảo bot 1 chat xin chào => {"reply":"","actions":[{"type":"chat","targets":["1"],"arg":"xin chào"}],"clarify":""}',
       'U: tắt bot đi (có nhiều bot) => {"reply":"","actions":[],"clarify":"Bạn muốn tắt bot nào? (số thứ tự/id hoặc tất cả)"}',
       'U: sao bot 2 treo vậy? => {"reply":"","actions":[{"type":"logs","targets":["2"]}],"clarify":""}',
       'U: chạy macro farm cho tất cả => {"reply":"","actions":[{"type":"macro","targets":["all"],"arg":"farm"}],"clarify":""}',
       'U: gửi lệnh /sethome cho bot 2 => {"reply":"","actions":[{"type":"cmd","targets":["2"],"arg":"/sethome"}],"clarify":""}',
       'U: doanh thu hôm nay sao rồi => {"reply":"","actions":[{"type":"status","targets":["all"]}],"clarify":""}',
       'U: bạn khoẻ không => {"reply":"AI-Anter: Mình khoẻ, sẵn sàng điều khiển dàn bot cho bạn!","actions":[],"clarify":""}',
+      `Thông tin ghi nhớ dài hạn (user memory): ${memoryStr}`,
       `Bot được nhắc gần nhất: ${lastNames}`,
       `Danh sách bot hiện tại (index 1-based): ${JSON.stringify(fleet)}`,
     ].join('\n');
@@ -932,7 +1340,9 @@ class AiController {
       'Bạn là AI-Anter, trợ lý điều khiển dàn bot Minecraft (Antertool).',
       'Bên dưới là KẾT QUẢ THỰC TẾ vừa thực thi. Hãy trả lời người vận hành bằng tiếng Việt, ngắn gọn (tối đa khoảng 6 dòng), bắt đầu bằng "AI-Anter:".',
       'Chỉ dùng số liệu có trong kết quả, không bịa. Thao tác lỗi (ok=false) phải nói rõ.',
+      'Với kết quả stats hoặc số dư (checkstats/bal), trình bày rõ ràng, thân thiện với các chỉ số quan trọng.',
       'Nếu người dùng hỏi nguyên nhân/vì sao, hãy suy luận từ log và nói rõ đó là suy đoán. Không trả về JSON.',
+      'Bạn có thể tham khảo ngữ cảnh hội thoại trước đó để câu trả lời tự nhiên, liền mạch.',
     ].join('\n');
   }
 
@@ -1078,11 +1488,13 @@ class AiController {
   }
 
   /** Gửi KẾT QUẢ THẬT cho LLM để diễn giải thành câu trả lời. */
-  async _narrate(rawPrompt, results) {
+  async _narrate(rawPrompt, results, chatId = null) {
     let payload = JSON.stringify(results.map(r => ({ type: r.type, ok: r.ok, summary: r.summary, data: r.data })));
     if (payload.length > 6000) payload = payload.slice(0, 6000) + '…(đã cắt bớt)';
+    const history = chatId ? this._getHistory(chatId).slice(-6) : [];
     const content = await this._chat([
       { role: 'system', content: this._buildNarrationPrompt() },
+      ...history,
       { role: 'user', content: `Yêu cầu của người vận hành: ${rawPrompt}\n\nKết quả thực thi (JSON):\n${payload}` },
     ], { json: false, temperature: 0.3 });
     return content;
@@ -1166,10 +1578,59 @@ class AiController {
     const chatId = String(opts.chatId || 'default');
     const bots = Array.isArray(this.mgr?.bots) ? this.mgr.bots : [];
     const botIds = new Set(bots.map(b => b.cfg.id));
-    const ctx = { lastTargetIds: this._lastTargets.filter(id => botIds.has(id)) };
+    const ctx = {
+      lastTargetIds: this._lastTargets.filter(id => botIds.has(id)),
+      lastActions: this._lastActions,
+    };
     const local = parseNaturalCommand(rawPrompt, bots, ctx);
     const question = QUESTION_RE.test(foldVi(local.cleaned || rawPrompt));
     const llmAllowed = this.hasKey && opts.offline !== true;
+
+    // 1. Kiểm tra hỏi về danh tính / tên người dùng
+    const foldedPrompt = foldVi(rawPrompt);
+    const asksName = /(?:toi|minh|tao)\s+(?:ten\s+(?:la\s+)?gi|la\s+ai)\b/i.test(foldedPrompt)
+      || /\b(ten toi|ten minh)\s+(?:la\s+)?gi\b/i.test(foldedPrompt)
+      || /\bco nho toi (?:la ai|ten gi)\b/i.test(foldedPrompt);
+
+    if (asksName && !local.actions.length) {
+      const savedName = this._memory.get('user_name');
+      const memReply = savedName
+        ? `AI-Anter: Bạn là ${savedName}! Mình luôn ghi nhớ bạn mà.`
+        : 'AI-Anter: Bạn chưa cho mình biết tên. Bạn có thể nói "tôi tên là..." để mình ghi nhớ nhé!';
+      this._pushHistory(chatId, 'user', rawPrompt);
+      this._pushHistory(chatId, 'assistant', memReply);
+      return {
+        ok: true,
+        via: 'local',
+        reply: memReply,
+        actions: [],
+        results: [],
+      };
+    }
+
+    // 2. Nhận diện ghi nhớ tên người dùng ("mình tên là Tuấn", "tôi tên là Nam")
+    const nameIntroMatch = /(?:t[oô]i|m[iì]nh|tao|anh|ch[iị]|em)\s+t[eê]n\s+(?:l[aà]\s+)?([\p{L}\p{N}_]+(?:\s+[\p{L}\p{N}_]+)*)/iu.exec(rawPrompt)
+      || /(?:t[eê]n\s+(?:c[uủ]a\s+)?(?:t[oô]i|m[iì]nh|tao)\s+l[aà]\s+)([\p{L}\p{N}_]+(?:\s+[\p{L}\p{N}_]+)*)/iu.exec(rawPrompt)
+      || /(?:g[oọ]i\s+(?:t[oô]i|m[iì]nh)\s+l[aà]\s+)([\p{L}\p{N}_]+(?:\s+[\p{L}\p{N}_]+)*)/iu.exec(rawPrompt);
+
+    if (nameIntroMatch && !local.actions.length) {
+      const detectedName = nameIntroMatch[1].replace(/[.,!?;:]/g, '').trim();
+      const foldName = foldVi(detectedName);
+      if (detectedName && !/^(la|gi|ai|chua|nao|sao|the|khong)$/i.test(foldName)) {
+        this._memory.set('user_name', detectedName);
+        this.flushHistoryToDisk();
+        const memReply = `AI-Anter: Chào ${detectedName}! Mình đã ghi nhớ tên của bạn rồi nhé.`;
+        this._pushHistory(chatId, 'user', rawPrompt);
+        this._pushHistory(chatId, 'assistant', memReply);
+        return {
+          ok: true,
+          via: 'local',
+          reply: memReply,
+          actions: [],
+          results: [],
+        };
+      }
+    }
 
     let actions = [];
     let pending = [];
@@ -1195,7 +1656,7 @@ class AiController {
 
     // C. Local hiểu chắc chắn => chạy luôn, không gọi API
     const infoOnly = local.actions.length > 0 && local.actions.every(a => INFO_TYPES.has(a.type) || a.type === 'greet');
-    const localConfident = local.actions.length > 0 && (!question || infoOnly);
+    const localConfident = local.actions.length > 0 && (!question || infoOnly || local.followUp);
     if (!actions.length && localConfident) {
       actions = local.actions;
       pending = local.pendingActions || [];
@@ -1231,15 +1692,23 @@ class AiController {
     }
 
     // E. Thực thi + ghi nhận kết quả thật
-    const results = actions.length > 0 ? this.executeActions(actions) : [];
+    const results = actions.length > 0 ? await this.executeActions(actions) : [];
     for (const msg of rejected) results.push({ type: 'invalid', ok: false, summary: msg });
 
-    const acted = actions.filter(a => !INFO_TYPES.has(a.type) && a.type !== 'greet');
-    if (acted.length) {
-      this._lastActions = acted.map(a => ({ ...a }));
+    // Cập nhật bot mục tiêu gần nhất từ tất cả hành động có target (cả info lẫn control)
+    const targeted = actions.filter(a => a.type !== 'greet');
+    if (targeted.length) {
       const ids = new Set();
-      for (const a of acted) for (const b of this._resolveActionTargets(a.targets)) ids.add(b.cfg.id);
-      if (ids.size) this._lastTargets = [...ids];
+      for (const a of targeted) {
+        for (const b of this._resolveActionTargets(a.targets)) {
+          if (b?.cfg?.id) ids.add(b.cfg.id);
+        }
+      }
+      if (ids.size) {
+        this._lastTargets = [...ids];
+      }
+      this._lastActions = targeted.map(a => ({ ...a }));
+      this._saveHistoryToDisk();
     }
     this._pending = pending.length ? { actions: pending, ts: Date.now() } : null;
 
@@ -1248,7 +1717,7 @@ class AiController {
     const hasInfo = results.some(r => r.ok && INFO_TYPES.has(r.type));
     if (hasInfo && llmAllowed && (via === 'omnirouter' || question)) {
       try {
-        const text = await this._narrate(rawPrompt, results);
+        const text = await this._narrate(rawPrompt, results, chatId);
         if (text) {
           reply = this._formatReplyPrefix(text);
           via = 'omnirouter';

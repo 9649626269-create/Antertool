@@ -2,6 +2,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const AiController = require('../src/core/AiController');
 const TelegramControl = require('../src/core/TelegramControl');
 const TelegramLogger = require('../src/core/TelegramLogger');
@@ -165,9 +168,9 @@ test('AiController: gọi OmniRouter /v1/chat/completions với Bearer API key v
   }
 });
 
-test('AiController: chặn lệnh nhạy cảm (/login, /pay, /changepassword) và che khoá omniRouterApiKey', () => {
+test('AiController: chặn lệnh nhạy cảm (/login, /pay, /changepassword) và che khoá omniRouterApiKey', async () => {
   const { mgr, bots } = createMockFleet();
-  const res = mgr.ai.executeActions([
+  const res = await mgr.ai.executeActions([
     { type: 'cmd', targets: ['1'], arg: '/login secretpass' },
     { type: 'cmd', targets: ['1'], arg: '/pay Steve 999999' },
   ]);
@@ -206,4 +209,330 @@ test('TelegramControl: lệnh /ai cho phép admin điều khiển bot qua AI-Ant
   assert.equal(bots[1].started, true);
   assert.equal(bots[2].started, false);
   assert.match(res.text, /AI-Anter:\s*Đã nhận đang làm/);
+});
+
+test('AiController: hỗ trợ các hành động inv, pos, activity, ping', async () => {
+  const { mgr, bots } = createMockFleet();
+  bots[0].isOnline = true;
+  bots[0].state.inventory = [{ name: 'Diamond', count: 5 }, { name: 'Iron Ingot', count: 64 }];
+  bots[0].mc = {
+    entity: { position: { x: 100.5, y: 64, z: -200.2 } },
+    game: { dimension: 'overworld' },
+    player: { ping: 45 },
+  };
+
+  const rInv = await mgr.askAi('xem túi đồ bot 1');
+  assert.equal(rInv.ok, true);
+  assert.ok(rInv.reply.includes('Diamond x5'));
+
+  const rPos = await mgr.askAi('tọa độ bot 1');
+  assert.equal(rPos.ok, true);
+  assert.ok(rPos.reply.includes('101') || rPos.reply.includes('100'));
+
+  const rPing = await mgr.askAi('ping bot 1');
+  assert.equal(rPing.ok, true);
+  assert.ok(rPing.reply.includes('45ms'));
+});
+
+test('AiController & TelegramControl: nhận diện và thực thi checkstats và bal của người chơi', async () => {
+  const { mgr, bots } = createMockFleet();
+  bots[0].isOnline = true;
+  bots[0].mc = { player: { ping: 30 } };
+  bots[0].checkStats = async (player, timeout) => {
+    return {
+      player,
+      title: 'KingMC Stats',
+      items: [
+        { labelVi: 'Giết người chơi', value: '25' },
+        { labelVi: 'Số lần chết', value: '4' },
+        { labelVi: 'Thời gian đã chơi', value: '12h 45m' },
+        { labelVi: 'Shards', value: '350' },
+        { labelVi: 'Tiền', value: '$2,500,000' },
+      ],
+      lines: [
+        'Giết người chơi | 25',
+        'Số lần chết | 4',
+        'Thời gian đã chơi | 12h 45m',
+        'Shards | 350',
+        'Tiền | $2,500,000',
+      ],
+    };
+  };
+  bots[0].checkBal = async (player, timeout) => {
+    return {
+      player,
+      balance: '$2,500,000',
+      amount: 2500000,
+      raw: `Số dư của ${player}: $2,500,000`,
+    };
+  };
+
+  // 1. AI: Nhận diện "check stats <player>"
+  const rStats1 = await mgr.askAi('check stats Steve');
+  assert.equal(rStats1.ok, true);
+  assert.equal(rStats1.actions[0].type, 'checkstats');
+  assert.equal(rStats1.actions[0].arg, 'Steve');
+  assert.ok(rStats1.reply.includes('Steve'));
+  assert.ok(rStats1.reply.includes('25'));
+
+  // 2. AI: Nhận diện "xem stats của <player>"
+  const rStats2 = await mgr.askAi('xem stats của Alex');
+  assert.equal(rStats2.ok, true);
+  assert.equal(rStats2.actions[0].type, 'checkstats');
+  assert.equal(rStats2.actions[0].arg, 'Alex');
+
+  // 3. AI: Nhận diện "chỉ số của <player>", "thống kê <player>", "stats player <player>"
+  const rStats3 = await mgr.askAi('chỉ số của Steve');
+  assert.equal(rStats3.ok, true);
+  assert.equal(rStats3.actions[0].type, 'checkstats');
+
+  const rStats4 = await mgr.askAi('thống kê Steve');
+  assert.equal(rStats4.ok, true);
+  assert.equal(rStats4.actions[0].type, 'checkstats');
+
+  const rStats5 = await mgr.askAi('stats player Steve');
+  assert.equal(rStats5.ok, true);
+  assert.equal(rStats5.actions[0].type, 'checkstats');
+
+  // 4. AI: Nhận diện "check bal <player>"
+  const rBal1 = await mgr.askAi('check bal Steve');
+  assert.equal(rBal1.ok, true);
+  assert.equal(rBal1.actions[0].type, 'bal');
+  assert.equal(rBal1.actions[0].arg, 'Steve');
+  assert.ok(rBal1.reply.includes('$2,500,000'));
+
+  // 5. AI: Nhận diện "số dư của <player>", "xem tiền của <player>", "bal <player>", "<player> có bao nhiêu tiền", "tiền của <player>"
+  const rBal2 = await mgr.askAi('số dư của Alex');
+  assert.equal(rBal2.ok, true);
+  assert.equal(rBal2.actions[0].type, 'bal');
+  assert.equal(rBal2.actions[0].arg, 'Alex');
+
+  const rBal3 = await mgr.askAi('xem tiền của Steve');
+  assert.equal(rBal3.ok, true);
+  assert.equal(rBal3.actions[0].type, 'bal');
+
+  const rBal4 = await mgr.askAi('bal Steve');
+  assert.equal(rBal4.ok, true);
+  assert.equal(rBal4.actions[0].type, 'bal');
+
+  const rBal5 = await mgr.askAi('Steve có bao nhiêu tiền');
+  assert.equal(rBal5.ok, true);
+  assert.equal(rBal5.actions[0].type, 'bal');
+  assert.equal(rBal5.actions[0].arg, 'Steve');
+
+  const rBal6 = await mgr.askAi('tiền của Steve');
+  assert.equal(rBal6.ok, true);
+  assert.equal(rBal6.actions[0].type, 'bal');
+
+  // 6. Trường hợp không có bot nào online
+  bots[0].isOnline = false;
+  const rFail = await mgr.askAi('check stats Steve');
+  assert.equal(rFail.ok, false);
+  assert.ok(rFail.reply.includes('online'));
+
+  // 7. TelegramControl: lệnh /checkstats <player> và /bal <player>
+  bots[0].isOnline = true;
+  const tc = new TelegramControl(mgr);
+  const tgStats = await tc.handleEvent({
+    type: 'command',
+    cmd: 'checkstats',
+    arg: 'Steve',
+    fromId: '1001',
+    chatId: '-100123',
+    isPrivate: true,
+  });
+  assert.equal(tgStats.code, 'OK');
+  assert.ok(tgStats.text.includes('Steve'));
+  assert.ok(tgStats.text.includes('Giết người chơi'));
+
+  const tgBal = await tc.handleEvent({
+    type: 'command',
+    cmd: 'bal',
+    arg: 'Steve',
+    fromId: '1001',
+    chatId: '-100123',
+    isPrivate: true,
+  });
+  assert.equal(tgBal.code, 'OK');
+  assert.ok(tgBal.text.includes('Steve'));
+  assert.ok(tgBal.text.includes('$2,500,000'));
+});
+
+test('AiController: nhớ ngữ cảnh hội thoại, đại từ "nó/con đó", tiếp nối "còn bot 2?", và lưu vào disk file', async () => {
+  const tmpFile = path.join(os.tmpdir(), `ai_mem_test_${Date.now()}.json`);
+  try {
+    const { mgr, bots } = createMockFleet();
+    bots[0].isOnline = true;
+    bots[1].isOnline = true;
+    bots[0].state.inventory = [{ name: 'Emerald', count: 10 }];
+    bots[1].state.inventory = [{ name: 'Gold Ingot', count: 32 }];
+    bots[0].mc = { entity: { position: { x: 50, y: 70, z: -80 } } };
+    bots[1].mc = { entity: { position: { x: 120, y: 65, z: 240 } } };
+
+    const ai = new AiController(mgr, { historyFile: tmpFile });
+    mgr.askAi = (prompt, opts) => ai.ask(prompt, opts);
+
+    // Lượt 1: Hỏi túi đồ bot 1
+    const t1 = await mgr.askAi('xem túi đồ bot 1');
+    assert.equal(t1.ok, true);
+    assert.ok(t1.reply.includes('Emerald x10'));
+
+    // Lượt 2: Dùng đại từ "nó" -> phải nhớ bot 1
+    const t2 = await mgr.askAi('nó đang ở đâu?');
+    assert.equal(t2.ok, true);
+    assert.equal(t2.actions[0].type, 'pos');
+    assert.deepEqual(t2.actions[0].targets, ['bot-1']);
+    assert.ok(t2.reply.includes('50') && t2.reply.includes('70') && t2.reply.includes('-80'));
+
+    // Lượt 3: Ra lệnh "cho nó về home" -> nhớ bot 1
+    const t3 = await mgr.askAi('cho nó về home');
+    assert.equal(t3.ok, true);
+    assert.equal(t3.actions[0].type, 'home');
+    assert.deepEqual(t3.actions[0].targets, ['bot-1']);
+    assert.equal(bots[0].cmds.includes('spawnhome now'), true);
+
+    // Lượt 4: Câu hỏi tiếp nối "còn bot 2?" -> kế thừa hành động "home" cho bot 2
+    const t4 = await mgr.askAi('còn bot 2?');
+    assert.equal(t4.ok, true);
+    assert.equal(t4.actions[0].type, 'home');
+    assert.deepEqual(t4.actions[0].targets, ['bot-2']);
+    assert.equal(bots[1].cmds.includes('spawnhome now'), true);
+
+    // Lượt 5: Lưu disk và nạp lại vào instance mới
+    ai.flushHistoryToDisk();
+    assert.equal(fs.existsSync(tmpFile), true);
+
+    const ai2 = new AiController(mgr, { historyFile: tmpFile });
+    // Instance mới vẫn nhớ lượt vừa rồi tác động lên bot 2
+    const t5 = await ai2.ask('nó đang ở đâu?');
+    assert.equal(t5.ok, true);
+    assert.equal(t5.actions[0].type, 'pos');
+    assert.deepEqual(t5.actions[0].targets, ['bot-2']);
+    assert.ok(t5.reply.includes('120') && t5.reply.includes('65') && t5.reply.includes('240'));
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+});
+
+test('AiController: ghi nhớ tên người dùng (user memory) và tiếp tục duy trì qua instance mới', async () => {
+  const tmpFile = path.join(os.tmpdir(), `ai_user_mem_${Date.now()}.json`);
+  try {
+    const { mgr } = createMockFleet();
+    const ai = new AiController(mgr, { historyFile: tmpFile });
+
+    // 1. Người dùng giới thiệu tên
+    const r1 = await ai.ask('mình tên là Tuấn');
+    assert.equal(r1.ok, true);
+    assert.ok(r1.reply.includes('Tuấn'));
+
+    // 2. Hỏi lại tên
+    const r2 = await ai.ask('tôi tên là gì?');
+    assert.equal(r2.ok, true);
+    assert.ok(r2.reply.includes('Tuấn'));
+
+    // 3. Khởi tạo instance AI mới nạp cùng file
+    ai.flushHistoryToDisk();
+    const ai2 = new AiController(mgr, { historyFile: tmpFile });
+    const r3 = await ai2.ask('bạn có nhớ tôi là ai không?');
+    assert.equal(r3.ok, true);
+    assert.ok(r3.reply.includes('Tuấn'));
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+});
+
+test('AiController: gửi đầy đủ lịch sử hội thoại nhiều lượt cho OmniRouter LLM và Narration', async () => {
+  const { mgr, bots } = createMockFleet();
+  bots[0].isOnline = true;
+  bots[0].state.inventory = [{ name: 'Diamond', count: 3 }];
+
+  const recordedCalls = [];
+  const fakeHttpPost = async (url, headers, body) => {
+    recordedCalls.push({ url, headers, body });
+    if (body.response_format?.type === 'json_object') {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                reply: '',
+                actions: [{ type: 'inv', targets: ['1'] }],
+                clarify: '',
+              }),
+            },
+          }],
+        }),
+      };
+    }
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        choices: [{
+          message: {
+            content: 'Bot 1 hiện có 3 kim cương trong túi đồ.',
+          },
+        }],
+      }),
+    };
+  };
+
+  const ai = new AiController(mgr, {
+    apiKey: 'sk-test-token-12345',
+    httpPost: fakeHttpPost,
+    historyFile: null,
+  });
+
+  // Lượt 1
+  await ai.ask('cho mình xem túi đồ bot 1 với');
+  // Lượt 2
+  await ai.ask('nó có nhiều đồ không?');
+
+  assert.ok(recordedCalls.length >= 2);
+  const planCall = recordedCalls.find(c => c.body?.response_format?.type === 'json_object');
+  assert.ok(planCall, 'Phải có cuộc gọi plan với LLM');
+  const msgs = planCall.body.messages;
+  assert.ok(msgs.some(m => m.role === 'user' && m.content.includes('túi đồ bot 1')));
+  assert.ok(msgs.some(m => m.role === 'user' && m.content.includes('nó có nhiều đồ không')));
+
+  const narrateCall = recordedCalls.find(c => !c.body?.response_format);
+  assert.ok(narrateCall, 'Phải có cuộc gọi narrate với LLM');
+  const narrateMsgs = narrateCall.body.messages;
+  assert.ok(narrateMsgs.some(m => m.role === 'user' && m.content.includes('túi đồ bot 1')));
+});
+
+test('TelegramControl & AiController: hội thoại nhiều lượt qua Telegram giữ trọn ngữ cảnh', async () => {
+  const { mgr, bots } = createMockFleet();
+  bots[0].isOnline = true;
+  bots[1].isOnline = true;
+  bots[0].state.inventory = [{ name: 'Diamond', count: 5 }];
+  bots[0].mc = { entity: { position: { x: 10, y: 20, z: 30 } } };
+  bots[1].mc = { entity: { position: { x: 40, y: 50, z: 60 } } };
+
+  const tc = new TelegramControl(mgr);
+  const ev = (text) => ({
+    type: 'command',
+    cmd: 'ai',
+    arg: text,
+    fromId: '1001',
+    chatId: '-100123',
+    isPrivate: true,
+  });
+
+  // Lượt 1: Xem túi đồ bot 1 qua Telegram
+  const r1 = await tc.handleEvent(ev('xem túi đồ bot 1'));
+  assert.equal(r1.code, 'OK');
+  assert.ok(r1.text.includes('Diamond x5'));
+
+  // Lượt 2: Hỏi vị trí của "nó" qua Telegram -> nhận diện đúng bot 1
+  const r2 = await tc.handleEvent(ev('nó đang ở đâu?'));
+  assert.equal(r2.code, 'OK');
+  assert.ok(r2.text.includes('bot-1'));
+  assert.ok(r2.text.includes('10') && r2.text.includes('20') && r2.text.includes('30'));
+
+  // Lượt 3: Tiếp nối "còn bot 2?" qua Telegram -> xem vị trí bot 2
+  const r3 = await tc.handleEvent(ev('còn bot 2?'));
+  assert.equal(r3.code, 'OK');
+  assert.ok(r3.text.includes('bot-2'));
+  assert.ok(r3.text.includes('40') && r3.text.includes('50') && r3.text.includes('60'));
 });

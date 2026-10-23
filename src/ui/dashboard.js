@@ -347,9 +347,10 @@ function collectDashboardState(manager, options = {}) {
     {
       module: 'Discord Webhook',
       status: (wh && wh.enabled) || (revWh && revWh.enabled) ? 'ENABLED' : 'DISABLED',
-      details: wh && wh.enabled
-        ? `Hybrid Live (${manager && typeof manager.getDiscordRefreshSec === "function" ? manager.getDiscordRefreshSec() : 10}s) · ${maskSecret(wh.url)}`
-        : 'Alerts & Live Panel: off',
+      details: [
+        wh && wh.enabled ? `Alerts: ${maskSecret(wh.url)}` : 'Alerts: off',
+        revWh && revWh.enabled ? `Live/Rev (10s): ${maskSecret(revWh.url)}` : (wh && wh.enabled ? 'Live/Rev: shared' : 'Live/Rev: off'),
+      ].join(' · '),
     },
     {
       module: 'Telegram & Logs',
