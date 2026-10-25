@@ -710,12 +710,14 @@ async function shutdown(code = 0) {
             case 'webhook': {
               const notifier = manager.notifier;
               if (args[0] === 'revenue') {
+                const rn = manager.revenueNotifier;
                 if (args[1] === 'set' && args[2]) {
-                  manager.setWebhookUrl(args[2]);
-                  logger.success('Đã lưu vào webhook chung (cảnh báo + doanh thu + bảng trực tiếp 10s đã được gộp làm 1)');
+                  manager.setRevenueWebhookUrl(args[2]);
+                  manager.sendDiscordPanel();
+                  logger.success('Đã lưu webhook RIÊNG cho Bảng Doanh Thu & Trực Tiếp 10s (tách biệt khỏi kênh cảnh báo)');
                 } else if (args[1] === 'off') {
-                  manager.persistence.set('revenueWebhookUrl', null);
-                  logger.success('Đã gộp doanh thu vào webhook chung');
+                  manager.setRevenueWebhookUrl(null);
+                  logger.success('Đã tắt webhook doanh thu riêng — báo cáo sẽ đi qua webhook chung (nếu có)');
                 } else if (args[1] === 'report' || args[1] === 'send') {
                   const r = manager.sendRevenueSummary();
                   if (r.ok) logger.success(`Đã cập nhật báo cáo tổng hợp doanh thu (${r.via})`);
@@ -727,17 +729,17 @@ async function shutdown(code = 0) {
                   manager.setRevenueSummaryEvery(min);
                   logger.success(min ? `Tự cập nhật báo cáo tổng hợp mỗi ${min >= 60 && min % 60 === 0 ? (min / 60) + ' giờ' : min + ' phút'} (chỉ cập nhật khi có vòng bán mới)` : 'Đã tắt tự gửi báo cáo tổng hợp');
                 } else if (args[1] === 'test') {
-                  if (!notifier.enabled) { logger.warn('Chưa đặt webhook — dùng: webhook set <url>'); break; }
-                  cliSpinner.start('Đang gửi test webhook Discord...');
-                  notifier.test().then(ok => {
+                  if (!rn.enabled) { logger.warn('Chưa đặt webhook doanh thu riêng — dùng: webhook revenue set <url>'); break; }
+                  cliSpinner.start('Đang gửi test webhook doanh thu riêng...');
+                  rn.test().then(ok => {
                     cliSpinner.stop();
-                    if (ok) logger.success('Đã gửi test, kiểm tra kênh Discord');
+                    if (ok) logger.success('Đã gửi test, kiểm tra kênh Discord doanh thu');
                     else logger.error('Gửi thất bại — kiểm tra lại URL');
                   });
                 } else {
-                  logger.info('Usage: webhook revenue report | every <30m|1h|off> | set <url> | test');
+                  logger.info('Usage: webhook revenue set <url> | test | off | report | every <30m|1h|off>');
                   logger.info('Tự cập nhật tổng hợp: ' + (manager._config?.revenueSummaryEveryMin ? `mỗi ${manager._config.revenueSummaryEveryMin} phút` : 'TẮT (đang có Bảng Trực Tiếp 10s)'));
-                  logger.info('Trạng thái: ' + (notifier.enabled ? 'BẬT (gộp chung 1 webhook)' : 'TẮT'));
+                  logger.info('Trạng thái: ' + (rn.enabled ? 'BẬT (webhook doanh thu riêng — tách biệt khỏi cảnh báo)' : (notifier.enabled ? 'dùng webhook chung' : 'TẮT')));
                 }
                 break;
               }
@@ -749,7 +751,7 @@ async function shutdown(code = 0) {
                 manager.setWebhookUrl(null);
                 logger.success('Đã tắt webhook');
               } else if (args[0] === 'panel') {
-                if (!notifier.enabled) { logger.warn('Chưa cấu hình webhook — dùng: webhook set <url>'); break; }
+                if (!manager.revenueNotifier.enabled && !notifier.enabled) { logger.warn('Chưa cấu hình webhook — dùng: webhook revenue set <url> hoặc webhook set <url>'); break; }
                 const fresh = args[1] === 'fresh' || args[1] === 'new';
                 cliSpinner.start(fresh ? 'Đang tạo mới Bảng Trạng Thái Trực Tiếp Discord...' : 'Đang cập nhật Bảng Trạng Thái Trực Tiếp Discord...');
                 manager.sendDiscordPanel({ fresh }).then(ok => {
@@ -961,30 +963,14 @@ async function shutdown(code = 0) {
   }
 })();
 
-function recordCrashError(type, err) {
-  try {
-    const logDir = path.join(process.cwd(), 'log');
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    const payload = {
-      type,
-      time: new Date().toISOString(),
-      message: err && err.message ? err.message : String(err),
-      stack: err && err.stack ? err.stack : null,
-    };
-    fs.writeFileSync(path.join(logDir, 'last_error.json'), JSON.stringify(payload, null, 2), 'utf8');
-  } catch {}
-}
-
 process.on('SIGINT', () => shutdown());
 process.on('SIGTERM', () => shutdown());
 process.on('uncaughtException', err => {
   try { writer.restoreTerminal(); } catch { /* ignore */ }
-  recordCrashError('UNCAUGHT', err);
   logger.error('[UNCAUGHT] ' + (err && err.message ? err.message : String(err)), { err: err instanceof Error ? err : null, stderr: true });
   try { if (manager) manager.runtimeLog('err', '[UNCAUGHT] ' + ((err && err.stack) || err)); } catch (e) { dbg('main', e); }
 });
 process.on('unhandledRejection', (reason) => {
-  recordCrashError('UNHANDLED', reason);
   logger.error('[UNHANDLED] ' + (reason?.message || String(reason)), { err: reason instanceof Error ? reason : null, stderr: true });
   try { if (manager) manager.runtimeLog('err', '[UNHANDLED] ' + ((reason && reason.stack) || reason)); } catch (e) { dbg('main', e); }
 });

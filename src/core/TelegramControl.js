@@ -40,6 +40,7 @@ const LOCKOUT_MS = 10 * 60 * 1000;
 const VIEW_COMMANDS = new Set([
   'start', 'help', 'status', 'bots', 'bot', 'panel',
   'activity', 'inv', 'pos', 'board', 'ping', 'logs', 'log', 'whoami',
+  'checkstats', 'stats', 'bal', 'checkbal',
 ]);
 
 const VIEW_BUTTON_ACTS = new Set([
@@ -516,6 +517,12 @@ class TelegramControl {
         return this._cmdBoard(parts[0]);
       case 'ping':
         return this._cmdPing(parts[0]);
+      case 'checkstats':
+      case 'stats':
+        return this._cmdCheckStats(parts, now);
+      case 'bal':
+      case 'checkbal':
+        return this._cmdBal(parts, now);
       case 'logs':
       case 'log': {
         const sub = (parts[0] || '').toLowerCase();
@@ -563,10 +570,11 @@ class TelegramControl {
       case 'ai': {
         const promptText = parts.join(' ').trim();
         if (!promptText) {
-          return { code: 'INVALID_ARG', text: `${sym('warn')} Cú pháp: <code>/ai &lt;yêu cầu điều khiển&gt;</code> (ví dụ: <code>/ai khởi động 2 bot số 1 và 2</code>)` };
+          return { code: 'INVALID_ARG', text: `${sym('warn')} Cú pháp: <code>/ai &lt;yêu cầu điều khiển&gt;</code> hoặc gửi tin nhắn trực tiếp cho bot (ví dụ: <code>khởi động 2 bot số 1 và 2</code>, <code>xem túi đồ bot 1</code>, <code>tọa độ bot 2</code>).` };
         }
         this._audit(ev, role, 'ai', promptText);
-        const res = await this.mgr.askAi(promptText);
+        try { this.mgr?.telegram?.sendChatAction?.('typing'); } catch { /* ignore */ }
+        const res = await this.mgr.askAi(promptText, { chatId: ev.chat?.id ? String(ev.chat.id) : undefined });
         const refreshIds = (this.mgr.bots || []).map(b => String(b.cfg.id));
         return {
           code: res.ok ? 'OK' : 'INVALID_ARG',
@@ -990,6 +998,92 @@ class TelegramControl {
       code: 'OK',
       text: `${sym('pos')} <b>${safeId}</b> ${sym('sep')} Ping: <b>${typeof p === 'number' && p >= 0 ? `${p}ms` : '—'}</b>`,
     };
+  }
+
+  async _cmdCheckStats(parts, now) {
+    const rawPlayer = parts[0];
+    if (!rawPlayer) {
+      return { code: 'INVALID_ARG', text: `${sym('warn')} Cú pháp: <code>/checkstats &lt;người chơi&gt;</code>` };
+    }
+    const player = sanitizeExternal(rawPlayer, { max: 32 });
+    if (!/^[A-Za-z0-9_.*]{1,32}$/.test(player)) {
+      return { code: 'INVALID_ARG', text: `${sym('warn')} Tên người chơi không hợp lệ.` };
+    }
+
+    const onlineBot = (this.mgr.bots || []).find(b => b.isOnline && (typeof b.checkStats === 'function' || b.statsReader));
+    if (!onlineBot) {
+      return { code: 'OFFLINE', text: `${sym('warn')} Không có bot nào đang online để kiểm tra stats.` };
+    }
+
+    try {
+      const res = typeof onlineBot.checkStats === 'function'
+        ? await onlineBot.checkStats(player, 12000)
+        : await onlineBot.statsReader.request(player, 12000);
+
+      const safePlayer = escapeHtml(res.player || player);
+      const title = res.title ? ` [${escapeHtml(res.title)}]` : '';
+      const lines = [
+        `${sym('title')} <b>Thống kê người chơi: ${safePlayer}${title}</b>`,
+        `Bot tra cứu: <code>${escapeHtml(onlineBot.cfg?.id || 'bot')}</code>`,
+      ];
+
+      if (Array.isArray(res.items) && res.items.length) {
+        for (const it of res.items.slice(0, 20)) {
+          const label = escapeHtml(it.labelVi || it.title || it.label || it.name || 'Chỉ số');
+          const val = escapeHtml(it.value || (Array.isArray(it.lore) ? it.lore.join(', ') : '') || '—');
+          lines.push(`${sym('bullet')} ${label}: <b>${val}</b>`);
+        }
+      } else if (Array.isArray(res.lines) && res.lines.length) {
+        for (const l of res.lines.slice(0, 20)) {
+          lines.push(`${sym('bullet')} ${escapeHtml(l)}`);
+        }
+      } else {
+        lines.push('Chưa có thông tin thống kê.');
+      }
+
+      return { code: 'OK', text: lines.join('\n') };
+    } catch (err) {
+      return {
+        code: 'FAILED',
+        text: `${sym('fail')} Lỗi kiểm tra stats <b>${escapeHtml(player)}</b>: ${escapeHtml(err.message || String(err))}`,
+      };
+    }
+  }
+
+  async _cmdBal(parts, now) {
+    const rawPlayer = parts[0];
+    if (!rawPlayer) {
+      return { code: 'INVALID_ARG', text: `${sym('warn')} Cú pháp: <code>/bal &lt;người chơi&gt;</code>` };
+    }
+    const player = sanitizeExternal(rawPlayer, { max: 32 });
+    if (!/^[A-Za-z0-9_.*]{1,32}$/.test(player)) {
+      return { code: 'INVALID_ARG', text: `${sym('warn')} Tên người chơi không hợp lệ.` };
+    }
+
+    const onlineBot = (this.mgr.bots || []).find(b => b.isOnline && (typeof b.checkBal === 'function' || b.statsReader));
+    if (!onlineBot) {
+      return { code: 'OFFLINE', text: `${sym('warn')} Không có bot nào đang online để kiểm tra số dư.` };
+    }
+
+    try {
+      const res = typeof onlineBot.checkBal === 'function'
+        ? await onlineBot.checkBal(player, 8000)
+        : await onlineBot.statsReader.requestBal(player, 8000);
+
+      const safePlayer = escapeHtml(res.player || player);
+      const balance = escapeHtml(res.balance || '0');
+      const lines = [
+        `${sym('title')} <b>Số dư người chơi: ${safePlayer}</b>`,
+        `Số dư: <b>${balance}</b>`,
+        `Bot tra cứu: <code>${escapeHtml(onlineBot.cfg?.id || 'bot')}</code>`,
+      ];
+      return { code: 'OK', text: lines.join('\n') };
+    } catch (err) {
+      return {
+        code: 'FAILED',
+        text: `${sym('fail')} Lỗi kiểm tra số dư <b>${escapeHtml(player)}</b>: ${escapeHtml(err.message || String(err))}`,
+      };
+    }
   }
 
   // ===== Các lệnh điều khiển (Admin) =====
