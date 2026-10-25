@@ -1001,21 +1001,41 @@ class BotSession extends EventEmitter {
       } catch (e) { dbg('BotSession', e); }
     });
     // >>> TEMP DEBUG (xoá sau khi xác định key scoreboard) >>>
-    mc.on('scoreboardUpdated', () => {
-      console.log('=== SCOREBOARD RAW ===');
-      for (const [name, sb] of Object.entries(mc.scoreboards || {})) {
-        console.log(`[${name}] items:`, Object.keys(sb.itemsMap || {}));
-        for (const [entry, item] of Object.entries(sb.itemsMap || {})) {
-          console.log(`  entry="${entry}" score=${item?.value} displayName=`, item?.displayName);
-        }
-        // teamMap prefix/suffix (server dùng team để tô màu)
-        if (mc.teamMap) {
-          for (const [tname, team] of Object.entries(mc.teamMap)) {
-            if (team.members?.length) console.log(`  team[${tname}] members:`, team.members, 'prefix:', team.prefix, 'suffix:', team.suffix);
+    // Lưu ý: mineflayer KHÔNG có sự kiện 'scoreboardUpdated' — các sự kiện thật là
+    // scoreboardCreated / scoreUpdated / scoreRemoved / scoreboardPosition / scoreboardTitleChanged.
+    {
+      const _txt = v => { try { return v == null ? v : (typeof v.toMotd === 'function' ? v.toMotd() : (typeof v === 'string' ? v : JSON.stringify(v))); } catch { return String(v); } };
+      let _lastDump = 0, _pending = null;
+      const _dump = (why) => {
+        console.log(`=== SCOREBOARD RAW (${why}) ===`);
+        const sbs = Object.entries(mc.scoreboards || {});
+        console.log('scoreboards:', sbs.map(([n, sb]) => `${n}(${Object.keys(sb.itemsMap || {}).length})`).join(', ') || '(none)');
+        console.log('sidebar position:', Object.keys(mc.scoreboard || {}));
+        for (const [name, sb] of sbs) {
+          console.log(`[${name}] title=`, _txt(sb.title), 'items:', Object.keys(sb.itemsMap || {}));
+          for (const [entry, item] of Object.entries(sb.itemsMap || {})) {
+            console.log(`  entry="${entry}" score=${item?.value} displayName=`, _txt(item?.displayName));
           }
         }
+        for (const [tname, team] of Object.entries(mc.teamMap || {})) {
+          if (team.members?.length) console.log(`  team[${tname}] members:`, team.members, 'prefix:', _txt(team.prefix), 'suffix:', _txt(team.suffix));
+        }
+      };
+      const _schedule = (why) => {
+        const wait = _lastDump + 3000 - Date.now();
+        if (wait <= 0) { _lastDump = Date.now(); _dump(why); return; }
+        if (_pending) return;
+        _pending = setTimeout(() => { _pending = null; _lastDump = Date.now(); _dump(why + ', trễ'); }, wait);
+        if (_pending.unref) _pending.unref();
+      };
+      for (const ev of ['scoreboardCreated', 'scoreUpdated', 'scoreRemoved', 'scoreboardPosition', 'scoreboardTitleChanged']) {
+        mc.on(ev, () => _schedule(ev));
       }
-    });
+      // chốt hạ: dump định kỳ 10s/lần phòng khi không có sự kiện nào bắn
+      const _iv = setInterval(() => _dump('định kỳ 10s'), 10000);
+      if (_iv.unref) _iv.unref();
+      mc.once('end', () => clearInterval(_iv));
+    }
     // <<< TEMP DEBUG <<<
     mc.on('scoreboardUpdated', () => {
       try {
