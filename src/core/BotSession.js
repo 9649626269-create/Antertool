@@ -1001,25 +1001,32 @@ class BotSession extends EventEmitter {
       } catch (e) { dbg('BotSession', e); }
     });
     // >>> TEMP DEBUG (xoá sau khi xác định key scoreboard) >>>
-    // Lưu ý: mineflayer KHÔNG có sự kiện 'scoreboardUpdated' — các sự kiện thật là
-    // scoreboardCreated / scoreUpdated / scoreRemoved / scoreboardPosition / scoreboardTitleChanged.
+    // mineflayer KHÔNG có sự kiện 'scoreboardUpdated'; sự kiện thật: scoreboardCreated / scoreUpdated /
+    // scoreRemoved / scoreboardPosition / scoreboardTitleChanged. Log đi qua this.log để hiện trong console tool.
     {
+      const L = m => this.log('warn', '[SBDEBUG] ' + m);
       const _txt = v => { try { return v == null ? v : (typeof v.toMotd === 'function' ? v.toMotd() : (typeof v === 'string' ? v : JSON.stringify(v))); } catch { return String(v); } };
-      let _lastDump = 0, _pending = null;
+      L('Đã bật debug scoreboard (BotSession.js bản debug v3 đang chạy)');
+      let _last = '', _lastDump = 0, _pending = null;
       const _dump = (why) => {
-        console.log(`=== SCOREBOARD RAW (${why}) ===`);
+        const out = [];
         const sbs = Object.entries(mc.scoreboards || {});
-        console.log('scoreboards:', sbs.map(([n, sb]) => `${n}(${Object.keys(sb.itemsMap || {}).length})`).join(', ') || '(none)');
-        console.log('sidebar position:', Object.keys(mc.scoreboard || {}));
+        out.push('scoreboards: ' + (sbs.map(([n, sb]) => `${n}(${Object.keys(sb.itemsMap || {}).length})`).join(', ') || '(none)'));
+        out.push('sidebar slots: ' + JSON.stringify(Object.keys(mc.scoreboard || {})));
         for (const [name, sb] of sbs) {
-          console.log(`[${name}] title=`, _txt(sb.title), 'items:', Object.keys(sb.itemsMap || {}));
+          out.push(`[${name}] title=${_txt(sb.title)} items=${JSON.stringify(Object.keys(sb.itemsMap || {}))}`);
           for (const [entry, item] of Object.entries(sb.itemsMap || {})) {
-            console.log(`  entry="${entry}" score=${item?.value} displayName=`, _txt(item?.displayName));
+            out.push(`  entry="${entry}" score=${item?.value} displayName=${_txt(item?.displayName)}`);
           }
         }
         for (const [tname, team] of Object.entries(mc.teamMap || {})) {
-          if (team.members?.length) console.log(`  team[${tname}] members:`, team.members, 'prefix:', _txt(team.prefix), 'suffix:', _txt(team.suffix));
+          if (team.members?.length) out.push(`  team[${tname}] members=${JSON.stringify(team.members)} prefix=${_txt(team.prefix)} suffix=${_txt(team.suffix)}`);
         }
+        const body = out.join('\n');
+        if (body === _last && why !== 'định kỳ') return; // không lặp lại khi không đổi
+        _last = body;
+        L(`=== SCOREBOARD RAW (${why}) ===`);
+        for (const line of out) L(line);
       };
       const _schedule = (why) => {
         const wait = _lastDump + 3000 - Date.now();
@@ -1029,10 +1036,10 @@ class BotSession extends EventEmitter {
         if (_pending.unref) _pending.unref();
       };
       for (const ev of ['scoreboardCreated', 'scoreUpdated', 'scoreRemoved', 'scoreboardPosition', 'scoreboardTitleChanged']) {
-        mc.on(ev, () => _schedule(ev));
+        mc.on(ev, () => { try { _schedule(ev); } catch (e) { L('lỗi dump: ' + e.message); } });
       }
-      // chốt hạ: dump định kỳ 10s/lần phòng khi không có sự kiện nào bắn
-      const _iv = setInterval(() => _dump('định kỳ 10s'), 10000);
+      // chốt hạ: dump định kỳ 15s/lần phòng khi không có sự kiện nào bắn
+      const _iv = setInterval(() => { try { _dump('định kỳ'); } catch (e) { L('lỗi dump: ' + e.message); } }, 15000);
       if (_iv.unref) _iv.unref();
       mc.once('end', () => clearInterval(_iv));
     }
