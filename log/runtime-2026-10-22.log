@@ -1,0 +1,419 @@
+2026-10-22 00:45:18.278 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 00:45:20.496 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 00:45:20.615 [SYS   ] [Accchinh] Doanh thu: +2.83m ← "+$ 2.83M"
+2026-10-22 00:45:21.414 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 00:45:25.436 [OK    ] [Accchinh] Doanh thu vòng này: 2.83m (1 tin / 1/1 lồng)
+2026-10-22 00:45:25.519 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 02:15:18.359 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:15:23.296 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:15:28.625 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:15:28.676 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:15:28.682 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 1/10)
+2026-10-22 02:15:29.306 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 02:15:35.827 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:15:38.337 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:15:43.282 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:15:49.838 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:15:49.843 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:15:49.848 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 2/10)
+2026-10-22 02:15:50.456 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 2) — đứng yên chờ teleport 5s...
+2026-10-22 02:15:56.989 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:15:59.618 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:16:04.593 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:16:11.142 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:16:11.147 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:16:11.153 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 3/10)
+2026-10-22 02:16:11.760 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 3) — đứng yên chờ teleport 5s...
+2026-10-22 02:16:18.168 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.4s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:16:20.795 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:16:24.911 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:16:31.472 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:16:31.477 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:16:31.482 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 4/10)
+2026-10-22 02:16:32.089 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 4) — đứng yên chờ teleport 5s...
+2026-10-22 02:16:38.602 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:16:41.073 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:16:46.063 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:16:52.539 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:16:52.544 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:16:52.549 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 5/10)
+2026-10-22 02:16:53.155 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 5) — đứng yên chờ teleport 5s...
+2026-10-22 02:16:59.674 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:17:02.208 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:17:07.120 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:17:13.610 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:17:13.614 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:17:13.619 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 6/10)
+2026-10-22 02:17:14.227 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 6) — đứng yên chờ teleport 5s...
+2026-10-22 02:17:20.742 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:17:23.368 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:17:27.455 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:17:33.869 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 02:17:33.874 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:17:33.879 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 7/10)
+2026-10-22 02:17:34.491 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 7) — đứng yên chờ teleport 5s...
+2026-10-22 02:17:41.005 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 02:17:43.517 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 02:17:48.459 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 02:17:50.853 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 02:17:50.979 [SYS   ] [Accchinh] Doanh thu: +2.94m ← "+$ 2.94M"
+2026-10-22 02:17:51.832 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 02:17:51.837 [OK    ] [Accchinh] Auto-sell Spawn: bán được 1/1 lồng sau khi gõ /home treolong 7 lần
+2026-10-22 02:17:55.850 [OK    ] [Accchinh] Doanh thu vòng này: 2.94m (1 tin / 1/1 lồng)
+2026-10-22 02:17:55.942 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 03:45:18.357 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 03:45:23.370 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 03:45:24.670 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 03:45:24.812 [SYS   ] [Accchinh] Doanh thu: +2.79m ← "+$ 2.79M"
+2026-10-22 03:45:25.677 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 03:45:29.690 [OK    ] [Accchinh] Doanh thu vòng này: 2.79m (1 tin / 1/1 lồng)
+2026-10-22 03:45:29.776 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 04:24:08.189 [SYS   ] [S1] Lịch nghỉ: tự out (sẽ vô lại lúc 05:05)
+2026-10-22 04:24:08.224 [SYS   ] [S1] AFK đã dừng
+2026-10-22 04:24:08.231 [SYS   ] [S1] AFK đã dừng
+2026-10-22 04:24:08.253 [SYS   ] [S1] Bot đã tắt
+2026-10-22 04:24:08.258 [SYS   ] [Accchinh] Lịch nghỉ: tự out (sẽ vô lại lúc 05:05)
+2026-10-22 04:24:08.264 [SYS   ] [Accchinh] AFK đã dừng
+2026-10-22 04:24:08.268 [SYS   ] [Accchinh] AFK đã dừng
+2026-10-22 04:24:08.274 [SYS   ] [Accchinh] Bot đã tắt
+2026-10-22 05:05:08.264 [SYS   ] [S1] Lịch nghỉ: hết giờ, tự vô lại
+2026-10-22 05:05:08.408 [SYS   ] [Accchinh] Lịch nghỉ: hết giờ, tự vô lại
+2026-10-22 05:05:12.728 [OK    ] [Accchinh] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 05:05:12.742 [SYS   ] [Accchinh] Đã gửi client settings (vanilla profile)
+2026-10-22 05:05:12.747 [SYS   ] [Accchinh] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 05:05:12.820 [OK    ] [Accchinh] Spawn thành công
+2026-10-22 05:05:14.820 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 05:05:14.825 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 05:05:14.829 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 05:05:14.865 [OK    ] [S1] Spawn thành công
+2026-10-22 05:05:19.063 [OK    ] [S1] Đã gửi /dn
+2026-10-22 05:05:19.117 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 05:05:19.120 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 05:05:20.390 [OK    ] [Accchinh] Đã gửi /dn
+2026-10-22 05:05:20.411 [OK    ] [Accchinh] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 05:05:20.416 [SYS   ] [Accchinh] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 05:05:24.366 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 05:05:26.413 [OK    ] [S1] Đã mở GUI menu: [MENU] — click ô vào server
+2026-10-22 05:05:26.420 [SYS   ] [S1] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 05:05:26.424 [SYS   ] [S1] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 05:05:26.444 [SYS   ] [S1] Click slot 24 trong [MENU]
+2026-10-22 05:05:26.448 [OK    ] [S1] Menu xong (click ô 24) — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell
+2026-10-22 05:05:26.454 [SYS   ] [S1] Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng
+2026-10-22 05:05:27.120 [SYS   ] [Accchinh] Gửi menu lần 1: /menu
+2026-10-22 05:05:29.698 [OK    ] [Accchinh] Đã mở GUI menu: [MENU] — click ô vào server
+2026-10-22 05:05:29.704 [SYS   ] [Accchinh] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 05:05:29.709 [SYS   ] [Accchinh] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 05:05:29.720 [SYS   ] [Accchinh] Click slot 24 trong [MENU]
+2026-10-22 05:05:29.725 [OK    ] [Accchinh] Menu xong (click ô 24) — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell
+2026-10-22 05:05:29.729 [SYS   ] [Accchinh] Cổng vị trí: sẽ bật spawnerprotect + autosell_spawn khi bot ở gần lồng spawn (lệch vị trí → tự gõ /home treolong)
+2026-10-22 05:05:30.737 [SYS   ] [Accchinh] Cổng vị trí: bot CHƯA ở gần lồng (autosell_spawn 0/1 lồng trong tầm, spawnerprotect 0/1 lồng cạnh bot; lồng gần nhất -6903.0, -63.0, -17574.0 cách 18881.7 block (chunk chưa tải)) — chưa bật spawnerprotect/autosell
+2026-10-22 05:05:32.510 [OK    ] [S1] Đã bật: (không có tính năng nào cần bật) — không có lồng để đối chiếu vị trí
+2026-10-22 05:05:32.741 [SYS   ] [Accchinh] Cổng vị trí: đã thấy lồng cạnh bot (autosell_spawn 1/1 lồng trong tầm, spawnerprotect 1/1 lồng cạnh bot) — xác nhận đứng yên 2.5s
+2026-10-22 05:05:35.875 [SYS   ] [Accchinh] Bảo vệ Lồng Spawn: BẬT (1 lồng) — 🟡 mức 2 "Cân bằng": người lạ 20b/5tick, nguy hiểm 32b, TNT, Wither, đào bề mặt(2), tự đập
+2026-10-22 05:05:35.884 [SYS   ] [Accchinh] Auto-sell Spawn: BẬT — 1 lồng, click ô 50, lặp mỗi 1 giờ 30 phút
+2026-10-22 05:05:35.888 [OK    ] [Accchinh] Đã bật: ✓ spawnerprotect | ✓ autosell_spawn
+2026-10-22 05:05:36.125 [SYS   ] [Accchinh] Bảo vệ Lồng Spawn: đã ở cạnh lồng — bắt đầu canh sau 3.0s
+2026-10-22 05:05:36.205 [SYS   ] [Accchinh] Auto-sell Spawn: đã chỉnh góc nhìn về lồng — tư thế bò/bơi (mắt +0.40, trần thấp ép, trần cao 0.81) (-6903,-63,-17574)
+2026-10-22 05:05:42.827 [SYS   ] [Accchinh] Kết nối ổn định
+2026-10-22 05:05:43.887 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 05:05:44.869 [SYS   ] [S1] Kết nối ổn định
+2026-10-22 05:05:48.191 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 05:05:50.313 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 05:05:50.440 [SYS   ] [Accchinh] Doanh thu: +1.48m ← "+$ 1.48M"
+2026-10-22 05:05:51.480 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 05:05:55.499 [OK    ] [Accchinh] Doanh thu vòng này: 1.48m (1 tin / 1/1 lồng)
+2026-10-22 05:05:55.567 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 06:35:43.889 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 06:35:48.933 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 06:35:55.435 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 06:35:55.440 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 06:35:55.447 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 1/10)
+2026-10-22 06:35:56.060 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 06:36:02.587 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 06:36:04.950 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 06:36:09.943 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 06:36:16.413 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 06:36:16.417 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 06:36:16.422 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 2/10)
+2026-10-22 06:36:17.029 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 2) — đứng yên chờ teleport 5s...
+2026-10-22 06:36:23.564 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 06:36:26.186 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 06:36:30.966 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 06:36:37.469 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 06:36:37.474 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 06:36:37.479 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 3/10)
+2026-10-22 06:36:38.086 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 3) — đứng yên chờ teleport 5s...
+2026-10-22 06:36:44.611 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 06:36:47.032 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 06:36:52.015 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 06:36:58.525 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 06:36:58.530 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 06:36:58.535 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 4/10)
+2026-10-22 06:36:59.142 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 4) — đứng yên chờ teleport 5s...
+2026-10-22 06:37:05.662 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 06:37:08.208 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 06:37:13.180 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 06:37:19.609 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 06:37:19.614 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 06:37:19.619 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 5/10)
+2026-10-22 06:37:20.225 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 5) — đứng yên chờ teleport 5s...
+2026-10-22 06:37:26.735 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 06:37:29.232 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 06:37:34.169 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 06:37:36.378 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 06:37:36.480 [SYS   ] [Accchinh] Doanh thu: +2.87m ← "+$ 2.87M"
+2026-10-22 06:37:37.496 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 06:37:37.501 [OK    ] [Accchinh] Auto-sell Spawn: bán được 1/1 lồng sau khi gõ /home treolong 5 lần
+2026-10-22 06:37:41.511 [OK    ] [Accchinh] Doanh thu vòng này: 2.87m (1 tin / 1/1 lồng)
+2026-10-22 06:37:41.583 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 08:05:43.902 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 08:05:48.939 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 08:05:55.385 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 08:05:55.395 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 08:05:55.399 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 1/10)
+2026-10-22 08:05:56.019 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 08:06:02.345 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.3s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 08:06:05.008 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 08:06:10.067 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 08:06:12.345 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 08:06:12.453 [SYS   ] [Accchinh] Doanh thu: +2.81m ← "+$ 2.81M"
+2026-10-22 08:06:13.638 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 08:06:13.643 [OK    ] [Accchinh] Auto-sell Spawn: bán được 1/1 lồng sau khi gõ /home treolong 1 lần
+2026-10-22 08:06:17.661 [OK    ] [Accchinh] Doanh thu vòng này: 2.81m (1 tin / 1/1 lồng)
+2026-10-22 08:06:17.739 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 09:35:43.898 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 09:35:48.900 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 09:35:51.292 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 09:35:51.437 [SYS   ] [Accchinh] Doanh thu: +2.82m ← "+$ 2.82M"
+2026-10-22 09:35:52.284 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 09:35:56.297 [OK    ] [Accchinh] Doanh thu vòng này: 2.82m (1 tin / 1/1 lồng)
+2026-10-22 09:35:56.380 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 11:05:43.900 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 11:05:48.684 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 11:05:50.748 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 11:05:50.874 [SYS   ] [Accchinh] Doanh thu: +2.82m ← "+$ 2.82M"
+2026-10-22 11:05:51.663 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 11:05:55.847 [OK    ] [Accchinh] Doanh thu vòng này: 2.82m (1 tin / 1/1 lồng)
+2026-10-22 11:05:55.921 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 12:35:43.903 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 12:35:48.961 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 12:35:55.370 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 12:35:55.375 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 12:35:55.379 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 1/10)
+2026-10-22 12:35:55.990 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 12:36:02.516 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 12:36:04.973 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 12:36:07.175 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 12:36:07.286 [SYS   ] [Accchinh] Doanh thu: +2.81m ← "+$ 2.81M"
+2026-10-22 12:36:08.187 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 12:36:08.192 [OK    ] [Accchinh] Auto-sell Spawn: bán được 1/1 lồng sau khi gõ /home treolong 1 lần
+2026-10-22 12:36:12.200 [OK    ] [Accchinh] Doanh thu vòng này: 2.81m (1 tin / 1/1 lồng)
+2026-10-22 12:36:12.278 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 14:05:43.903 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 14:05:46.122 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 14:05:46.272 [SYS   ] [Accchinh] Doanh thu: +2.8m ← "+$ 2.8M"
+2026-10-22 14:05:46.959 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 14:05:51.015 [OK    ] [Accchinh] Doanh thu vòng này: 2.8m (1 tin / 1/1 lồng)
+2026-10-22 14:05:51.100 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 14:45:29.945 [ERR   ] [S1] read ECONNABORTED
+2026-10-22 14:45:29.981 [SYS   ] [S1] AFK đã dừng
+2026-10-22 14:45:30.009 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 1/10 sau 1.2s (backoff)
+2026-10-22 14:45:30.022 [ERR   ] [Accchinh] read ECONNABORTED
+2026-10-22 14:45:30.031 [SYS   ] [Accchinh] AFK đã dừng
+2026-10-22 14:45:30.038 [WARN  ] [Accchinh] Mất kết nối (socketClosed) — thử lại lần 1/10 sau 1.3s (backoff)
+2026-10-22 14:45:31.584 [ERR   ] [S1] getaddrinfo ENOTFOUND Kingmc.vn
+2026-10-22 14:45:31.588 [WARN  ] [S1] Reconnect bị chặn (cooldown 14s) — socketClosed
+2026-10-22 14:45:31.676 [ERR   ] [Accchinh] getaddrinfo ENOTFOUND Kingmc.vn
+2026-10-22 14:45:31.681 [WARN  ] [Accchinh] Reconnect bị chặn (cooldown 14s) — socketClosed
+2026-10-22 14:45:45.472 [SYS   ] [S1] AFK đã dừng
+2026-10-22 14:45:45.480 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 2/10 sau 1.6s (backoff)
+2026-10-22 14:45:45.536 [SYS   ] [Accchinh] AFK đã dừng
+2026-10-22 14:45:45.540 [WARN  ] [Accchinh] Mất kết nối (socketClosed) — thử lại lần 2/10 sau 2.4s (backoff)
+2026-10-22 14:45:52.824 [OK    ] [Accchinh] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 14:45:52.837 [SYS   ] [Accchinh] Đã gửi client settings (vanilla profile)
+2026-10-22 14:45:52.844 [SYS   ] [Accchinh] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 14:45:52.894 [OK    ] [Accchinh] Spawn thành công
+2026-10-22 14:45:54.814 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 14:45:54.820 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 14:45:54.824 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 14:45:54.851 [OK    ] [S1] Spawn thành công
+2026-10-22 14:45:58.352 [OK    ] [Accchinh] Đã gửi /dn
+2026-10-22 14:45:58.415 [OK    ] [Accchinh] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 14:45:58.420 [SYS   ] [Accchinh] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 14:46:00.986 [OK    ] [S1] Đã gửi /dn
+2026-10-22 14:46:01.192 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 14:46:01.195 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 14:46:05.553 [SYS   ] [Accchinh] Gửi menu lần 1: /menu
+2026-10-22 14:46:07.895 [OK    ] [Accchinh] Đã mở GUI menu: [MENU] — click ô vào server
+2026-10-22 14:46:07.905 [SYS   ] [Accchinh] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 14:46:07.910 [SYS   ] [Accchinh] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 14:46:07.933 [SYS   ] [Accchinh] Click slot 24 trong [MENU]
+2026-10-22 14:46:07.937 [OK    ] [Accchinh] Menu xong (click ô 24) — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell
+2026-10-22 14:46:07.943 [SYS   ] [Accchinh] Cổng vị trí: sẽ bật spawnerprotect + autosell_spawn khi bot ở gần lồng spawn (lệch vị trí → tự gõ /home treolong)
+2026-10-22 14:46:08.205 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 14:46:08.949 [SYS   ] [Accchinh] Cổng vị trí: bot CHƯA ở gần lồng (autosell_spawn 0/1 lồng trong tầm, spawnerprotect 0/1 lồng cạnh bot; lồng gần nhất -6903.0, -63.0, -17574.0 cách 18881.7 block (chunk chưa tải)) — chưa bật spawnerprotect/autosell
+2026-10-22 14:46:10.229 [OK    ] [S1] Đã mở GUI menu: [MENU] — click ô vào server
+2026-10-22 14:46:10.234 [SYS   ] [S1] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 14:46:10.237 [SYS   ] [S1] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 14:46:10.245 [SYS   ] [S1] Click slot 24 trong [MENU]
+2026-10-22 14:46:10.249 [OK    ] [S1] Menu xong (click ô 24) — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell
+2026-10-22 14:46:10.253 [SYS   ] [S1] Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng
+2026-10-22 14:46:10.953 [SYS   ] [Accchinh] Cổng vị trí: đã thấy lồng cạnh bot (autosell_spawn 1/1 lồng trong tầm, spawnerprotect 1/1 lồng cạnh bot) — xác nhận đứng yên 2.5s
+2026-10-22 14:46:13.795 [SYS   ] [Accchinh] Bảo vệ Lồng Spawn: BẬT (1 lồng) — 🟡 mức 2 "Cân bằng": người lạ 20b/5tick, nguy hiểm 32b, TNT, Wither, đào bề mặt(2), tự đập
+2026-10-22 14:46:13.804 [SYS   ] [Accchinh] Auto-sell Spawn: BẬT — 1 lồng, click ô 50, lặp mỗi 1 giờ 30 phút
+2026-10-22 14:46:13.809 [OK    ] [Accchinh] Đã bật: ✓ spawnerprotect | ✓ autosell_spawn
+2026-10-22 14:46:14.044 [SYS   ] [Accchinh] Bảo vệ Lồng Spawn: đã ở cạnh lồng — bắt đầu canh sau 3.0s
+2026-10-22 14:46:14.255 [SYS   ] [Accchinh] Auto-sell Spawn: đã chỉnh góc nhìn về lồng — tư thế bò/bơi (mắt +0.40, trần thấp ép, trần cao 0.81) (-6903,-63,-17574)
+2026-10-22 14:46:16.946 [OK    ] [S1] Đã bật: (không có tính năng nào cần bật) — không có lồng để đối chiếu vị trí
+2026-10-22 14:46:21.805 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 14:46:22.939 [SYS   ] [Accchinh] Kết nối ổn định
+2026-10-22 14:46:24.859 [SYS   ] [S1] Kết nối ổn định
+2026-10-22 14:46:25.759 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 14:46:32.197 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 14:46:32.203 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 14:46:32.210 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 1/10)
+2026-10-22 14:46:32.818 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 14:46:39.341 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.5s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 14:46:41.842 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 14:46:44.096 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 14:46:44.197 [SYS   ] [Accchinh] Doanh thu: +1.27m ← "+$ 1.27M"
+2026-10-22 14:46:45.370 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 14:46:45.375 [OK    ] [Accchinh] Auto-sell Spawn: bán được 1/1 lồng sau khi gõ /home treolong 1 lần
+2026-10-22 14:46:49.380 [OK    ] [Accchinh] Doanh thu vòng này: 1.27m (1 tin / 1/1 lồng)
+2026-10-22 14:46:49.439 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 16:16:21.809 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 16:16:23.689 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 16:16:23.821 [SYS   ] [Accchinh] Doanh thu: +2.81m ← "+$ 2.81M"
+2026-10-22 16:16:24.843 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 16:16:28.860 [OK    ] [Accchinh] Doanh thu vòng này: 2.81m (1 tin / 1/1 lồng)
+2026-10-22 16:16:28.938 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 17:46:21.857 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 17:46:26.798 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 17:46:32.578 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 17:46:32.593 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 17:46:32.599 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 1/10)
+2026-10-22 17:46:33.213 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 17:46:39.498 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.3s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 17:46:42.135 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 17:46:47.120 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 17:46:53.608 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 17:46:53.612 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 17:46:53.615 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 2/10)
+2026-10-22 17:46:54.220 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 2) — đứng yên chờ teleport 5s...
+2026-10-22 17:47:00.535 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.3s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 17:47:03.302 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 17:47:07.014 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 17:47:13.555 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI không mở sau 9s
+2026-10-22 17:47:13.560 [WARN  ] [Accchinh] Auto-sell Spawn: xong 0/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 17:47:13.566 [WARN  ] [Accchinh] Auto-sell Spawn: bán chưa xong (0/1: (-6903,-63,-17574) GUI không mở sau 9s) → gõ /home treolong rồi bán lại (lần 3/10)
+2026-10-22 17:47:14.172 [SYS   ] [Accchinh] Auto-sell Spawn: đã gõ /home treolong (lần 3) — đứng yên chờ teleport 5s...
+2026-10-22 17:47:20.554 [OK    ] [Accchinh] Server báo /home treolong thành công sau 6.4s (bot đã ở sẵn chỗ treo nên vị trí không đổi) → -6902.5, -63.0, -17574.7. Server nói: "Đang dịch chuyển đến home treolong" | "Dịch chuyển thành công tới home treolong". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 17:47:23.085 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 17:47:24.438 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 17:47:24.586 [SYS   ] [Accchinh] Doanh thu: +2.88m ← "+$ 2.88M"
+2026-10-22 17:47:25.526 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 17:47:25.531 [OK    ] [Accchinh] Auto-sell Spawn: bán được 1/1 lồng sau khi gõ /home treolong 3 lần
+2026-10-22 17:47:29.537 [OK    ] [Accchinh] Doanh thu vòng này: 2.88m (1 tin / 1/1 lồng)
+2026-10-22 17:47:29.658 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 18:41:04.435 [SYS   ] [S1] AFK đã dừng
+2026-10-22 18:41:04.445 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 1/10 sau 1.3s (backoff)
+2026-10-22 18:41:15.995 [SYS   ] [Accchinh] Bảo vệ Lồng Spawn: không có lồng bên cạnh bot (đang ở khu spawn/khu khác?) — tạm nghỉ, không cảnh báo
+2026-10-22 18:41:18.986 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 18:41:18.995 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 18:41:19.002 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 18:41:20.700 [WARN  ] [Accchinh] Phát hiện bot KHÔNG còn ở gần vị trí treo lồng (autosell_spawn 0/1 lồng trong tầm, spawnerprotect 0/1 lồng cạnh bot) tại 4.5, 119.0, 3.5 — tự gõ /home treolong
+2026-10-22 18:41:21.317 [SYS   ] [Accchinh] Không ở gần vị trí treo lồng — đã gõ /home treolong (lần 1) — đứng yên chờ teleport 5s...
+2026-10-22 18:41:22.130 [OK    ] [S1] Spawn thành công
+2026-10-22 18:41:26.058 [OK    ] [S1] Đã gửi /dn
+2026-10-22 18:41:27.832 [SYS   ] [S1] Đã gửi lệnh đăng nhập — chờ server báo "Đăng nhập thành công" rồi mới vào menu...
+2026-10-22 18:41:29.722 [WARN  ] [Accchinh] Gõ /home treolong đã 8s mà KHÔNG bị dịch chuyển. Server KHÔNG trả lời gì → kiểm tra: home "treolong" còn tồn tại không, có đang cooldown/bị chặn lệnh không, bot có quyền dùng /home không.
+2026-10-22 18:41:36.890 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 18:41:36.894 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 18:41:41.832 [SYS   ] [Accchinh] Không ở gần vị trí treo lồng — đã gõ /home treolong (lần 2) — đứng yên chờ teleport 5s...
+2026-10-22 18:41:42.714 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 18:41:44.697 [OK    ] [S1] Đã mở GUI menu: [MENU] — click ô vào server
+2026-10-22 18:41:44.704 [SYS   ] [S1] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 18:41:44.708 [SYS   ] [S1] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 18:41:44.725 [SYS   ] [S1] Click slot 24 trong [MENU]
+2026-10-22 18:41:44.730 [OK    ] [S1] Menu xong (click ô 24) — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell
+2026-10-22 18:41:44.735 [SYS   ] [S1] Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng
+2026-10-22 18:41:50.303 [WARN  ] [Accchinh] Gõ /home treolong đã 8s mà KHÔNG bị dịch chuyển. Server nói: "Unknown command. Type "/help" for help." | "SẢNH ➞ Bạn đã đăng nhập!". Bot đứng yên nhưng server vẫn không teleport — xem tin server ở trên.
+2026-10-22 18:41:51.449 [OK    ] [S1] Đã bật: (không có tính năng nào cần bật) — không có lồng để đối chiếu vị trí
+2026-10-22 18:41:52.162 [SYS   ] [S1] Kết nối ổn định
+2026-10-22 18:42:02.081 [SYS   ] [Accchinh] Không ở gần vị trí treo lồng — đã gõ /home treolong (lần 3) — đứng yên chờ teleport 5s...
+2026-10-22 18:42:05.220 [SYS   ] [Accchinh] Gửi menu: /menu
+2026-10-22 18:42:06.948 [SYS   ] [Accchinh] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 18:42:06.955 [SYS   ] [Accchinh] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 18:42:06.969 [SYS   ] [Accchinh] Click slot 24 trong [MENU]
+2026-10-22 18:42:08.484 [SYS   ] [Accchinh] Bảo vệ Lồng Spawn: đã ở cạnh lồng — bắt đầu canh sau 3.0s
+2026-10-22 18:42:08.520 [OK    ] [Accchinh] Đã dịch chuyển 18883 block sau 6.4s (/home treolong) → -6902.5, -63.0, -17574.7. Server nói: "Unknown command. Type "/help" for help.". lồng gần nhất -6903.0, -63.0, -17574.0 cách 1.3 block (spawner OK)
+2026-10-22 18:42:08.525 [OK    ] [Accchinh] Đã về lại vị trí treo lồng sau 52s (đã gõ /home treolong 3 lần) (autosell_spawn 1/1 lồng trong tầm, spawnerprotect 1/1 lồng cạnh bot)
+2026-10-22 19:16:21.819 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 19:16:22.940 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 19:16:23.098 [SYS   ] [Accchinh] Doanh thu: +2.83m ← "+$ 2.83M"
+2026-10-22 19:16:23.984 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 19:16:28.004 [OK    ] [Accchinh] Doanh thu vòng này: 2.83m (1 tin / 1/1 lồng)
+2026-10-22 19:16:28.078 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 20:46:21.859 [SYS   ] [Accchinh] Auto-sell Spawn: bắt đầu vòng bán (1 lồng)
+2026-10-22 20:46:25.820 [WARN  ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI chưa mở sau 3.5s — nhắm lại rồi chuột phải lần 2/2
+2026-10-22 20:46:27.544 [SYS   ] [Accchinh] Auto-sell Spawn [1/1] (-6903,-63,-17574): GUI [64 Creeper] — click ô 50 "ʙáɴ ᴛấᴛ ᴄả"
+2026-10-22 20:46:27.659 [SYS   ] [Accchinh] Doanh thu: +2.85m ← "+$ 2.85M"
+2026-10-22 20:46:28.716 [OK    ] [Accchinh] Auto-sell Spawn: xong 1/1 lồng — vòng kế tiếp sau ~1 giờ 30 phút
+2026-10-22 20:46:32.729 [OK    ] [Accchinh] Doanh thu vòng này: 2.85m (1 tin / 1/1 lồng)
+2026-10-22 20:46:32.802 [SYS   ] [Accchinh] Đã gửi báo cáo doanh thu (webhook doanh thu riêng)
+2026-10-22 20:58:01.733 [SYS   ] [Accchinh] AFK đã dừng
+2026-10-22 20:58:01.739 [SYS   ] [Accchinh] AFK đã dừng
+2026-10-22 20:58:01.752 [SYS   ] [Accchinh] Bot đã tắt
+2026-10-22 21:36:44.535 [WARN  ] [S1] Bị kick: login_1: Đã xảy ra lỗi kết nối nội bộ của máy chủ.
+2026-10-22 21:36:44.575 [SYS   ] [S1] AFK đã dừng
+2026-10-22 21:36:44.718 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 1/10 sau 1.0s (backoff)
+2026-10-22 21:36:56.863 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 21:36:56.876 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 21:36:56.884 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 21:36:57.235 [OK    ] [S1] Spawn thành công
+2026-10-22 21:36:57.275 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 21:37:02.157 [OK    ] [S1] Đã gửi /dn
+2026-10-22 21:37:03.817 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 21:37:11.359 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 21:37:12.548 [WARN  ] [S1] Bị kick: Đã xảy ra lỗi nội bộ trong quá trình kết nối của bạn.
+2026-10-22 21:37:12.570 [SYS   ] [S1] AFK đã dừng
+2026-10-22 21:37:12.604 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 2/10 sau 2.3s (backoff)
+2026-10-22 21:37:21.772 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 21:37:21.777 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 21:37:21.780 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 21:37:22.059 [OK    ] [S1] Spawn thành công
+2026-10-22 21:37:22.070 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 21:37:26.614 [OK    ] [S1] Đã gửi /dn
+2026-10-22 21:37:29.112 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 21:37:36.147 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 21:37:44.162 [SYS   ] [S1] Gửi menu lần 2: /menu
+2026-10-22 21:37:44.659 [WARN  ] [S1] Bị kick: Đã xảy ra lỗi nội bộ trong quá trình kết nối của bạn.
+2026-10-22 21:37:44.670 [SYS   ] [S1] AFK đã dừng
+2026-10-22 21:37:44.697 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 3/10 sau 4.6s (backoff)
+2026-10-22 21:37:55.476 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 21:37:55.483 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 21:37:55.489 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 21:37:57.675 [OK    ] [S1] Spawn thành công
+2026-10-22 21:38:01.034 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 21:38:03.335 [OK    ] [S1] Đã gửi /dn
+2026-10-22 21:38:05.549 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 21:38:11.259 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 21:38:13.979 [WARN  ] [S1] Bị kick: Đã xảy ra lỗi nội bộ trong quá trình kết nối của bạn.
+2026-10-22 21:38:13.989 [SYS   ] [S1] AFK đã dừng
+2026-10-22 21:38:14.012 [WARN  ] [S1] Mất kết nối (socketClosed) — thử lại lần 4/10 sau 9.8s (backoff)
+2026-10-22 21:38:32.274 [OK    ] [S1] Đã đăng nhập → Kingmc.vn:25565
+2026-10-22 21:38:32.282 [SYS   ] [S1] Đã gửi client settings (vanilla profile)
+2026-10-22 21:38:32.287 [SYS   ] [S1] Giao thức: bot dùng MC 1.21.11 (protocol 774), config version="1.21.11" | mineflayer 4.39.0, minecraft-protocol 1.68.0 | block_place: hand,location,direction,cursorX,cursorY,cursorZ,insideBlock,worldBorderHit,sequence
+2026-10-22 21:38:32.677 [OK    ] [S1] Server xác nhận đăng nhập thành công — tiếp tục vào menu
+2026-10-22 21:38:32.683 [OK    ] [S1] Spawn thành công
+2026-10-22 21:38:38.828 [OK    ] [S1] Đã gửi /dn
+2026-10-22 21:38:40.655 [SYS   ] [S1] Login hoàn tất — bắt đầu menu retry...
+2026-10-22 21:38:48.211 [SYS   ] [S1] Gửi menu lần 1: /menu
+2026-10-22 21:38:51.765 [OK    ] [S1] Đã mở GUI menu: [MENU] — click ô vào server
+2026-10-22 21:38:51.777 [SYS   ] [S1] WindowRouter: unknown GUI [MENU] — fallback xử lý
+2026-10-22 21:38:51.783 [SYS   ] [S1] GUI debug: title="MENU" slots=90 type=minecraft:generic_9x6 item[0]=yellow_stained_glass_pane:KINGMC.VN x1
+2026-10-22 21:38:51.814 [SYS   ] [S1] Click slot 24 trong [MENU]
+2026-10-22 21:38:51.819 [OK    ] [S1] Menu xong (click ô 24) — chờ bot đứng đúng cạnh lồng rồi mới bật spawnerprotect / autosell
+2026-10-22 21:38:51.827 [SYS   ] [S1] Cổng vị trí: chưa có tính năng lồng/autosell nào đang BẬT — chỉ canh vị trí khi bạn bật chúng
+2026-10-22 21:38:57.862 [OK    ] [S1] Đã bật: (không có tính năng nào cần bật) — không có lồng để đối chiếu vị trí
+2026-10-22 21:39:02.709 [SYS   ] [S1] Kết nối ổn định

@@ -242,7 +242,7 @@ function startMock() {
   // ---------- 7) tích hợp BotManager ----------
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tgm-'));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
-    bots: [], telegramToken: '123456789:' + 'C'.repeat(35), telegramChatId: '555', telegramCommands: false, telegramRefreshSec: 0, telegramMinGapSec: 0, telegramNotifications: true,
+    bots: [], telegramToken: '123456789:' + 'C'.repeat(35), telegramChatId: '555', telegramCommands: false, telegramRefreshSec: 0, telegramMinGapSec: 0,
   }));
   const mgr = new BotManager({ configPath: path.join(dir, 'config.json') });
   await mgr.init();

@@ -1,59 +1,153 @@
 {
   "history": {
+    "8782802250": [
+      {
+        "role": "user",
+        "content": "khởi động 2 bot số 1 và 2"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Đã nhận đang làm — đang khởi động 2 bot: S1 (#1), Accchinh (#2)."
+      },
+      {
+        "role": "user",
+        "content": "xin chào"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Chào bạn! Em là AI-Anter sẵn sàng hỗ trợ điều khiển và kiểm tra dàn bot (khởi động/dừng, bật/tắt bán lồng, treo AFK, xem log và doanh thu)."
+      },
+      {
+        "role": "user",
+        "content": "hi"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Chào bạn! Em là AI-Anter sẵn sàng hỗ trợ điều khiển và kiểm tra dàn bot (khởi động/dừng, bật/tắt bán lồng, treo AFK, xem log và doanh thu)."
+      },
+      {
+        "role": "user",
+        "content": "xem stats bot"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Tình trạng dàn bot hiện tại (2/3 bot ONLINE):\n• #1 S1 (Noanno): ONLINE | Ping: 20ms | Rương: 36 ô | Tọa độ: 1, 60, 1\n• #2 Accchinh (dahas): ONLINE | Ping: 25ms | Rương: 4 ô | Tọa độ: -6903, -63, -17575\n• #3 Autosell (Slller): DISCONNECTED\n(Cả 2 bot online đang tắt tự bán & AFK, số dư hiện tại: 0$)"
+      },
+      {
+        "role": "user",
+        "content": "xem giờ hiện nay"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Không gọi được OmniRouter (HTTP 429: {\"error\":{\"message\":\"All credentials for model gemini-3.8-flash-medium are cooling down\",\"type\":\"rate_limit_error\",\"code\":\"model_cooldown\",\"model\":\"gemini-3.8-f) và chưa nhận diện được lệnh tại chỗ."
+      },
+      {
+        "role": "user",
+        "content": "xem ngày hôm nay"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Không gọi được OmniRouter (HTTP 429: {\"error\":{\"message\":\"All credentials for model gemini-3.8-flash-medium are cooling down\",\"type\":\"rate_limit_error\",\"code\":\"model_cooldown\",\"model\":\"gemini-3.8-f) và chưa nhận diện được lệnh tại chỗ."
+      }
+    ],
     "default": [
       {
         "role": "user",
-        "content": "bật bán lồng cho tất cả bot"
+        "content": "hi xem gio hien tai"
       },
       {
         "role": "assistant",
-        "content": "AI-Anter: Đã nhận đang làm — đã bật autosell_spawn cho bot-1 (#1), bot-2 (#2), bot-3 (#3)."
+        "content": "AI-Anter: Chào bạn! Em là AI-Anter sẵn sàng hỗ trợ điều khiển và kiểm tra dàn bot (khởi động/dừng, bật/tắt bán lồng, treo AFK, xem log và doanh thu)."
       },
       {
         "role": "user",
-        "content": "bật protect cho bot số 1 và 3"
+        "content": "hi xem gio hien tai"
       },
       {
         "role": "assistant",
-        "content": "AI-Anter: Đã nhận đang làm — đã bật bảo vệ lồng cho bot-1 (#1), bot-3 (#3)."
+        "content": "AI-Anter: Chào bạn! Em là AI-Anter sẵn sàng hỗ trợ điều khiển và kiểm tra dàn bot (khởi động/dừng, bật/tắt bán lồng, treo AFK, xem log và doanh thu)."
       },
       {
         "role": "user",
-        "content": "cho bot 2 về home"
+        "content": "xem giờ hiện tại"
       },
       {
         "role": "assistant",
-        "content": "AI-Anter: Đã nhận đang làm — đã gửi lệnh về home cho bot-2 (#2)."
+        "content": "AI-Anter: Không gọi được OmniRouter (HTTP 429: {\"error\":{\"message\":\"All credentials for model gemini-3.8-flash-medium are cooling down\",\"type\":\"rate_limit_error\",\"code\":\"model_cooldown\",\"model\":\"gemini-3.8-f) và chưa nhận diện được lệnh tại chỗ."
       },
       {
         "role": "user",
-        "content": "chạy macro mualong trên bot số 1"
+        "content": "xem giờ hiện tại"
       },
       {
         "role": "assistant",
-        "content": "AI-Anter: Đã nhận đang làm — đang chạy macro \"mualong\" trên bot-1 (#1)."
+        "content": "AI-Anter: Không gọi được OmniRouter (HTTP 429: {\"error\":{\"message\":\"All credentials for model gemini-3.8-flash-medium are cooling down\",\"type\":\"rate_limit_error\",\"code\":\"model_cooldown\",\"model\":\"gemini-3.8-f) và chưa nhận diện được lệnh tại chỗ."
       },
       {
         "role": "user",
-        "content": "dừng bot số 2"
+        "content": "xem giờ hiện tại"
       },
       {
         "role": "assistant",
-        "content": "AI-Anter: Đã nhận đang làm — đã dừng 1 bot: bot-2 (#2)."
+        "content": "AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: \"ai set <omnirouter_api_key>\" để cập nhật khoá hợp lệ nhé."
+      },
+      {
+        "role": "user",
+        "content": "xem giờ hiện tại"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: \"ai set <omnirouter_api_key>\" để cập nhật khoá hợp lệ nhé."
+      },
+      {
+        "role": "user",
+        "content": "xem giờ hiện tại"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: \"ai set <omnirouter_api_key>\" để cập nhật khoá hợp lệ nhé."
+      },
+      {
+        "role": "user",
+        "content": "xem giờ hiện tại"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: \"ai set <omnirouter_api_key>\" để cập nhật khoá hợp lệ nhé."
+      },
+      {
+        "role": "user",
+        "content": "xem giờ hiện tại"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: \"ai set <omnirouter_api_key>\" để cập nhật khoá hợp lệ nhé."
+      },
+      {
+        "role": "user",
+        "content": "xem giờ hiện tại"
+      },
+      {
+        "role": "assistant",
+        "content": "AI-Anter: Khoá API OmniRouter chưa đúng hoặc đã hết hạn (lỗi 401: Incorrect API key). Bạn vui lòng dùng lệnh: \"ai set <omnirouter_api_key>\" để cập nhật khoá hợp lệ nhé."
       }
     ]
   },
   "memory": {},
   "lastTargets": [
-    "bot-2"
+    "S1",
+    "Accchinh",
+    "Autosell"
   ],
   "lastActions": [
     {
-      "type": "stop",
+      "type": "status",
       "targets": [
-        "bot-2"
+        "S1",
+        "Accchinh",
+        "Autosell"
       ]
     }
   ],
-  "updatedAt": 1792770957971
+  "updatedAt": 1792828718236
 }

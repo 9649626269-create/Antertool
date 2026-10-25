@@ -1,0 +1,14 @@
+{
+  "Accchinh": {
+    "enabled": false,
+    "threshold": 1,
+    "items": [
+      "cobblestone"
+    ],
+    "command": "/sell",
+    "clicks": [
+      -1,
+      -9
+    ]
+  }
+}

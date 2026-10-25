@@ -52,7 +52,6 @@ const TELEGRAM_DEFAULTS = Object.freeze({
   telegramRecentLimit: 8,
   telegramTimezone: 'Asia/Ho_Chi_Minh',
   telegramSymbols: 'unicode',
-  telegramNotifications: false,
 });
 
 function parseCsvList(val) {
