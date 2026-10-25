@@ -1,17 +1,20 @@
 'use strict';
 /**
- * DiscordTheme.js — Hệ thống giao diện tập trung cho thông báo Discord Webhook của Antertool (Hybrid v3 — Tách kênh & Bố cục gọn sạch).
+ * DiscordTheme.js — Hệ thống giao diện tập trung cho mọi thông báo & Bảng Trạng Thái Trực Tiếp (Live Dashboard) trên Discord Webhook của Antertool.
  *
- *  - Tách biệt rõ 2 luồng hiển thị để không bao giờ bị lộn xộn:
- *      1. Kênh Cảnh Báo & Sự Kiện (Alerts Webhook): chỉ hiển thị thông tin sự cố/trạng thái gọn gàng, không lặp thông tin.
- *      2. Kênh Bảng Trực Tiếp 10s & Doanh Thu (Revenue / Live Panel Webhook): hiển thị bảng Monospace căn cột thẳng hàng,
- *         tách biệt hoàn toàn khỏi luồng cảnh báo sự cố.
+ *  - Ánh xạ mọi eventKey tới { emoji, color, severity, label, headline }.
  *  - Bảng màu theo mức độ (severity):
  *      • success  = 0x6ef16f (xanh lá — giữ chuẩn "Kiểm Tra Kết Nối Webhook")
  *      • info     = 0x38bdf8 (xanh dương)
  *      • warning  = 0xf59e0b (vàng hổ phách)
  *      • critical = 0xef4444 (đỏ báo động)
  *      • report   = 0xcf8338 (cam — giữ chuẩn "Báo Cáo Tổng Kết ...")
+ *  - Cung cấp các hàm định dạng phong phú: Title Case tiếng Việt kèm emoji,
+ *    author + avatar mc-heads, thanh tiến độ (▰▰▰▱▱ 60%), timestamp tương đối (<t:unix:R>),
+ *    blockquote cho lý do kick, code block cho lệnh/log, định dạng tiền ($41.35K),
+ *    che thông tin nhạy cảm (secrets) và cắt chuỗi an toàn theo code point trong giới hạn Discord.
+ *  - Dựng Bảng Điều Khiển Trực Tiếp (Live Dashboard Embed) cập nhật tại chỗ mỗi 10s (`buildLivePanelEmbed`, `livePanelSig`)
+ *    và Bản Tin Gộp Chống Bão (`buildDigestEmbed`).
  */
 const RevenueTracker = require('./RevenueTracker');
 
@@ -552,10 +555,12 @@ function enforceEmbedLimits(rawEmbed = {}, extraSecrets = []) {
 
 /**
  * Tạo chữ ký trạng thái của Bảng Trực Tiếp (Live Panel) để phát hiện thay đổi.
+ * Khi tất cả bot đang nghỉ/offline và không có biến động doanh thu/sự kiện,
+ * Notifier có thể bỏ qua lệnh PATCH không cần thiết.
  */
 function livePanelSig(snapshot = {}) {
   const bots = Array.isArray(snapshot.bots) ? snapshot.bots : [];
-  return bots.map(b => [
+  const botSigs = bots.map(b => [
     b.botId,
     b.connState,
     b.disabled ? 1 : 0,
@@ -563,14 +568,17 @@ function livePanelSig(snapshot = {}) {
     b.reconnects || 0,
     b.sellOn ? 1 : 0,
     b.sellBusy ? 1 : 0,
+    b.activityText || '',
     b.stats ? `${b.stats.total}:${b.stats.cycles}:${b.stats.lastAt || 0}` : '0',
     b.protect?.on ? `${b.protect.level}:${b.protect.threats || 0}` : 'off',
   ].join(':')).join('|');
+  const eventsSig = (snapshot.recentEvents || []).slice(0, 6).map(ev => `${ev.ts}:${ev.key}:${ev.botId || ''}:${ev.count || 1}`).join('|');
+  return `${botSigs}#${eventsSig}`;
 }
 
 /**
- * Dựng Embed Bảng Trạng Thái & Doanh Thu Trực Tiếp (Live Dashboard 10s).
- * Thiết kế tối giản, thẳng hàng tuyệt đối bằng bảng Monospace, tách biệt hoàn toàn khỏi luồng cảnh báo sự cố.
+ * Dựng Embed Bảng Điều Khiển & Doanh Thu Trực Tiếp (Live Dashboard) trên Discord.
+ * Tự động cập nhật tại chỗ (PATCH message) mỗi 10 giây mà không tạo tin nhắn mới.
  */
 function buildLivePanelEmbed(snapshot = {}) {
   const now = Number(snapshot.now) || Date.now();
@@ -614,69 +622,77 @@ function buildLivePanelEmbed(snapshot = {}) {
   const serverLabel = hosts.length === 1 ? hosts[0] : (hosts.length > 1 ? `${hosts.length} server` : '—');
   const primaryUser = bots.find(b => /^\w{1,16}$/.test(String(b.account || '')))?.account || '';
 
-  const cut = (t, n) => {
-    const s = String(t ?? '');
-    return s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n, ' ');
-  };
-  const pad = (v, n) => String(v ?? '').padStart(n, ' ');
+  const descParts = [];
+  descParts.push(
+    `🟢 **${onlineBots}/${totalBots}** trực tuyến • 🔄 **${sellingBots}** tự bán lồng • ⏱️ Cập nhật ${discordTimestamp(now, 'R')} *(chu kỳ ${refreshSec}s)*`
+  );
 
-  let tableBlock = '';
   if (bots.length === 0) {
-    tableBlock = blockquote('Chưa có bot nào trong cấu hình.');
+    descParts.push(blockquote('Chưa có bot nào trong cấu hình. Dùng lệnh CLI hoặc Web Dashboard để thêm bot.'));
   } else {
-    const MAX = 20;
-    const idW = Math.min(12, Math.max(5, ...bots.slice(0, MAX).map(b => String(b.botId || '').length)));
-    const header = `${cut('Bot', idW)} ${cut('Tình trạng', 10)} ${pad('1h qua', 8)} ${pad('Hôm nay', 9)} ${pad('Tốc độ', 9)}`;
-    const sepLine = `${'-'.repeat(idW)} ---------- -------- --------- ---------`;
-    const rows = [header, sepLine];
-
-    for (const b of bots.slice(0, MAX)) {
-      let stateStr = 'Online';
+    const botLines = [];
+    for (const b of bots.slice(0, 15)) {
+      let icon = '🟢';
+      let stateTag = 'Online';
       if (b.disabled || b.connState === 'STOPPING') {
-        stateStr = b.scheduledOut ? 'Nghỉ lịch' : 'Đã dừng';
+        icon = '⚪';
+        stateTag = b.scheduledOut ? 'Nghỉ lịch' : 'Đã dừng';
       } else if (b.connState === 'RECONNECTING') {
-        stateStr = `Thử lại #${b.reconnects || 1}`;
+        icon = '🟠';
+        stateTag = `Reconnect (${b.reconnects || 1})`;
       } else if (b.connState === 'CONNECTING' || b.connState === 'AUTHENTICATING' || b.connState === 'SPAWNING') {
-        stateStr = 'Đang vào';
+        icon = '🟡';
+        stateTag = 'Đang vào';
       } else if (b.connState !== 'ONLINE') {
-        stateStr = 'Offline';
-      } else if (b.sellBusy) {
-        stateStr = 'Đang bán';
-      } else if (b.sellOn) {
-        stateStr = 'Canh lồng';
+        icon = '🔴';
+        stateTag = 'Mất kết nối';
       }
 
       const s = b.stats;
-      const h1 = s ? formatMoney(s.last1h) : '$0';
-      const today = s ? formatMoney(s.today) : '$0';
-      const rate = s && s.avgPerHour != null ? `${formatMoney(s.avgPerHour)}/h` : '—';
-      rows.push(`${cut(b.botId, idW)} ${cut(stateStr, 10)} ${pad(h1, 8)} ${pad(today, 9)} ${pad(rate, 9)}`);
+      const revStr = s && s.total > 0
+        ? `${formatMoney(s.total)} (${s.avgPerHour != null ? formatMoney(s.avgPerHour) + '/h' : 'chờ đo'})`
+        : '$0';
+      const actStr = truncateCodePoints(b.activityText || stateTag, 48);
+      const nextStr = (b.connState === 'ONLINE' && b.sellOn && b.nextSellAt > now)
+        ? ` • bán ${discordTimestamp(b.nextSellAt, 'R')}`
+        : '';
+      const guardStr = b.protect?.on ? ` • 🛡️M${b.protect.level || 2}` : '';
+      botLines.push(`${icon} **${b.botId}** (\`${b.account || b.botId}\`) — ${actStr}${nextStr}${guardStr} • 💰 **${revStr}**`);
     }
-    if (bots.length > MAX) {
-      rows.push(`… và ${bots.length - MAX} bot khác`);
+    if (bots.length > 15) {
+      botLines.push(`*… và ${bots.length - 15} bot khác*`);
     }
-    tableBlock = codeBlock(rows.join('\n'));
+    descParts.push(botLines.join('\n'));
   }
 
-  const summaryLine = `🟢 **${onlineBots}/${totalBots}** trực tuyến • 🔄 **${sellingBots}** tự bán lồng • ⏱️ Cập nhật ${discordTimestamp(now, 'R')}`;
+  const recentEvents = Array.isArray(snapshot.recentEvents) ? snapshot.recentEvents.slice(0, 6) : [];
+  if (recentEvents.length > 0) {
+    const evLines = recentEvents.map(ev => {
+      const th = getTheme(ev.key);
+      const botPrefix = ev.botId ? `**${ev.botId}**: ` : '';
+      const countBadge = ev.count && ev.count > 1 ? ` \`×${ev.count}\`` : '';
+      return `• ${th.emoji} ${botPrefix}${truncateCodePoints(ev.summary || th.label, 70)}${countBadge} (${discordTimestamp(ev.lastTs || ev.ts || now, 'R')})`;
+    });
+    descParts.push(`**📋 Sự kiện gần đây:**\n${evLines.join('\n')}`);
+  }
 
   const fields = [
     { name: 'Trạng thái dàn', value: `${progressBar(onlineBots, Math.max(1, totalBots))} (${onlineBots}/${totalBots})`, inline: true },
     { name: 'Server', value: serverLabel, inline: true },
     { name: 'Thời gian treo', value: RevenueTracker.formatClock(maxUptimeMs), inline: true },
     { name: 'Tổng thu nhập', value: formatMoney(totalEarned), inline: true },
-    { name: 'Tốc độ trung bình', value: hasRate ? `${formatMoney(totalAvgPerHour)}/h` : '—', inline: true },
-    { name: 'Số lượt bán', value: `${totalCycles} vòng`, inline: true },
+    { name: 'Tốc độ TB / Ngày', value: hasRate ? `${formatMoney(totalAvgPerHour)}/h (~${formatMoney(totalAvgPerHour * 24)}/d)` : '—', inline: true },
+    { name: '1h qua / Hôm nay', value: `${formatMoney(totalLast1h)} / ${formatMoney(totalToday)} (${totalCycles} vòng)`, inline: true },
   ];
 
   return enforceEmbedLimits({
     title: formatEmbedTitle(`Bảng Trạng Thái & Doanh Thu Trực Tiếp (${totalBots} Bot)`, 'livePanel'),
-    description: `${summaryLine}\n${tableBlock}`,
+    description: descParts.join('\n\n'),
     color,
-    author: buildAuthor(`${BRAND} • Live Dashboard`, primaryUser),
+    author: buildAuthor(`${BRAND} Live Dashboard`, primaryUser),
     thumbnail: buildThumbnail(primaryUser),
     fields,
-    footer: { text: `${BRAND} • Tự động cập nhật tại chỗ mỗi ${refreshSec}s` },
+    footer: { text: `${BRAND} • Tự động cập nhật tại chỗ mỗi ${refreshSec}s (không làm tràn thông báo)` },
     timestamp: new Date(now).toISOString(),
   });
 }
@@ -746,11 +762,15 @@ function buildPreviewPayloads(opts = {}) {
             connState: 'ONLINE',
             sellOn: true,
             nextSellAt: now + 180000,
-            activityText: 'Canh lồng',
+            activityText: 'Đứng canh lồng, chờ vòng bán kế tiếp',
             totalUptimeMs: 11565000,
             protect: { on: true, level: 2, threats: 0 },
             stats: { total: 41350, today: 41350, last1h: 12500, cycles: 8, avgPerHour: 12500, lastAt: now - 60000 },
           },
+        ],
+        recentEvents: [
+          { key: 'featuresReady', botId, summary: 'Đã bật spawnerprotect + autosell_spawn', ts: now - 120000, count: 1 },
+          { key: 'revenue', botId, summary: 'Vòng bán +$3.35K (5/5 lồng)', ts: now - 60000, count: 1 },
         ],
       }),
     },
@@ -777,6 +797,7 @@ function buildPreviewPayloads(opts = {}) {
         description: [
           blockquote('Internal Exception: java.net.SocketException: Connection reset'),
           `⏰ 09:15:00 PM • ${discordTimestamp(now, 'R')}`,
+          `🔄 Tự kết nối lại ${discordTimestamp(now + 15000, 'R')} (15s) • ${progressBar(1, 5)} (lần thứ 1/5)`,
         ].join('\n'),
         color: EVENT_THEMES.disconnect.color,
         author,
@@ -794,7 +815,11 @@ function buildPreviewPayloads(opts = {}) {
       content: EVENT_THEMES.reconnectFailed.headline,
       embed: enforceEmbedLimits({
         title: formatEmbedTitle('Hết lượt reconnect', 'reconnectFailed'),
-        description: blockquote('Connection refused: no further information'),
+        description: [
+          blockquote('Connection refused: no further information'),
+          `Đã thử 5/5 lần không thành công (${progressBar(5, 5)}).`,
+          `⏳ Tự thử lại ${discordTimestamp(now + 15 * 60000, 'R')} (sau 15 phút).`,
+        ].join('\n'),
         color: EVENT_THEMES.reconnectFailed.color,
         author,
         thumbnail,
@@ -828,7 +853,8 @@ function buildPreviewPayloads(opts = {}) {
       embed: enforceEmbedLimits({
         title: formatEmbedTitle('Đã đủ tiền', 'moneyGoal'),
         description: [
-          `Đạt mục tiêu tiền đặt trước (${progressBar(52400000, 50000000)}).`,
+          `Mục tiêu **${formatMoney(50000000)}** (50,000,000), hiện có **${formatMoney(52400000)}** (52,400,000).`,
+          `Tiến độ: ${progressBar(52400000, 50000000)}`,
           codeBlock('macro chuyen_tien'),
         ].join('\n'),
         color: EVENT_THEMES.moneyGoal.color,
@@ -869,7 +895,8 @@ function buildPreviewPayloads(opts = {}) {
       embed: enforceEmbedLimits({
         title: formatEmbedTitle('Xử lý bảo vệ lồng', 'protectResult'),
         description: [
-          blockquote('Người lạ: Alex_VN (4.2m)'),
+          `Người lạ: Alex_VN (4.2m)`,
+          `Đã đập **5/5 lồng** (${progressBar(5, 5)}).`,
           `Đã cất 5 item lồng/spawn vào ender chest — đã xác minh ✅.`,
         ].join('\n'),
         color: EVENT_THEMES.protectResult.color,
@@ -888,7 +915,10 @@ function buildPreviewPayloads(opts = {}) {
       content: '',
       embed: enforceEmbedLimits({
         title: formatEmbedTitle('Túi đồ đầy', 'autoSell'),
-        description: codeBlock('macro autosell'),
+        description: [
+          `33/36 ô (92%) • ${progressBar(33, 36)} — tự chạy macro "autosell".`,
+          codeBlock('macro autosell'),
+        ].join('\n'),
         color: EVENT_THEMES.autoSell.color,
         author,
         thumbnail,
@@ -908,6 +938,7 @@ function buildPreviewPayloads(opts = {}) {
         description: [
           '✅ spawnerprotect: 5 lồng, quét người lạ 16 block',
           '✅ autosell_spawn: 5 lồng, click ô 51, mỗi 5m',
+          '📍 Vị trí: 120.0, 64.0, -48.0 (autosell_spawn 5/5 lồng trong tầm)',
           `⏱️ Hoàn tất ${discordTimestamp(now, 'R')} (4s sau khi vào menu)`,
         ].join('\n'),
         color: EVENT_THEMES.featuresReady.color,
@@ -927,6 +958,7 @@ function buildPreviewPayloads(opts = {}) {
         title: formatEmbedTitle('Lệch khỏi vị trí treo lồng — gõ /home treolong', 'homeReturn'),
         description: [
           'Bot không còn ở gần lồng (autosell_spawn 0/5 lồng trong tầm).',
+          'Vị trí hiện tại: `145.2, 64.0, -12.8`',
           codeBlock('/home treolong'),
         ].join('\n'),
         color: EVENT_THEMES.homeReturn.color,
@@ -945,6 +977,7 @@ function buildPreviewPayloads(opts = {}) {
       embed: enforceEmbedLimits({
         title: formatEmbedTitle('autosell_spawn thất bại sau 10 lần gõ /home treolong', 'sellFailed'),
         description: [
+          `Đã gõ \`/home treolong\` 10 lần (${progressBar(10, 10)}), sau mỗi lần đều bán lại nhưng vẫn không xong (3/5 lồng • ${progressBar(3, 5)}).`,
           codeBlock('• (120,64,-48) GUI không mở sau 5s\n• (121,64,-48) chunk chưa tải — bỏ qua'),
           '📍 Vị trí: 120.0, 64.0, -48.0 — lồng gần nhất cách 2.1 block',
         ].join('\n'),
@@ -964,7 +997,10 @@ function buildPreviewPayloads(opts = {}) {
       content: '',
       embed: enforceEmbedLimits({
         title: formatEmbedTitle('AutoOrder', 'autoOrder'),
-        description: codeBlock('/order blaze rod'),
+        description: [
+          `Vật phẩm: \`blaze_rod\` • Đã giao **64 stack** • Thu về **${formatMoney(12800000)}**`,
+          codeBlock('/order blaze rod'),
+        ].join('\n'),
         color: EVENT_THEMES.autoOrder.color,
         author,
         thumbnail,

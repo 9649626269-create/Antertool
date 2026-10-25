@@ -490,32 +490,27 @@ function buildTelegramHelpText() {
   const sTitle = sym('title');
   const sBullet = sym('bullet');
   return [
-    `${sTitle} <b>Antertool — Hướng dẫn Telegram Bot</b>`,
-    '<i>Bot đã được cấu hình chuyên biệt: Không gửi thông báo rác, chỉ dùng để ra lệnh cho AI hoặc chạy lệnh điều khiển.</i>',
-    '',
-    '<b>Ra lệnh cho AI (nhắn tin trực tiếp hoặc dùng /ai):</b>',
-    `${sBullet} Nhắn trực tiếp: <code>khởi động 2 bot số 1 và 2</code>, <code>xem túi đồ bot 1</code>, <code>tọa độ bot 2</code>, <code>bot 1 đang làm gì</code>, <code>bật bán lồng bot 1</code>...`,
-    `${sBullet} Hoặc cú pháp: <code>/ai &lt;yêu cầu tiếng Việt&gt;</code>`,
+    `${sTitle} <b>Antertool — Danh sách lệnh Telegram</b>`,
     '',
     '<b>Xem trạng thái (Viewer &amp; Admin):</b>',
     `${sBullet} <code>/status</code> — tổng quan toàn dàn bot và doanh thu`,
     `${sBullet} <code>/bots [trang]</code> — danh sách bot kèm nút mở menu`,
     `${sBullet} <code>/bot &lt;bot&gt;</code> — mở menu điều khiển của 1 bot`,
-    `${sBullet} <code>/panel [bot]</code> — gửi bảng Auto sell spawner (theo yêu cầu)`,
+    `${sBullet} <code>/panel [bot]</code> — gửi lại bảng Auto sell spawner`,
     `${sBullet} <code>/activity [bot] [n]</code> — hoạt động hiện tại và n mục lịch sử`,
     `${sBullet} <code>/inv &lt;bot&gt;</code> · <code>/pos &lt;bot&gt;</code> · <code>/board &lt;bot&gt;</code> · <code>/ping &lt;bot&gt;</code>`,
-    `${sBullet} <code>/checkstats &lt;player&gt;</code> · <code>/bal &lt;player&gt;</code> — xem stats và số dư người chơi`,
     `${sBullet} <code>/logs [now|status|bot n]</code> — cập nhật hoặc xuất file log runtime`,
     `${sBullet} <code>/whoami</code> — xem User ID, Chat ID và quyền hiện tại`,
     '',
-    '<b>Lệnh điều khiển trực tiếp (Admin):</b>',
+    '<b>Điều khiển (chỉ Admin):</b>',
+    `${sBullet} <code>/ai &lt;yêu cầu&gt;</code> — giao việc cho AI-Anter bằng tiếng Việt (vd: <code>/ai khởi động 2 bot số 1 và 2</code>)`,
     `${sBullet} <code>/startbot &lt;bot|all&gt;</code> · <code>/stopbot &lt;bot|all&gt;</code> · <code>/reconnect &lt;bot&gt;</code>`,
     `${sBullet} <code>/sell &lt;bot&gt; on|off|now|status|every &lt;5m&gt;</code> · <code>/sellall on|off|now</code>`,
     `${sBullet} <code>/protect &lt;bot&gt; on|off|status|level &lt;1-4&gt;</code>`,
     `${sBullet} <code>/home &lt;bot&gt;</code> · <code>/afk &lt;bot&gt; [jump|walk]</code> · <code>/stopafk &lt;bot&gt;</code>`,
     `${sBullet} <code>/macro &lt;bot&gt; [tên]</code> · <code>/stopmacro &lt;bot&gt;</code>`,
     `${sBullet} <code>/cmd &lt;bot&gt; &lt;lệnh&gt;</code> · <code>/cmdall &lt;lệnh&gt;</code> (có xác nhận 30s)`,
-    `${sBullet} <code>/diag</code> — chẩn đoán kết nối và hàng đợi`,
+    `${sBullet} <code>/events</code> · <code>/mute [30m|1h|off]</code> · <code>/refresh &lt;1s..1h|off&gt;</code> · <code>/diag</code>`,
   ].join('\n');
 }
 
