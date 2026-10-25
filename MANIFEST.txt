@@ -1,3 +1,14 @@
+MANIFEST — Antertool Janitor (chống file rác + dọn file bản cũ mỗi lần load/update)
+======================================================================================
+[NEW]      src/core/Janitor.js — dọn: file tạm, update dở (.anter/code.new/.old), log quá hạn / vượt dung lượng,
+           protocol-errors.log quá to, backup thừa, file bản cũ đã bị loại bỏ, auth_cache của bot đã xoá, gói .zip cập nhật cũ.
+           Cách ly vào .anter/trash (giữ 7 ngày) thay vì xoá thẳng với mọi thứ không phải rác thuần tuý. Có dryRun.
+[MODIFIED] load.js — dọn phần dở của lần trước TRƯỚC khi hỏi GitHub; ghi .anter/manifest.json và báo file bản cũ không còn
+           trong bản mới; chạy Janitor của bản code vừa tải sau mỗi lần update/load (ANTER_CLEANUP=0 để tắt).
+[MODIFIED] main.js — lệnh `clean [now|dry|status|trash|copies [yes]]`; tự dọn khi khởi động và mỗi 24 giờ.
+[MODIFIED] src/core/HelpCatalog.js, src/core/ConfigValidator.js, config.example.json, README.md — help, kiểm tra config "cleanup", tài liệu.
+[NEW]      test/janitor.test.js, mở rộng test/loader.test.js (38/38 bộ test pass).
+
 MANIFEST — Antertool Discord Webhook Hybrid v2 (Live Dashboard 10s + Anti-Spam + Unified Webhook)
 Base build: Antertool-Discord-Redesign.zip (antares-manager@1.0.0)
 

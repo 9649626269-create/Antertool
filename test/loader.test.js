@@ -44,11 +44,12 @@ function makeTgz(files) {
 
 // ── 2. luồng đầy đủ với server giả ──
 const SHA1 = 'a'.repeat(40), SHA2 = 'b'.repeat(40);
+const JANITOR_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'Janitor.js'), 'utf8');
 let sha = SHA1;
 let calls = [];
 const bundles = {
   [SHA1]: { 'o-r-aaaaaaa/main.js': 'const fs = require("fs"); if (!fs.existsSync("restart.flag")) { fs.writeFileSync("restart.flag", "1"); process.exit(42); } console.log("V1 cwd=" + process.cwd() + " loader=" + !!process.env.ANTER_LOADER);', 'o-r-aaaaaaa/package.json': '{"dependencies":{}}', 'o-r-aaaaaaa/old.js': '//' },
-  [SHA2]: { 'o-r-bbbbbbb/main.js': 'console.log("V2");', 'o-r-bbbbbbb/package.json': '{"name":"x","version":"1.0.0","dependencies":{}}', 'o-r-bbbbbbb/package-lock.json': '{"name":"x","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"x","version":"1.0.0"}}}', 'o-r-bbbbbbb/../../evil.txt': 'x' },
+  [SHA2]: { 'o-r-bbbbbbb/main.js': 'console.log("V2 janitorDone=" + process.env.ANTER_JANITOR_DONE);', 'o-r-bbbbbbb/src/core/Janitor.js': JANITOR_SRC, 'o-r-bbbbbbb/package.json': '{"name":"x","version":"1.0.0","dependencies":{}}', 'o-r-bbbbbbb/package-lock.json': '{"name":"x","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"x","version":"1.0.0"}}}', 'o-r-bbbbbbb/../../evil.txt': 'x' },
 };
 const server = http.createServer((req, res) => {
   calls.push(req.url);
@@ -87,10 +88,26 @@ server.listen(0, '127.0.0.1', () => {
     r = await run();
     assert.ok(r.out.includes('mới nhất') && !calls.some(u => u.includes('tarball')), r.out);
 
+    // lần chạy trước để lại rác: update dở, gói tải dở, log quá hạn, file bản cũ đã bỏ
+    const old = new Date(Date.now() - 3 * 86400000);
+    const junk = (rel, c = 'x') => { const f = path.join(dir, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, c); fs.utimesSync(f, old, old); return f; };
+    junk('.anter/code.new/half.js'); junk('.anter/dl.tgz'); junk('autosell.json', '{"giu":"lai-trong-thung-rac"}'); junk('logs/runtime-2020-01-01.log');
+    fs.utimesSync(path.join(dir, '.anter', 'code.new'), old, old);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.anter', 'manifest.json'), 'utf8'));
+    assert.ok(manifest.sha === SHA1 && manifest.files.includes('old.js'), 'lần cài đầu phải ghi manifest');
+
     // có commit mới: thay code, xoá file cũ, chặn ../, giữ nguyên dữ liệu
     sha = SHA2;
     r = await run();
     assert.ok(r.out.includes('V2') && r.out.includes('Có bản mới: msg b'), r.out);
+    assert.ok(r.out.includes('Đã gỡ 1 file cũ không còn trong bản mới: old.js'), 'phải báo file bản cũ bị loại bỏ: ' + r.out);
+    assert.ok(r.out.includes('janitorDone=1'), 'main.js biết load.js đã dọn: ' + r.out);
+    assert.ok(r.out.includes('Dọn rác:'), 'Janitor của bản mới phải chạy sau update: ' + r.out);
+    assert.ok(!fs.existsSync(path.join(dir, '.anter', 'code.new')) && !fs.existsSync(path.join(dir, '.anter', 'dl.tgz')), 'update dở/gói tải dở phải bị dọn');
+    assert.ok(!fs.existsSync(path.join(dir, 'logs', 'runtime-2020-01-01.log')) && !fs.existsSync(path.join(dir, 'autosell.json')), 'log quá hạn + file bản cũ đã bỏ');
+    const trashDirs = fs.readdirSync(path.join(dir, '.anter', 'trash'));
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.anter', 'trash', trashDirs[0], 'autosell.json'), 'utf8'), '{"giu":"lai-trong-thung-rac"}', 'file bản cũ vào thùng rác, lấy lại được');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, '.anter', 'manifest.json'), 'utf8')).sha, SHA2);
     assert.ok(r.out.includes('npm ci'), 'có package-lock.json thì phải dùng npm ci: ' + r.out);
     assert.ok(!fs.existsSync(path.join(dir, '.anter', 'code', 'old.js')), 'file cũ phải biến mất');
     assert.ok(!fs.existsSync(path.join(dir, '..', 'evil.txt')) && !fs.existsSync(path.join(dir, 'evil.txt')), 'chặn ../');
@@ -100,6 +117,17 @@ server.listen(0, '127.0.0.1', () => {
     await new Promise(res => server.close(res));
     r = await run();
     assert.ok(r.out.includes('V2') && r.out.includes('chạy bản đã tải'), r.out);
+
+    // ANTER_CLEANUP=0: không dọn gì
+    {
+      const f = path.join(dir, '.anter', 'dl2.tgz'); fs.writeFileSync(f, 'x'); fs.utimesSync(f, old, old);
+      env.ANTER_CLEANUP = '0';
+      r = await run();
+      assert.ok(fs.existsSync(f) && !r.out.includes('Dọn rác'), 'ANTER_CLEANUP=0 thì giữ nguyên: ' + r.out);
+      delete env.ANTER_CLEANUP;
+      r = await run();
+      assert.ok(!fs.existsSync(f), 'bật lại thì dọn');
+    }
 
     // ANTER_AUTO_UPDATE=0: đã có code thì không hỏi GitHub (server tắt cũng không báo lỗi kết nối)
     {

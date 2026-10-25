@@ -1,18 +1,18 @@
-HƯỚNG DẪN ÁP DỤNG BẢN CẬP NHẬT DISCORD HYBRID V2 (APPLY)
-========================================================
+HƯỚNG DẪN ÁP DỤNG BẢN CẬP NHẬT JANITOR (APPLY)
+==============================================
 
-1. Giải nén đè lên thư mục gốc của repo hiện có:
-   unzip -o Antertool-Discord-Hybrid-v2.zip -d <repo-root>
+1. Giải nén đè lên thư mục gốc của repo/thư mục tool:
+   unzip -o Antertool-janitor.zip -d <repo-root>
+   (file này KHÔNG chứa config.json, .env, update.json, revenue.json — dữ liệu của bạn giữ nguyên)
 
-2. Chạy kiểm tra cú pháp và toàn bộ bộ test (36/36 pass):
-   cd <repo-root>
+2. Kiểm tra:
    npm run lint
    npm test
 
-3. Các lệnh điều khiển Discord Webhook Hybrid v2 trong console:
-   webhook set <url>           # Lưu 1 webhook duy nhất (gộp cảnh báo + doanh thu + Bảng Trực Tiếp 10s)
-   webhook panel               # Cập nhật ngay Bảng Trạng Thái & Doanh Thu Trực Tiếp tại chỗ
-   webhook panel fresh         # Tạo tin nhắn Bảng Trực Tiếp mới (nếu muốn đẩy bảng xuống cuối kênh)
-   webhook refresh 10s         # Đặt chu kỳ tự động sửa Bảng Trực Tiếp (mặc định: 10s, tắt: off)
-   webhook mode hybrid         # Chế độ Hybrid (mặc định: sửa tại chỗ + gộp tin trùng + tự hồi phục khi hết bị kick)
-   webhook preview             # Xem trước toàn bộ mẫu giao diện embed (bao gồm cả Bảng Trực Tiếp)
+3. Dùng thử trong console của tool:
+   clean dry      # xem trước sẽ dọn gì, chưa đổi gì
+   clean          # dọn ngay
+   clean trash    # xem thùng rác (.anter/trash, tự xoá hẳn sau 7 ngày)
+   clean copies   # xem trước việc cách ly bản sao mã nguồn cũ cạnh load.js (chỉ khi chạy bằng load.js)
+
+4. Tuỳ chỉnh: thêm khối "cleanup" vào config.json (xem config.example.json). Tắt hẳn: "cleanup": {"enabled": false}.

@@ -17,6 +17,18 @@
   "omniRouterModel": "gpt-4o-mini",
   "afkTabNoise": false,
   "settingsProfile": "vanilla",
+  "cleanup": {
+    "enabled": true,
+    "onStart": true,
+    "intervalHours": 24,
+    "maxLogMB": 200,
+    "protocolLogMaxMB": 5,
+    "keepBackups": 5,
+    "keepConfigBackups": 3,
+    "keepArchives": 1,
+    "trashDays": 7,
+    "staleCopies": false
+  },
   "settings": {
     "pollInterval": 45000,
     "pollJitter": 10000,

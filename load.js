@@ -27,6 +27,12 @@
  *     (lần đầu chưa có code vẫn tải một lần). Lệnh "update" trong tool vẫn cập nhật khi bạn chủ động gọi.
  *   - Repo có package-lock.json -> cài thư viện bằng `npm ci` (đúng phiên bản đã khoá).
  * Lệnh "update" trong tool thoát với mã 42 -> load.js tự tải bản mới & chạy lại.
+ *
+ * Dọn rác (mỗi lần load và sau mỗi lần cập nhật):
+ *   - xoá thư mục update dở (.anter/code.new, code.old), gói tải về còn sót, file tạm;
+ *   - báo & xoá các file bản cũ KHÔNG còn trong bản mới (so với danh sách file lần cài trước: .anter/manifest.json);
+ *   - gọi src/core/Janitor.js của bản code vừa tải để dọn log cũ, backup thừa, file bị loại bỏ (vào .anter/trash, giữ 7 ngày).
+ *   Tắt bằng ANTER_CLEANUP=0 (hoặc "cleanup": {"enabled": false} trong config.json). Dữ liệu của bạn không bao giờ bị dọn.
  */
 const fs = require('fs');
 const path = require('path');
@@ -40,6 +46,7 @@ const DATA_DIR = path.resolve(process.env.ANTER_DATA_DIR || __dirname); // nơi 
 const HOME = path.join(DATA_DIR, '.anter');       // mọi thứ tải về nằm ở đây
 const CODE = path.join(HOME, 'code');             // code từ GitHub (bị thay nguyên thư mục mỗi lần update)
 const STATE_FILE = path.join(HOME, 'state.json'); // { sha, depsHash, updatedAt }
+const MANIFEST_FILE = path.join(HOME, 'manifest.json'); // { sha, files: [...] } danh sách file của lần cài gần nhất
 const API = (process.env.GH_API || 'https://api.github.com').replace(/\/+$/, ''); // GH_API chỉ dùng để test
 const MAX_DOWNLOAD = 100 * 1024 * 1024;
 
@@ -64,6 +71,67 @@ function writeState(patch) {
   fs.writeFileSync(STATE_FILE, JSON.stringify({ ...readState(), ...patch }, null, 2));
 }
 const hasCode = () => fs.existsSync(path.join(CODE, 'main.js'));
+
+
+// ───────────────────────── Dọn rác ─────────────────────────
+const cleanupOn = () => !/^(0|false|off|no)$/i.test(String(process.env.ANTER_CLEANUP ?? '1'));
+
+// Liệt kê đệ quy file (đường dẫn tương đối, dấu /) của một thư mục
+function listFiles(dir, base = dir, out = []) {
+  let ents = [];
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of ents) {
+    const p = path.join(dir, e.name);
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) listFiles(p, base, out); else out.push(path.relative(base, p).split(path.sep).join('/'));
+  }
+  return out;
+}
+function readManifest() { try { const m = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')); return Array.isArray(m.files) ? m.files : null; } catch { return null; } }
+
+// Dọn phần còn sót của lần chạy/cập nhật trước (chạy TRƯỚC khi hỏi GitHub; không phụ thuộc code đã tải)
+function cleanupLeftovers() {
+  if (!cleanupOn()) return;
+  try {
+    // đang thay code dở (mất điện/tắt giữa chừng): khôi phục bản cũ trước, rồi mới dọn
+    if (!hasCode() && fs.existsSync(CODE + '.old')) { rmrf(CODE); try { fs.renameSync(CODE + '.old', CODE); log('Khôi phục bản code cũ sau lần cập nhật dở.'); } catch {} }
+    let n = 0;
+    for (const d of [path.join(HOME, 'code.new'), CODE + '.old']) if (fs.existsSync(d)) { rmrf(d); n++; }
+    for (const f of fs.existsSync(HOME) ? fs.readdirSync(HOME) : []) {
+      if (/\.(tgz|tar|gz|part|tmp)$/i.test(f)) { rmrf(path.join(HOME, f)); n++; }
+    }
+    if (n) log(`Đã dọn ${n} mục update dở dang còn sót.`);
+  } catch (e) { log('Bỏ qua dọn rác: ' + e.message); }
+}
+
+// Sau khi thay code: báo file bản cũ không còn trong bản mới (đã bị xoá cùng thư mục code cũ) và lưu danh sách mới
+function recordManifest(sha, files, prevFiles) {
+  try {
+    if (prevFiles) {
+      const now = new Set(files);
+      const gone = prevFiles.filter(f => !now.has(f));
+      if (gone.length) log(`Đã gỡ ${gone.length} file cũ không còn trong bản mới` + (gone.length <= 5 ? ': ' + gone.join(', ') : ` (vd: ${gone.slice(0, 3).join(', ')}...)`));
+    }
+    fs.mkdirSync(HOME, { recursive: true });
+    fs.writeFileSync(MANIFEST_FILE, JSON.stringify({ sha, updatedAt: new Date().toISOString(), files }, null, 2));
+  } catch {}
+}
+
+// Dùng Janitor của bản code đang chạy (nếu có) để dọn log cũ, backup thừa, file bị loại bỏ... Lỗi gì cũng KHÔNG chặn việc chạy bot.
+function runJanitor(phase) {
+  if (!cleanupOn()) return;
+  try {
+    const f = path.join(CODE, 'src', 'core', 'Janitor.js');
+    if (!fs.existsSync(f)) return;
+    const Janitor = require(f);
+    const j = new Janitor({ dataDir: DATA_DIR, codeDir: CODE, log, viaLoader: true });
+    if (j.opts.enabled === false || (phase === 'load' && j.opts.onStart === false)) return;
+    const rep = j.run();
+    const msg = Janitor.summary(rep);
+    if (msg) log(msg);
+    for (const e of rep.errors.slice(0, 3)) log('Dọn rác lỗi: ' + e);
+  } catch (e) { log('Bỏ qua dọn rác: ' + e.message); }
+}
 
 // ───────────────────────── HTTP ─────────────────────────
 function request(url, token, accept, hops = 0) {
@@ -215,6 +283,10 @@ async function install(info) {
   try { lock = fs.readFileSync(path.join(stage, 'package-lock.json'), 'utf8'); } catch {}
   ensureDeps(pkg, lock); // lỗi ở đây -> giữ nguyên bản cũ
 
+  // danh sách file của bản đang chạy (để báo file nào bị loại bỏ ở bản mới)
+  const prevFiles = readManifest() || (hasCode() ? listFiles(CODE) : null);
+  const newFiles = listFiles(stage);
+
   // Thay nguyên thư mục code (file cũ không còn trong bản mới tự biến mất)
   rmrf(CODE + '.old');
   if (fs.existsSync(CODE)) fs.renameSync(CODE, CODE + '.old');
@@ -222,6 +294,7 @@ async function install(info) {
   rmrf(CODE + '.old');
   writeState({ sha: latest, updatedAt: new Date().toISOString() });
   log(`Đã cập nhật xong (${n} file).`);
+  if (cleanupOn()) recordManifest(latest, newFiles, prevFiles);
 }
 
 let forceUpdate = false; // true khi người dùng gõ "update" trong tool (thoát mã 42) -> bỏ qua ANTER_AUTO_UPDATE=0
@@ -256,7 +329,7 @@ function launch() {
   child = spawn(process.execPath, [path.join(CODE, 'main.js')], {
     cwd: DATA_DIR, // config.json, revenue.json, logs/, auth_cache/... đều nằm ở máy, cạnh load.js
     stdio: 'inherit',
-    env: { ...process.env, ANTER_LOADER: __filename, ANTER_DATA_DIR: DATA_DIR }, // để lệnh "update" trong tool gọi lại load.js
+    env: { ...process.env, ANTER_LOADER: __filename, ANTER_DATA_DIR: DATA_DIR, ANTER_JANITOR_DONE: cleanupOn() ? '1' : '' }, // để lệnh "update" trong tool gọi lại load.js; main.js khỏi dọn lần nữa lúc khởi động
   });
   child.on('error', e => { console.error('[load] Không chạy được main.js: ' + e.message); process.exit(1); });
   child.on('exit', code => {
@@ -275,11 +348,13 @@ function ensureConfig() {
 }
 
 async function start() {
+  cleanupLeftovers();
   try { await sync(); ensureConfig(); } catch (e) { console.error('[load] ' + e.message); process.exit(1); }
+  runJanitor('load');
   launch();
 }
 
-module.exports = { checkForUpdate, untar };
+module.exports = { checkForUpdate, untar, listFiles };
 
 if (require.main === module) {
   if (parseInt(process.versions.node, 10) < 18) { console.error('[load] Cần Node.js >= 18 (đang dùng ' + process.versions.node + ')'); process.exit(1); }

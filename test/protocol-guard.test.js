@@ -89,8 +89,25 @@ class FakeFullPacketParser extends Transform {
 }
 const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'pg2-'));
 const run = (skip, label) => new Promise(resolve => {
+  let done = false;
+  let timer = null;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timer) clearTimeout(timer);
+    resolve({ got, glogs, guard, des, label });
+  };
   const glogs = [];
-  const guard = new PacketFilter({ botId: 'b', log: (l, m) => glogs.push([l, m]), logDir: tmp2, skipBadPackets: skip, onDead: () => glogs.push(['dead-cb', '']) });
+  const guard = new PacketFilter({
+    botId: 'b',
+    log: (l, m) => glogs.push([l, m]),
+    logDir: tmp2,
+    skipBadPackets: skip,
+    onDead: () => {
+      glogs.push(['dead-cb', '']);
+      if (!skip) setImmediate(finish);
+    },
+  });
   const des = new FakeFullPacketParser();
   const cl = new EventEmitter(); cl.state = 'play'; cl.deserializer = des;
   const got = [];
@@ -99,7 +116,7 @@ const run = (skip, label) => new Promise(resolve => {
   guard.attach({ _client: cl, version: '1.21.1', registry: {} });
   des.write(Buffer.from([0x01])); des.write(Buffer.from([0x77, 1, 2, 3])); des.write(Buffer.from([0x02])); des.write(Buffer.from([0x03]));
   if (!skip) setImmediate(() => guard.handleError(new Error('Parse error for play.toClient: array size is abnormally large')));
-  setTimeout(() => resolve({ got, glogs, guard, des, label }), 30);
+  timer = setTimeout(finish, 150);
 });
 (async () => {
   // 5a) KHÔNG bỏ qua: sau gói lỗi luồng chết, gói 0x02/0x03 không bao giờ tới nơi — đúng triệu chứng "client timed out"

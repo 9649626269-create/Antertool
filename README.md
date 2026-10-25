@@ -113,6 +113,25 @@ Code tải từ GitHub **được chạy trên máy bạn**, nên chỉ trỏ t�
 - Tắt tự cập nhật: `ANTER_AUTO_UPDATE=0` hoặc `"autoUpdate": false` trong `update.json`. Lệnh `update` trong tool vẫn cập nhật thủ công.
 - Có `package-lock.json` trong repo → thư viện được cài bằng `npm ci`.
 
+## Dọn rác tự động (`Janitor`)
+Chạy **mỗi lần `node load.js`**, **ngay sau khi tải bản cập nhật**, **khi khởi động tool** và **mỗi 24 giờ** (bot treo nhiều ngày không đầy ổ). Gõ `clean dry` để xem trước, `clean` để dọn ngay.
+
+| Loại | Việc làm |
+|---|---|
+| `temp` | xoá file tạm/dở dang: `*.tmp *.part *.swp *~`, `.DS_Store`, `Thumbs.db`, `.write-test-*`, `npm-debug.log`, `core.*`… |
+| `updater` | xoá `.anter/code.new`, `.anter/code.old`, gói tải về còn sót, cache thư viện; khôi phục bản cũ nếu lần update trước bị ngắt giữa chừng |
+| `logs` | xoá `runtime-*.log` quá `fileLogKeepDays` ngày, vượt tổng `maxLogMB` (xoá cũ nhất trước), cắt `protocol-errors.log` quá to |
+| `backups` | chỉ giữ N bản trong `backups/` và N bản `config.json.*.bak` có dấu thời gian (`config.json.bak` chính luôn giữ) |
+| `legacy` | **cách ly** file bản cũ đã bị loại bỏ (danh sách có sẵn + `obsolete.json` đi kèm bản code mới: `{"paths":["a/b.js"],"reason":"..."}`) |
+| `authCache` | **cách ly** `auth_cache/<id>` của bot không còn trong `config.json` |
+| `archives` | **cách ly** các file `.zip/.tgz` bản cập nhật cũ trong thư mục dữ liệu (giữ 1 bản mới nhất) |
+| `staleCopies` | *(mặc định TẮT)* **cách ly** bản sao mã nguồn cũ cạnh `load.js` khi code thật chạy từ `.anter/code`: `clean copies` xem trước, `clean copies yes` để làm |
+
+- **Cách ly** = chuyển vào `.anter/trash/<ngày-giờ>/`, giữ `trashDays` (7) ngày rồi mới xoá hẳn → nhầm vẫn lấy lại được (`clean trash` để xem).
+- **Không bao giờ đụng**: `config.json`, `config.json.bak`, `.env`, `update.json`, `revenue.json`, `proxies.txt`, `beggars.json`, `ai_history.json`; không đi theo symlink; không ra ngoài thư mục dữ liệu/thư mục log; bỏ qua file mới sửa trong 2 phút.
+- Sau mỗi lần update, `load.js` còn báo những file của bản cũ không còn trong bản mới (so với `.anter/manifest.json`).
+- Tắt: `ANTER_CLEANUP=0` (chỉ phần của `load.js`) hoặc `"cleanup": {"enabled": false}` trong `config.json`. Chỉnh: `cleanup.{onStart, intervalHours, maxLogMB, keepBackups, keepConfigBackups, keepArchives, trashDays, staleCopies, temp, logs, backups, legacy, authCache, archives, updater}`.
+
 ## Log runtime ra file
 Mọi log của bot và log hệ thống (khởi động, tắt, `[FATAL]`/`[UNCAUGHT]`/`[UNHANDLED]`) được ghi ra `logs/runtime-YYYY-MM-DD.log` (cạnh `config.json`), nên vẫn đọc được sau khi tool sập. Mật khẩu/token được che; chat của người chơi mặc định không ghi.
 ```

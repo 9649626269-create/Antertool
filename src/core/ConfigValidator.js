@@ -226,6 +226,21 @@ function validateConfig(cfg) {
   if (cfg.webhookMode !== undefined && !isStr(cfg.webhookMode)) errors.push('webhookMode phải là string');
   if (cfg.webhookMessages !== undefined && !isObj(cfg.webhookMessages)) errors.push('webhookMessages phải là object');
 
+  // cleanup (dọn rác)
+  if (cfg.cleanup !== undefined) {
+    if (!isObj(cfg.cleanup)) errors.push('cleanup phải là object');
+    else {
+      const c = cfg.cleanup;
+      for (const k of ['enabled', 'onStart', 'staleCopies', 'legacy', 'authCache', 'archives', 'temp', 'logs', 'backups', 'updater']) {
+        if (c[k] !== undefined && !isBool(c[k])) errors.push(`cleanup.${k} phải là boolean`);
+      }
+      for (const k of ['intervalHours', 'keepDays', 'maxLogMB', 'protocolLogMaxMB', 'keepBackups', 'keepConfigBackups', 'keepArchives', 'trashDays']) {
+        if (c[k] !== undefined && (!isNum(c[k]) || c[k] < 0)) errors.push(`cleanup.${k} phải là số >= 0`);
+      }
+      if (c.keepDays !== undefined && isNum(c.keepDays) && c.keepDays < 1) errors.push('cleanup.keepDays phải >= 1');
+    }
+  }
+
   // settings
   if (cfg.settings !== undefined) {
     if (!isObj(cfg.settings)) errors.push('settings phải là object');

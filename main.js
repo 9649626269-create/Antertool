@@ -10,6 +10,7 @@ const TelegramNotifier = require('./src/core/TelegramNotifier');
 const HelpCatalog = require('./src/core/HelpCatalog');
 const ChatFilter = require('./src/core/ChatFilter');
 const FileLogger = require('./src/core/FileLogger');
+const Janitor = require('./src/core/Janitor');
 const EnvironmentDetector = require('./src/core/EnvironmentDetector');
 const WebDashboard = require('./src/web/WebDashboard');
 const { parseAddBotArgs, ADDBOT_USAGE } = require('./src/core/CliUtils');
@@ -220,6 +221,43 @@ function dashCommand(args = []) {
 }
 
 let _shuttingDown = false;
+
+// ───────── Dọn rác (file tạm, log cũ, backup thừa, file bản cũ đã bị loại bỏ) ─────────
+function runCleanup({ dry = false, only = null, overrides = null, quiet = false, detail = false } = {}) {
+  const cfg = (manager && manager._config) || config || {};
+  const j = new Janitor({
+    dataDir: process.env.ANTER_DATA_DIR || process.cwd(),
+    codeDir: __dirname,
+    config: cfg,
+    dryRun: dry,
+    keepDays: manager && manager.fileLogs ? manager.fileLogs.keepDays : undefined,
+    logDirs: manager && manager.fileLogs ? [manager.fileLogs.dir] : [],
+    botIds: manager && Array.isArray(manager.bots) ? manager.bots.map(b => b && b.cfg && b.cfg.id) : undefined,
+    onlyCategories: only,
+    overrides: quiet ? overrides : { ...(overrides || {}), enabled: true }, // lệnh gõ tay luôn chạy, kể cả khi tự dọn đang tắt
+  });
+  const rep = j.run();
+  const msg = Janitor.summary(rep, dry);
+  if (msg) {
+    if (quiet) { try { manager && manager.runtimeLog('sys', msg); } catch (e) { dbg('main', e); } }
+    else logger.success(msg);
+  } else if (!quiet) logger.info('Không có file rác nào cần dọn.');
+  if (detail && !quiet) for (const line of Janitor.details(rep)) logger.info(line);
+  if (rep.errors.length && !quiet) logger.warn(`Có ${rep.errors.length} lỗi khi dọn (gõ "clean dry" để xem chi tiết).`);
+  return rep;
+}
+let _cleanupTimer = null;
+function startCleanupSchedule() {
+  const o = Object.assign({}, Janitor.DEFAULTS, (config && config.cleanup) || {});
+  if (o.enabled === false) return;
+  if (o.onStart !== false && !process.env.ANTER_JANITOR_DONE) { try { runCleanup({ quiet: true }); } catch (e) { dbg('main', e); } }
+  const hours = Number(o.intervalHours);
+  if (hours > 0) {
+    _cleanupTimer = setInterval(() => { try { runCleanup({ quiet: true }); } catch (e) { dbg('main', e); } }, Math.max(1, hours) * 3600 * 1000);
+    if (_cleanupTimer.unref) _cleanupTimer.unref();
+  }
+}
+
 async function shutdown(code = 0) {
   if (_shuttingDown) return;
   _shuttingDown = true;
@@ -365,6 +403,8 @@ async function shutdown(code = 0) {
 
     manager.runtimeLog('ok', `Antertool khởi động — ${manager.bots.length} bot đã nạp (chưa tự chạy) · Node ${process.version} · ${process.platform}/${process.arch}`);
 
+    startCleanupSchedule();
+
     dashCtrl = ui.createDashboardController(manager, { chatFilter });
     if ((caps.flags && caps.flags.dashboard) || /^(1|true|on)$/i.test(String(process.env.ANTER_TUI || ''))) {
       dashCtrl.startLive();
@@ -383,6 +423,18 @@ async function shutdown(code = 0) {
       rl.on('line', line => {
         const input = String(line || '').trim();
         if (manager.hasWebhookPrompt && manager.answerWebhookPrompt(input)) { rl.prompt(); return; }
+        const pendingPromptBot = manager.bots?.find(b => b.shardShopBuyer?.hasPendingQuestion);
+        if (pendingPromptBot) {
+          const lower = input.toLowerCase();
+          if (lower === 'exit' || lower === 'quit' || lower === 'q') {
+            pendingPromptBot.shardShopBuyer.stop();
+            shutdown();
+            return;
+          }
+          pendingPromptBot.shardShopBuyer.answer(input);
+          rl.prompt();
+          return;
+        }
         if (!input) { rl.prompt(); return; }
         const devPrefixMatch = /^(?:dev|ai-anter|ai)\s*:\s*(.+)$/i.exec(input);
         const parts = devPrefixMatch ? ['ai', devPrefixMatch[1]] : input.split(/\s+/);
@@ -534,6 +586,43 @@ async function shutdown(code = 0) {
               const b = manager.findBot(args[0]);
               if (!b) { logger.error('Bot not found: ' + args[0]); break; }
               b.cmd(args.slice(1).join(' '));
+              break;
+            }
+            case 'answer': {
+              const ansText = args.join(' ');
+              if (!ansText) { logger.info('Usage: answer <nội dung>'); break; }
+              const pendingBot = manager.bots.find(b => b.shardShopBuyer?.hasPendingQuestion || b.scriptRunner?.hasPendingQuestion);
+              if (pendingBot) {
+                if (pendingBot.shardShopBuyer?.hasPendingQuestion) {
+                  pendingBot.shardShopBuyer.answer(ansText);
+                  break;
+                }
+                if (pendingBot.scriptRunner?.hasPendingQuestion && pendingBot.scriptRunner.answer(ansText)) break;
+              }
+              const firstOnline = manager.bots.find(b => b.isOnline);
+              if (firstOnline) firstOnline.cmd(`answer ${ansText}`);
+              else logger.warn('Không có bot nào đang chờ trả lời');
+              break;
+            }
+            case 'buyspawner':
+            case 'mualong':
+            case 'tpashard': {
+              const targetBot = (args[0] && manager.findBot(args[0])) ? manager.findBot(args[0]) : manager.bots.find(b => b.isOnline);
+              if (!targetBot) {
+                logger.warn('Không có bot nào online. Cú pháp: buyspawner [bot-id] [lựa_chọn] [chế_độ] | buyspawner stop');
+                break;
+              }
+              const botArgs = (args[0] && manager.findBot(args[0])) ? args.slice(1) : args;
+              targetBot.cmd(`buyspawner ${botArgs.join(' ')}`);
+              break;
+            }
+            case 'stopmacro': {
+              const targetBot = (args[0] && manager.findBot(args[0])) ? manager.findBot(args[0]) : manager.bots.find(b => b.isOnline);
+              if (!targetBot) {
+                logger.warn('Không có bot nào online.');
+                break;
+              }
+              targetBot.cmd('stopmacro');
               break;
             }
             case 'cmdall': {
@@ -859,6 +948,32 @@ async function shutdown(code = 0) {
                 logger.info('Usage: proxy list | proxy add <proxy-string> | proxy addfile <path>');
               }
               break;
+            case 'clean':
+            case 'cleanup':
+            case 'don': {
+              const sub = String(args[0] || '').toLowerCase().trim();
+              if (sub === 'trash' || sub === 'rac') {
+                const t = Janitor.trashStatus(process.env.ANTER_DATA_DIR || process.cwd());
+                if (!t.length) logger.info('Thùng rác trống.');
+                for (const e of t) logger.info(`.anter/trash/${e.name} — ${e.items.length} mục · ${Janitor.fmtBytes(e.bytes)}: ${e.items.slice(0, 6).join(', ')}${e.items.length > 6 ? '...' : ''}`);
+                if (t.length) logger.info('Lấy lại: chép file từ thư mục trên về chỗ cũ (tên đã thay "/" bằng "__"). Tự xoá hẳn sau ' + (Object.assign({}, Janitor.DEFAULTS, config.cleanup || {}).trashDays) + ' ngày.');
+              } else if (sub === 'dry' || sub === 'preview' || sub === 'xem') {
+                runCleanup({ dry: true, detail: true });
+              } else if (sub === 'copies' || sub === 'copy') {
+                const rep = runCleanup({ dry: true, only: ['staleCopies'], overrides: { staleCopies: true }, detail: true });
+                if (rep && (rep.quarantined.length)) logger.info('Xem trước ở trên. Gõ "clean copies yes" để cách ly các bản sao mã nguồn cũ (chỉ khi chạy bằng load.js).');
+                if (rep && args[1] && /^(yes|y|ok)$/i.test(args[1])) runCleanup({ only: ['staleCopies'], overrides: { staleCopies: true }, detail: true });
+              } else if (sub === 'status') {
+                const o = Object.assign({}, Janitor.DEFAULTS, config.cleanup || {});
+                logger.info(`Dọn rác: ${o.enabled === false ? 'TẮT' : 'BẬT'} · khi khởi động: ${o.onStart !== false ? 'có' : 'không'} · định kỳ: ${o.intervalHours > 0 ? o.intervalHours + ' giờ' : 'không'} · log giữ ${manager.fileLogs.keepDays} ngày / tối đa ${o.maxLogMB} MB · backup giữ ${o.keepBackups}`);
+                logger.info('Usage: clean now | clean dry (xem trước) | clean trash (thùng rác) | clean copies [yes] (bản sao mã nguồn cũ)');
+              } else if (sub === '' || sub === 'now' || sub === 'run') {
+                runCleanup({ detail: true });
+              } else {
+                logger.info('Usage: clean [now|dry|status|trash|copies [yes]]');
+              }
+              break;
+            }
             case 'sys':
             case 'system':
               showSysInfo(manager.getSystemMetrics());

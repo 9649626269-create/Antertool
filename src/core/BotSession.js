@@ -31,6 +31,7 @@ const LoginHandler = require('./LoginHandler');
 const AutoLoginFlow = require('./AutoLoginFlow');
 const BeggarGuard = require('./BeggarGuard');
 const StatsReader = require('./StatsReader');
+const ShardShopBuyer = require('./ShardShopBuyer');
 const AutoOrder = require('./AutoOrder');
 const { protectNames } = require('./PremiumLogic');
 const makeVec3 = (x, y, z) => (typeof vec3lib === 'function' ? vec3lib(x, y, z) : new vec3lib.Vec3(x, y, z));
@@ -62,6 +63,7 @@ class BotSession extends EventEmitter {
     this.teleportHandler = new TeleportHandler(this);
     this.loginHandler = new LoginHandler(this);
     this.statsReader = new StatsReader(this);   // đọc /stats <người chơi> (port từ CheckStatsKingMC)
+    this.shardShopBuyer = new ShardShopBuyer(this); // Macro TPA + Mua lồng trong Shard Shop (/shard)
     this.autoLogin = new AutoLoginFlow(this);   // Auto Login & Antibot & Auto Join (cfg.autoLogin, mặc định tắt)
     this.beggarGuard = new BeggarGuard(this);   // chặn người chơi xin tiền/xin đồ/"em là newbie" (cfg.beggarGuard, mặc định BẬT)
     this._logBuffer = new RingBuffer(800);
@@ -698,6 +700,7 @@ class BotSession extends EventEmitter {
     try { this.sessionVerifier.reset(); } catch (e) { dbg('BotSession', e); }
     try { this.autoLogin?.reset(); } catch (e) { dbg('BotSession', e); }
     try { this.statsReader?.reset(); } catch (e) { dbg('BotSession', e); }
+    try { this.shardShopBuyer?.stop(); } catch (e) { dbg('BotSession', e); }
     this._clearAllTimers();
     try { BotActivity.clearActivities(this, this._wasKicked ? 'Bị kick khỏi server' : 'Ngắt kết nối'); } catch (e) { dbg('BotSession', e); }
     this._featuresActive = false;
@@ -969,6 +972,7 @@ class BotSession extends EventEmitter {
         const text = resolveText(json?.json ?? json);
         if (!text.trim()) return;
         if (pos === 'game_info' || pos === 'action_bar') {
+          if (this.shardShopBuyer?.running) this.shardShopBuyer.onMessage(text, pos);
           this.tryChatShard(text);
           this._logHud(text, 'ActionBar');
           return;
@@ -978,6 +982,7 @@ class BotSession extends EventEmitter {
         this.autoLogin.onMessage(text);
         this.beggarGuard.onMessage(text, pos);
         this.statsReader.onMessage(text);
+        if (this.shardShopBuyer?.running) this.shardShopBuyer.onMessage(text, pos);
         if (this._sellCap) this._captureSellRevenue(text, pos);
         if (this._macroSellCap) this._captureMacroSellRevenue(text, pos);
         if (this.autoOrder?.active) this.autoOrder.onMessage(text);
@@ -997,53 +1002,10 @@ class BotSession extends EventEmitter {
       try {
         const t = typeof text === 'string' ? text : resolveText(text?.json ?? text);
         this._logHud(t, type === 'subtitle' ? 'Subtitle' : 'Title');
+        if (this.shardShopBuyer?.running && t) this.shardShopBuyer.onMessage(t);
         if (t && t.trim()) this.emit('serverNotice', { id: this.cfg.id, kind: 'title', text: t });
       } catch (e) { dbg('BotSession', e); }
     });
-    // >>> TEMP DEBUG (xoá sau khi xác định key scoreboard) >>>
-    // mineflayer KHÔNG có sự kiện 'scoreboardUpdated'; sự kiện thật: scoreboardCreated / scoreUpdated /
-    // scoreRemoved / scoreboardPosition / scoreboardTitleChanged. Log đi qua this.log để hiện trong console tool.
-    {
-      const L = m => this.log('warn', '[SBDEBUG] ' + m);
-      const _txt = v => { try { return v == null ? v : (typeof v.toMotd === 'function' ? v.toMotd() : (typeof v === 'string' ? v : JSON.stringify(v))); } catch { return String(v); } };
-      L('Đã bật debug scoreboard (BotSession.js bản debug v3 đang chạy)');
-      let _last = '', _lastDump = 0, _pending = null;
-      const _dump = (why) => {
-        const out = [];
-        const sbs = Object.entries(mc.scoreboards || {});
-        out.push('scoreboards: ' + (sbs.map(([n, sb]) => `${n}(${Object.keys(sb.itemsMap || {}).length})`).join(', ') || '(none)'));
-        out.push('sidebar slots: ' + JSON.stringify(Object.keys(mc.scoreboard || {})));
-        for (const [name, sb] of sbs) {
-          out.push(`[${name}] title=${_txt(sb.title)} items=${JSON.stringify(Object.keys(sb.itemsMap || {}))}`);
-          for (const [entry, item] of Object.entries(sb.itemsMap || {})) {
-            out.push(`  entry="${entry}" score=${item?.value} displayName=${_txt(item?.displayName)}`);
-          }
-        }
-        for (const [tname, team] of Object.entries(mc.teamMap || {})) {
-          if (team.members?.length) out.push(`  team[${tname}] members=${JSON.stringify(team.members)} prefix=${_txt(team.prefix)} suffix=${_txt(team.suffix)}`);
-        }
-        const body = out.join('\n');
-        if (body === _last && why !== 'định kỳ') return; // không lặp lại khi không đổi
-        _last = body;
-        L(`=== SCOREBOARD RAW (${why}) ===`);
-        for (const line of out) L(line);
-      };
-      const _schedule = (why) => {
-        const wait = _lastDump + 3000 - Date.now();
-        if (wait <= 0) { _lastDump = Date.now(); _dump(why); return; }
-        if (_pending) return;
-        _pending = setTimeout(() => { _pending = null; _lastDump = Date.now(); _dump(why + ', trễ'); }, wait);
-        if (_pending.unref) _pending.unref();
-      };
-      for (const ev of ['scoreboardCreated', 'scoreUpdated', 'scoreRemoved', 'scoreboardPosition', 'scoreboardTitleChanged']) {
-        mc.on(ev, () => { try { _schedule(ev); } catch (e) { L('lỗi dump: ' + e.message); } });
-      }
-      // chốt hạ: dump định kỳ 15s/lần phòng khi không có sự kiện nào bắn
-      const _iv = setInterval(() => { try { _dump('định kỳ'); } catch (e) { L('lỗi dump: ' + e.message); } }, 15000);
-      if (_iv.unref) _iv.unref();
-      mc.once('end', () => clearInterval(_iv));
-    }
-    // <<< TEMP DEBUG <<<
     mc.on('scoreboardUpdated', () => {
       try {
         this._updateShard(this.readShard());
@@ -1054,6 +1016,7 @@ class BotSession extends EventEmitter {
     });
     mc.on('windowOpen', win => {
       if (this.statsReader.handleWindow(win)) return; // đang chờ GUI /stats <người chơi> — không để WindowRouter/StatsParser ghi đè shard của chính bot
+      if (this.shardShopBuyer?.ownsWindows()) return; // ShardShopBuyer đang tự điều khiển GUI TPA / Shard Shop
       if (this.autoLogin?.ownsWindows()) return; // AutoLoginFlow đang tự click menu/antibot — không cho WindowRouter/SessionVerifier đè
       if (this._spawnerBusy || this._sellSpawnBusy || this.autoOrder?.isWorking) return; // routine bảo vệ lồng / auto-sell spawn đang tự điều khiển GUI
       if (this.scriptRunner?._running) {
@@ -3546,13 +3509,52 @@ class BotSession extends EventEmitter {
       if (!args[0]) { this.log('warn', 'Cú pháp: macro <tên>'); return; }
       this.scriptRunner.run(args[0]).catch(e => this.log('err', `Macro lỗi: ${e.message}`));
     });
-    r.register('answer', 'Trả lời câu hỏi macro đang chờ (ask/askmap/confirm): answer <nội dung>', (args) => {
+    r.register('answer', 'Trả lời câu hỏi macro đang chờ (ask/askmap/confirm/buyspawner): answer <nội dung>', (args) => {
       const text = args.join(' ');
       if (!text) { this.log('warn', 'Cú pháp: answer <nội dung>'); return; }
+      if (this.shardShopBuyer?.hasPendingQuestion) {
+        this.shardShopBuyer.answer(text);
+        return;
+      }
       if (!this.scriptRunner.answer(text)) {
         this.log('warn', 'Không có câu hỏi nào đang chờ trả lời');
       }
     });
+    const buySpawnerCmd = (args) => {
+      const sub = String(args[0] || '').toLowerCase();
+      if (sub === 'stop' || sub === 'off') {
+        if (this.shardShopBuyer?.running) {
+          this.shardShopBuyer.stop();
+          this.log('ok', 'Đã dừng ShardShopBuyer');
+        } else {
+          this.log('sys', 'ShardShopBuyer không chạy');
+        }
+        return;
+      }
+      if (sub === 'status') {
+        this.log('sys', `ShardShopBuyer: ${this.shardShopBuyer?.status() || 'idle'}`);
+        return;
+      }
+      if (!this.requireOnline('buyspawner')) return;
+      let choice = undefined;
+      let mode = undefined;
+      if (args.length >= 2 && /^[12]$/.test(args[args.length - 1])) {
+        mode = parseInt(args[args.length - 1], 10);
+        const choiceStr = args.slice(0, -1).join(' ').trim();
+        choice = /^\d+$/.test(choiceStr) ? parseInt(choiceStr, 10) : choiceStr;
+      } else if (args.length === 1) {
+        choice = /^\d+$/.test(args[0]) ? parseInt(args[0], 10) : args[0];
+      } else if (args.length > 1) {
+        const fullStr = args.join(' ').trim();
+        choice = /^\d+$/.test(fullStr) ? parseInt(fullStr, 10) : fullStr;
+      }
+      this.shardShopBuyer.start({ choice, mode }).catch(e => {
+        this.log('err', `buyspawner lỗi: ${e.message}`);
+      });
+    };
+    r.register('buyspawner', 'TPA tới owner, mở /shard, lọc kính, chọn lồng và mua: buyspawner [số] [mode 1|2] | buyspawner stop', buySpawnerCmd);
+    r.register('mualong', 'Như buyspawner (alias)', buySpawnerCmd);
+    r.register('tpashard', 'Như buyspawner (alias)', buySpawnerCmd);
     const sellSpawnCmd = (args) => {
       const sub = (args[0] || 'status').toLowerCase();
       const coords = () => {
@@ -3646,8 +3648,10 @@ class BotSession extends EventEmitter {
     r.register('autosell_spawn', 'Tự bán ở lồng: chuột phải lồng -> click ô (mặc định 51) -> đóng GUI, lặp mỗi giờ/phút/giây tuỳ chỉnh + báo cáo doanh thu qua webhook: autosell_spawn on|off|now|scan|every 5m|slot 51|add x y z|revenue', sellSpawnCmd);
     r.register('autosellspawn', 'Như autosell_spawn (tên viết liền)', sellSpawnCmd);
     r.register('stopmacro', 'Dừng macro đang chạy', () => {
-      this.scriptRunner.stop();
-      this.log('sys', 'Đã gửi yêu cầu dừng macro');
+      const m1 = this.scriptRunner.stop();
+      const m2 = this.shardShopBuyer?.running ? this.shardShopBuyer.stop() : false;
+      if (m1 || m2) this.log('sys', 'Đã gửi yêu cầu dừng macro');
+      else this.log('warn', 'Không có macro nào đang chạy');
     });
     r.register('listmacro', 'Xem danh sách macro (config.json > macros)', () => {
       const names = this.scriptRunner.list();

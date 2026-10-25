@@ -81,6 +81,7 @@ class ScriptRunner {
     if (!this._running) return false;
     this._stopRequested = true;
     this._stopEmitter.emit('stop');
+    if (this.bot.shardShopBuyer?.running) this.bot.shardShopBuyer.stop();
     return true;
   }
 
@@ -378,6 +379,13 @@ class ScriptRunner {
         const yes = answer !== null && /^(y|yes|co|có|ok|dong\s*y|đồng\s*ý|xac\s*nhan|xác\s*nhận)$/i.test(answer.trim());
         if (!yes) { this.bot.log('warn', 'Macro: huỷ vì không được xác nhận'); return true; }
         this.bot.log('ok', 'Macro: đã xác nhận, tiếp tục');
+      } else if (op === 'buyspawner' || op === 'mualong' || op === 'tpashard') {
+        const choice = parts[1];
+        const mode = parts[2];
+        if (this.bot.shardShopBuyer) {
+          const ok = await this.bot.shardShopBuyer.start({ choice, mode });
+          if (!ok && this._stopRequested) return true;
+        }
       } else {
         this.bot.log('warn', `Macro: dòng không hiểu "${line}" (bỏ qua)`);
       }

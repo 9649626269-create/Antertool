@@ -18,6 +18,12 @@ const { migrateTelegramConfig, normalizeTelegramConfig } = require('../src/core/
 const { sym, setSymbolSet } = require('../src/core/Symbols');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const waitForCalls = async (mock, count, timeoutMs = 1500) => {
+  const t0 = Date.now();
+  while (mock.calls.length < count && Date.now() - t0 < timeoutMs) {
+    await sleep(15);
+  }
+};
 
 function startControlledTelegramServer() {
   const calls = [];
@@ -245,19 +251,19 @@ function startControlledTelegramServer() {
   assert.strictEqual(mock.calls.length, 0, 'sellCycle tắt mặc định');
   cfg.telegramSellCycleNotify = true;
   center.emit({ key: 'sellCycle', bot: 'bot-1', fields: [['Thu về', '+250K']] });
-  await sleep(60);
+  await waitForCalls(mock, 1);
   assert.strictEqual(mock.calls.length, 1);
   assert.strictEqual(mock.calls[0].body.disable_notification, true, 'sellCycle là info -> gửi im lặng');
 
   // 2b. Dedup trong cửa sổ 30s: lần 2 sửa lại tin đầu kèm ×2 · lần cuối HH:MM:SS
   mock.calls.length = 0;
   center.emit({ key: 'homeReturn', bot: 'bot-1', cause: 'Lệch toạ độ', fingerprint: 'drift-1' });
-  await sleep(60);
+  await waitForCalls(mock, 1);
   assert.strictEqual(mock.calls.length, 1);
   assert.strictEqual(mock.calls[0].method, 'sendMessage');
   curNow += 5000;
   center.emit({ key: 'homeReturn', bot: 'bot-1', cause: 'Lệch toạ độ', fingerprint: 'drift-1' });
-  await sleep(60);
+  await waitForCalls(mock, 2);
   assert.strictEqual(mock.calls.length, 2);
   assert.strictEqual(mock.calls[1].method, 'editMessageText');
   assert.ok(mock.calls[1].body.text.includes(`${sym('mult')}2`) && mock.calls[1].body.text.includes('lần cuối'));
@@ -268,7 +274,7 @@ function startControlledTelegramServer() {
   mock.calls.length = 0;
   center.emit({ key: 'homeReturn', bot: 'bot-1', cause: 'Lệch mới', fingerprint: 'drift-2' });
   center.emit({ key: 'disconnect', bot: 'bot-1', reason: 'Server restart', fingerprint: 'disc-1' });
-  await sleep(80);
+  await waitForCalls(mock, 2);
   const homeCall = mock.calls.find(c => c.body.text.includes('Lệch vị trí'));
   const discCall = mock.calls.find(c => c.body.text.includes('Mất kết nối'));
   assert.strictEqual(homeCall.body.disable_notification, true, 'mute biến thông báo thường thành im lặng, không làm mất tin');
@@ -277,7 +283,7 @@ function startControlledTelegramServer() {
   cfg.telegramMuteCrit = true;
   mock.calls.length = 0;
   center.emit({ key: 'disconnect', bot: 'bot-1', reason: 'Server restart 2', fingerprint: 'disc-2' });
-  await sleep(60);
+  await waitForCalls(mock, 1);
   assert.strictEqual(mock.calls[0].body.disable_notification, true, 'telegramMuteCrit = true làm im lặng cả crit');
   cfg.telegramMuteUntil = 0;
   cfg.telegramMuteCrit = false;
@@ -289,7 +295,7 @@ function startControlledTelegramServer() {
   for (let i = 1; i <= 8; i++) {
     center.emit({ key: 'homeReturn', bot: 'bot-1', cause: `Lệch lần ${i}`, fingerprint: `storm-${i}` });
   }
-  await sleep(120);
+  await waitForCalls(mock, 8);
   const digestSend = mock.calls.find(c => c.method === 'sendMessage' && c.body.text.includes('sự kiện đã được gộp trong 60s'));
   const digestEdit = mock.calls.find(c => c.method === 'editMessageText' && c.body.text.includes('2 sự kiện đã được gộp trong 60s'));
   assert.ok(digestSend, 'tin thứ 7 tạo tin gộp (digest)');
