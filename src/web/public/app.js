@@ -566,7 +566,7 @@ function renderLogs(b) {
         <button class="btn btn-ghost btn-sm" onclick="copyLogs()" aria-label="Copy log">📋 Copy</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadLogs()" aria-label="Download log">⬇ Download</button>
       </div>
-      <div class="log-box" id="log-box"></div>
+      <div class="log-box" id="log-box" data-lenis-prevent></div>
       <div class="cmd-row">
         <input class="cmd-input" id="cmd-input" placeholder="Gõ lệnh chat hoặc command..." onkeydown="handleCmdKey(event)">
         <button class="btn btn-primary" onclick="sendCmd()" aria-label="Gửi lệnh">Send</button>
