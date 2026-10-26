@@ -2,9 +2,9 @@
 /*
  * scroll.js — tích hợp Lenis 1.3.27 cho Antares Manager.
  *
- * Vì sao Lenis chạy trên #tab-content chứ không phải window:
+ * Vì sao Lenis chạy trên #tab-scroll chứ không phải window:
  *   giao diện là app-shell cố định 100dvh (html/body overflow:hidden), trang không bao giờ cuộn.
- *   Vùng cuộn chính là #tab-content, nên Lenis dùng wrapper/content = #tab-content.
+ *   Vùng cuộn chính là #tab-scroll (wrapper); #tab-content là con trực tiếp (content, render bằng innerHTML).
  *
  * Các vùng cuộn lồng nhau (log console, modal, sidebar...) được cách ly bằng thuộc tính
  * data-lenis-prevent (đặt trong index.html / app.js) nên cuộn native, không bị Lenis làm mượt.
@@ -13,8 +13,9 @@
  * mọi tính năng (progress, Back to Top, nhảy mục) vẫn hoạt động.
  */
 (function () {
-  var scroller = document.getElementById('tab-content');
-  if (!scroller) return;
+  var scroller = document.getElementById('tab-scroll');   // wrapper cuộn
+  var content = document.getElementById('tab-content');   // con trực tiếp, nội dung bị thay bằng innerHTML
+  if (!scroller || !content) return;
 
   var root = document.documentElement;
   var bar = document.getElementById('scroll-progress');
@@ -100,7 +101,7 @@
   /* ---------- Menu "nhảy tới mục" ---------- */
   function collectSections() {
     var out = [];
-    var nodes = scroller.querySelectorAll(SECTION_SEL);
+    var nodes = content.querySelectorAll(SECTION_SEL);
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
       // .cfg-section-title lồng bên trong thẻ (vd "Doanh thu") không phải mục cấp cao nhất
@@ -138,6 +139,57 @@
     jumpWrap.hidden = false;
   }
 
+  /* ---------- Lưới an toàn: nếu Lenis làm trang không cuộn được -> tự tắt Lenis, dùng cuộn native ---------- */
+  var lastScrollAt = 0;
+  var probePending = false;
+  var probeFails = 0;
+  function hasNestedScroller(target) {
+    for (var n = target; n && n !== scroller && n.nodeType === 1; n = n.parentElement) {
+      if (n.hasAttribute('data-lenis-prevent')) return true;
+      var cs = getComputedStyle(n);
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && n.scrollHeight > n.clientHeight + 1) return true;
+    }
+    return false;
+  }
+  function disableLenis(reason) {
+    console.warn('[scroll] Lenis bị tắt, dùng cuộn native. Lý do:', reason, debugInfo());
+    try { lenis.destroy(); } catch (e) { /* bỏ qua */ }
+    lenis = null;
+    root.removeAttribute('data-smooth-scroll');
+    scroller.classList.remove('lenis', 'lenis-smooth', 'lenis-stopped', 'lenis-autoToggle', 'lenis-scrolling');
+    scroller.addEventListener('scroll', onNativeScroll, { passive: true });
+    refresh();
+  }
+  function onWheelProbe(e) {
+    if (!lenis || locked || probePending || e.ctrlKey || !e.deltaY) return;
+    if (hasNestedScroller(e.target)) return;
+    var m = metrics();
+    var room = e.deltaY > 0 ? m.limit - m.scroll : m.scroll;
+    if (room < 4) return;                       // đang ở mép: không cuộn được là bình thường
+    if (lenis.isStopped) { try { lenis.start(); } catch (err) { /* bỏ qua */ } }
+    // Không so sánh scrollTop trước/sau (wheel passive có thể đã cuộn xong trước khi handler chạy);
+    // thay vào đó kiểm tra có sự kiện 'scroll' nào xảy ra quanh thời điểm wheel hay không.
+    var t0 = performance.now() - 150;
+    probePending = true;
+    setTimeout(function () {
+      probePending = false;
+      if (!lenis || locked) return;
+      if (lastScrollAt < t0) {
+        probeFails++;
+        if (probeFails >= 2) disableLenis('wheel không tạo ra sự kiện cuộn nào');
+      } else probeFails = 0;
+    }, 700);
+  }
+  function debugInfo() {
+    var m = metrics();
+    return {
+      lenis: !!lenis, isStopped: lenis ? lenis.isStopped : null, locked: locked,
+      lenisLimit: lenis ? lenis.limit : null, nativeLimit: m.limit, scrollTop: m.scroll,
+      clientHeight: scroller.clientHeight, scrollHeight: scroller.scrollHeight,
+      overflowY: getComputedStyle(scroller).overflowY, classes: scroller.className
+    };
+  }
+
   /* ---------- Khởi tạo ---------- */
   function onLenisScroll(l) {
     // Lenis truyền instance: { scroll, velocity, progress, limit }
@@ -153,7 +205,7 @@
       try {
         lenis = new window.Lenis({
           wrapper: scroller,
-          content: scroller,        // nội dung #tab-content bị thay bằng innerHTML nên dùng chính nó
+          content: content,
           eventsTarget: scroller,
           autoRaf: true,
           lerp: 0.1,                // khi có lerp, Lenis bỏ qua duration/easing (duration giữ lại theo cấu hình)
@@ -172,6 +224,8 @@
       }
     }
     if (!lenis) scroller.addEventListener('scroll', onNativeScroll, { passive: true });
+    else scroller.addEventListener('wheel', onWheelProbe, { passive: true, capture: true });
+    scroller.addEventListener('scroll', function () { lastScrollAt = performance.now(); }, { passive: true });
     root.toggleAttribute('data-smooth-scroll', !!lenis);
 
     // Lỡ có modal đang mở trước khi Lenis sẵn sàng
@@ -189,7 +243,7 @@
       lastKey = key;
       rebuildJump();
       scheduleRefresh();
-    }).observe(scroller, { childList: true });
+    }).observe(content, { childList: true });
 
     // Nội dung tải bất đồng bộ / mở <details> làm đổi chiều cao (bỏ qua log console đã cách ly)
     new MutationObserver(function (list) {
@@ -199,8 +253,8 @@
         scheduleRefresh();
         return;
       }
-    }).observe(scroller, { childList: true, subtree: true });
-    scroller.addEventListener('toggle', scheduleRefresh, true);
+    }).observe(content, { childList: true, subtree: true });
+    content.addEventListener('toggle', scheduleRefresh, true);
     window.addEventListener('resize', scheduleRefresh);
 
     // Modal/drawer: theo dõi class thay vì sửa từng chỗ mở/đóng trong app.js
@@ -239,6 +293,7 @@
     top: function () { scrollToTarget(0, { duration: 1.2 }); },
     stop: function () { if (lenis) lenis.stop(); },
     start: function () { if (lenis) lenis.start(); },
+    debug: debugInfo,           // gõ AntScroll.debug() trong Console để xem trạng thái cuộn
     get lenis() { return lenis; }
   };
 })();

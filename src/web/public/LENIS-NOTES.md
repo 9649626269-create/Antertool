@@ -8,3 +8,6 @@
 - Modal/drawer mở -> `lenis.stop()`, đóng -> `lenis.start()` (theo dõi class `.open`, xem `scroll.js`).
 - Đổi tab/bot -> về đầu trang; cập nhật live -> giữ nguyên vị trí cuộn.
 - API: `window.AntScroll.scrollTo(target, opts)`, `.top()`, `.stop()`, `.start()`.
+- Cấu trúc DOM: `#tab-scroll` (wrapper cuộn) > `#tab-content` (content, render bằng innerHTML).
+- Lưới an toàn: nếu wheel không tạo ra sự kiện cuộn 2 lần liên tiếp, Lenis tự bị tắt (console.warn) và dùng cuộn native.
+- Chẩn đoán: mở Console trình duyệt, gõ `AntScroll.debug()`.
