@@ -4,7 +4,7 @@
 - Muốn chạy offline/LAN không internet: tải `lenis.min.js` (và `lenis.css` nếu muốn) vào `src/web/public/vendor/`.
   Không có Lenis thì giao diện tự dùng cuộn native, mọi tính năng vẫn chạy.
 - Lenis chạy trên `#tab-content` (không phải `window`) vì app-shell cố định 100dvh, trang không cuộn.
-- Vùng cuộn lồng nhau: `data-lenis-prevent` (log console, sidebar, modal, menu nhảy mục).
+- Vùng cuộn lồng nhau: `data-lenis-prevent` (log console, sidebar, modal, menu nhảy mục) + `allowNestedScroll: true` làm lưới an toàn.
 - Modal/drawer mở -> `lenis.stop()`, đóng -> `lenis.start()` (theo dõi class `.open`, xem `scroll.js`).
 - Đổi tab/bot -> về đầu trang; cập nhật live -> giữ nguyên vị trí cuộn.
 - API: `window.AntScroll.scrollTo(target, opts)`, `.top()`, `.stop()`, `.start()`.

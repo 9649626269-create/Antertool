@@ -160,6 +160,7 @@
           duration: 1.2,
           smoothWheel: true,
           anchors: true,
+          allowNestedScroll: true,  // lưới an toàn: tự cho vùng cuộn lồng nhau cuộn native, kể cả vùng chưa gắn data-lenis-prevent
           autoToggle: true,
           stopInertiaOnNavigate: true,
           naiveDimensions: true     // chiều cao nội dung đổi liên tục (render động) -> đo trực tiếp
