@@ -26,6 +26,8 @@ const SECTIONS = [
       { name: 'checkstats', usage: 'checkstats <người chơi>', desc: 'xem stats của người chơi khác: gõ /stats <tên>, đọc GUI, làm sạch tên + lore, bỏ item trang trí' },
       { name: 'autologin', usage: 'autologin on|off|status|now', desc: 'Auto Login & Antibot & Auto Join: tự đăng nhập (/l), vượt GUI antibot, mở /menu và click vào server; now = vào server ngay' },
       { name: 'beggar', usage: 'beggar on|off|status|list|forget <tên>|test <tin>', desc: 'chặn người ăn xin (xin tiền/xin đồ/"em là newbie"): tự gõ /block <tên> một lần cho mỗi người; test = thử một tin nhắn (gõ "begger" cũng được)' },
+      { name: 'autobeg', usage: 'autobeg on [dry|live] | off | estop | pause | resume | status | test <dòng> | forget <tên>', desc: 'Auto Xin Tiền / Thu Tiền: /msg xin tiền theo danh sách cho phép, cảm ơn khi nhận tiền, /bal rồi /pay cho owner khi đủ ngưỡng; estop = dừng khẩn cấp' },
+      { name: 'msg', usage: 'msg <người chơi> <tin nhắn>', desc: 'gửi tin nhắn riêng (/msg) có kiểm tra tên/độ dài và giới hạn tốc độ' },
       { name: 'sessioncheck', usage: 'sessioncheck on|off|status', desc: 'quản lý SessionCheck verify: bật/tắt/xem trạng thái tự vượt anti-bot khi kết nối' },
       { name: 'status', usage: 'status', desc: 'hiện trạng thái bot' },
       { name: 'ping', usage: 'ping', desc: 'hiện ping' },

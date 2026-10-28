@@ -30,6 +30,8 @@ const TeleportHandler = require('./TeleportHandler');
 const LoginHandler = require('./LoginHandler');
 const AutoLoginFlow = require('./AutoLoginFlow');
 const BeggarGuard = require('./BeggarGuard');
+const AutoBeg = require('./AutoBeg');
+const MoneyParse = require('./MoneyParse');
 const StatsReader = require('./StatsReader');
 const ShardShopBuyer = require('./ShardShopBuyer');
 const AutoOrder = require('./AutoOrder');
@@ -66,6 +68,7 @@ class BotSession extends EventEmitter {
     this.shardShopBuyer = new ShardShopBuyer(this); // Macro TPA + Mua lồng trong Shard Shop (/shard)
     this.autoLogin = new AutoLoginFlow(this);   // Auto Login & Antibot & Auto Join (cfg.autoLogin, mặc định tắt)
     this.beggarGuard = new BeggarGuard(this);   // chặn người chơi xin tiền/xin đồ/"em là newbie" (cfg.beggarGuard, mặc định BẬT)
+    this.autoBeg = new AutoBeg(this);           // Auto Xin Tiền / Thu Tiền (cfg.autoBeg, mặc định TẮT)
     this._logBuffer = new RingBuffer(800);
     this._stateChangedAt = 0;
     this._spLastScanAt = 0;
@@ -700,6 +703,7 @@ class BotSession extends EventEmitter {
     try { this.sessionVerifier.reset(); } catch (e) { dbg('BotSession', e); }
     try { this.autoLogin?.reset(); } catch (e) { dbg('BotSession', e); }
     try { this.statsReader?.reset(); } catch (e) { dbg('BotSession', e); }
+    try { this.autoBeg?.onDisconnect(); } catch (e) { dbg('BotSession', e); }
     try { this.shardShopBuyer?.stop(); } catch (e) { dbg('BotSession', e); }
     this._clearAllTimers();
     try { BotActivity.clearActivities(this, this._wasKicked ? 'Bị kick khỏi server' : 'Ngắt kết nối'); } catch (e) { dbg('BotSession', e); }
@@ -931,6 +935,7 @@ class BotSession extends EventEmitter {
         // Không còn bật tính năng ngay lúc spawn: đi tuần tự đăng nhập -> menu -> đúng vị trí -> bật (xem _continueAfterLogin)
         if (!cfg.botPassword) this._loginCmdDone = true; // không có mật khẩu thì không có bước /dn để chờ
         this._continueAfterLogin();
+        this.autoBeg.autoStartIfConfigured();   // cfg.autoBeg.enabled = true -> tự chờ vào game xong rồi chạy
       } else {
         this.log('sys', 'Đã hồi sinh (respawn)');
         this._resumeIntendedStates();
@@ -981,6 +986,7 @@ class BotSession extends EventEmitter {
         this.sessionVerifier.onMessage(text, pos);
         this.autoLogin.onMessage(text);
         this.beggarGuard.onMessage(text, pos);
+        this.autoBeg.onMessage(text, pos);
         this.statsReader.onMessage(text);
         if (this.shardShopBuyer?.running) this.shardShopBuyer.onMessage(text, pos);
         if (this._sellCap) this._captureSellRevenue(text, pos);
@@ -1059,6 +1065,7 @@ class BotSession extends EventEmitter {
       this.log('warn', 'Bị kick: ' + kickMsg);
       // ── SessionCheck: detect connection-level block, set delay override ──
       this.sessionVerifier.onKick(kickMsg);
+      this.autoBeg?.onKicked(kickMsg);
       this._onKickedDuringSell(kickMsg);
       this._queueKickNotify(kickMsg);
       this.emit('kicked', { id: this.cfg.id, reason: kickMsg, raw: reason });
@@ -2721,6 +2728,13 @@ class BotSession extends EventEmitter {
     if (c) Object.assign(c, data);
     mgr?.persistence?.markDirty();
   }
+  _persistAutoBegCfg() {
+    const data = { autoBeg: this.cfg.autoBeg };
+    const mgr = this._manager;
+    const c = mgr?._config?.bots?.find(x => String(x.id).toLowerCase() === String(this.cfg.id).toLowerCase());
+    if (c) Object.assign(c, data);
+    mgr?.persistence?.markDirty();
+  }
   _persistAutoLoginCfg() {
     const data = { autoLogin: this.cfg.autoLogin };
     const mgr = this._manager;
@@ -3049,6 +3063,7 @@ class BotSession extends EventEmitter {
   }
   shutdown() {
     this._disabled = true;
+    try { this.autoBeg?.estop('bot tắt', { user: false }); } catch (e) { dbg('BotSession', e); } // dừng ngay, không gửi thêm gì; /pay dở dang (nếu có) -> UNKNOWN
     this._setState(CS.STOPPING);
     this._cleanupOnDisconnect();
     this._onConnectComplete();
@@ -3154,6 +3169,51 @@ class BotSession extends EventEmitter {
     r.register('begger', 'Chặn người ăn xin (alias của beggar): begger on|off|status|list|forget <tên>|test <tin nhắn>', (args) => {
       const entry = r._commands.get('beggar');
       if (entry && entry.fn) entry.fn(args);
+    });
+    r.register('msg', 'Gửi tin nhắn riêng (/msg): msg <người chơi> <tin nhắn>', (args) => {
+      const p = AutoBeg.parseMsgArgs(args, this.autoBeg.myName);
+      if (!p.ok) { this.log('warn', p.error); return; }
+      if (!this.requireOnline('msg')) return;
+      this.autoBeg.sendManualMsg(p.name, p.cmd).then(res => {
+        if (res.ok) this.log('ok', `Đã gửi /msg tới ${p.name} (chưa có bằng chứng server chấp nhận; nếu người đó offline server sẽ báo lỗi)`);
+        else this.log('warn', `Không gửi được /msg tới ${p.name}: ${res.error}`);
+      }).catch(e => this.log('err', 'Lỗi msg: ' + e.message));
+    });
+    r.register('autobeg', 'Auto Xin Tiền / Thu Tiền: autobeg on [dry|live] | off | estop | pause | resume | status | test <dòng server> | forget <tên>', (args) => {
+      const ab = this.autoBeg;
+      const sub = String(args[0] || 'status').toLowerCase();
+      const setEnabled = (v) => { this.cfg.autoBeg = { ...(this.cfg.autoBeg || {}), enabled: v }; this._persistAutoBegCfg(); };
+      if (sub === 'on') {
+        const mode = String(args[1] || '').toLowerCase();
+        const res = ab.enable({ dry: mode === 'dry' ? true : (mode === 'live' ? false : null) });
+        if (!res.ok) { this.log('warn', `AutoBeg không bật được: ${res.reason}`); return; }
+        setEnabled(true);
+      } else if (sub === 'off' || sub === 'stop') {
+        ab.stop('người dùng'); setEnabled(false);
+        this.log('ok', 'AutoBeg đang tắt (nếu đang chờ xác minh /pay thì chờ xong mới tắt hẳn)');
+      } else if (sub === 'estop') {
+        ab.estop('dừng khẩn cấp'); setEnabled(false);
+        this.log('warn', 'AutoBeg DỪNG KHẨN CẤP — hàng đợi đã xoá, không gửi thêm tin/giao dịch nào');
+      } else if (sub === 'pause') {
+        this.log(ab.pause('người dùng') ? 'ok' : 'warn', ab.active ? 'Đã tạm dừng (gõ: autobeg resume)' : 'AutoBeg đang tắt');
+      } else if (sub === 'resume') {
+        const res = ab.resume();
+        this.log(res.ok ? 'ok' : 'warn', res.ok ? 'AutoBeg tiếp tục' : `Không tiếp tục được: ${res.reason}`);
+      } else if (sub === 'forget') {
+        const name = String(args[1] || '').trim().toLowerCase();
+        if (!name) { this.log('warn', 'Cú pháp: autobeg forget <tên> (xoá khỏi sổ đã xin/từ chối)'); return; }
+        const had = ab.ledger.forget(name);
+        this.log(had ? 'ok' : 'warn', had ? `Đã xoá ${name} khỏi sổ` : `${name} không có trong sổ`);
+      } else if (sub === 'test') {
+        const line = args.slice(1).join(' ');
+        if (!line) { this.log('warn', 'Cú pháp: autobeg test <dòng server>, ví dụ: autobeg test » Bạn nhận được $100K từ Noanno'); return; }
+        const ev = MoneyParse.classifyLine(line);
+        if (!ev) { this.log('sys', 'Test: KHÔNG phải dòng hệ thống đã biết (sẽ bị bỏ qua)'); return; }
+        const amt = ev.amount ? (ev.amount.ok ? `${MoneyParse.formatBig(ev.amount.value)} (${ev.amount.exact ? 'chính xác' : 'rút gọn, sai số ±' + ev.amount.precision})` : `KHÔNG đọc được: ${ev.amount.reason}`) : '-';
+        this.log('sys', `Test: loại ${ev.type}${ev.sender ? ` · người gửi ${ev.sender}` : ''}${ev.player ? ` · người chơi ${ev.player}` : ''} · số tiền ${amt} · chỉ được tin khi position thuộc [${ab.o.trustedPositions.join(',')}]`);
+      } else {
+        this.log('sys', ab.status() + ' | Lệnh: autobeg on [dry|live]|off|estop|pause|resume|test <dòng>|forget <tên>');
+      }
     });
     r.register('shard', 'Bật/Tắt Auto Shard', () => {
       if (!this.requireOnline('shard')) return;

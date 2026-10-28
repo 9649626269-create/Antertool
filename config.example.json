@@ -50,6 +50,26 @@
     "entityTimeout": 90000
   },
   "beggarGuard": { "enabled": true, "action": "block", "commands": ["/block {player}"], "minScore": 1, "whitelist": [] },
+  "autoBeg": {
+    "enabled": false,
+    "dryRun": false,
+    "autoTransfer": true,
+    "owner": "",
+    "minBalanceThreshold": "100K",
+    "recipientMode": "allowlist",
+    "allowedRecipients": [],
+    "blacklistRecipients": [],
+    "requestMessageTemplate": "Em là newbie ạ, anh/chị cho em xin 100k mua giáp khởi nghiệp với huhu",
+    "thankMessageTemplate": "Cảm ơn anh/chị nhiều ạ ❤",
+    "messageDelayMs": 3000,
+    "responseTimeoutMs": 5000,
+    "maxMessagesPerMinute": 12,
+    "maxRecipientsPerRound": 20,
+    "maxRounds": 3,
+    "roundCooldownMs": 600000,
+    "askCooldownMs": 86400000,
+    "dedupWindowMs": 1000
+  },
   "bots": [
     {
       "id": "bot-1",

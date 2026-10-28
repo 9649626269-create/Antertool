@@ -89,6 +89,46 @@ Port phần đọc dữ liệu stats của CheckStatsKingMC → `src/core/StatsR
 ```
 `action: "notify"` = chỉ ghi log `Ăn xin: <tên> ...`, không chặn. `commands` có thể có tối đa 3 lệnh (vd. thêm `/mute {player}`); `{player}` được thay bằng tên. Đặt trong `config.json` cấp toàn cục hoặc từng bot.
 
+## Auto Xin Tiền / Thu Tiền (`autobeg`, `msg`)
+`src/core/AutoBeg.js` + `src/core/MoneyParse.js`. **Mặc định TẮT.** "Clone" là một bot đã có trong `config.json` (thêm bằng `addbot`, đăng nhập bằng quy trình hiện có); module **không** tự tạo tài khoản và không vượt xác thực / giới hạn / chống spam của server.
+
+Luồng: vào server xong (đăng nhập + menu) → lấy người online → lọc (loại chính bot, bot cùng hệ thống, owner, blacklist, người đã từ chối/đã xin trong `askCooldownMs`) → `/msg <người> <mẫu xin tiền>` có giãn cách và giới hạn/phút → khi hết danh sách `/bal` → nếu số dư đạt ngưỡng thì `/pay <owner> <số tiền>` đúng một lần → xác minh bằng phản hồi của server. Song song, mỗi dòng `» Bạn nhận được $<số> từ <người>` được ghi nhận và cảm ơn bằng `/msg`.
+
+Lệnh (qua `cmd <id> ...` hoặc `cmdall ...`):
+```
+autobeg on [dry|live]    # bật (dry = chỉ ghi ý định /pay, không gửi); lưu enabled:true vào config
+autobeg off              # dừng có kiểm soát (đang chờ xác minh /pay thì chờ xong mới tắt)
+autobeg estop            # DỪNG KHẨN CẤP: xoá hàng đợi, không gửi thêm tin/giao dịch nào
+autobeg pause | resume   # tạm dừng / tiếp tục (bắt buộc resume sau pause cứng, vd /pay UNKNOWN)
+autobeg status           # trạng thái, số liệu vòng
+autobeg test <dòng>      # kiểm tra một dòng server có được nhận dạng không (không tác dụng phụ)
+autobeg forget <tên>     # xoá khỏi sổ đã xin / đã từ chối
+msg <người chơi> <tin nhắn>   # /msg có kiểm tra tên, độ dài (<=256), giới hạn tốc độ
+```
+Trạng thái: `OFF, STARTING, CONNECTING, READY, REQUESTING, CHECKING_BALANCE, TRANSFERRING, VERIFYING, PAUSED, STOPPING`; chuyển trạng thái được kiểm tra, mỗi bot chỉ có một vòng chạy.
+
+Cấu hình (`autoBeg` toàn cục hoặc trong từng bot; mọi giá trị được kiểm tra khi bật, sai thì báo lỗi và không bật):
+```json
+"autoBeg": { "enabled": false, "dryRun": false, "autoTransfer": true, "owner": "ten_owner", "minBalanceThreshold": "100K",
+  "reserve": "0", "maxTransferAmount": "", "recipientMode": "allowlist", "allowedRecipients": ["Steve"], "blacklistRecipients": [],
+  "requestMessageTemplate": "Em là newbie ạ, anh/chị cho em xin 100k mua giáp khởi nghiệp với huhu",
+  "thankMessageTemplate": "Cảm ơn anh/chị nhiều ạ", "thankEnabled": true, "thankCooldownMs": 60000,
+  "messageDelayMs": 3000, "responseTimeoutMs": 5000, "maxMessagesPerMinute": 12, "maxRecipientsPerRound": 20,
+  "maxRounds": 3, "roundCooldownMs": 600000, "askCooldownMs": 86400000, "dedupWindowMs": 1000,
+  "verifyWithBalance": true, "trustedPositions": ["system"] }
+```
+- `owner` **bắt buộc** khi chuyển tiền (không có giá trị mặc định, không tự đoán); đặt `"autoTransfer": false` để chỉ xin tiền.
+- `recipientMode`: `allowlist` (mặc định, chỉ `allowedRecipients`) hoặc `online` (mọi người online trừ blacklist). Có sàn an toàn cho `messageDelayMs` (>= 1500), `responseTimeoutMs`, `roundCooldownMs`.
+- Sổ dữ liệu chung `autobeg.json` (cạnh `config.json`): người đã xin/từ chối (nhiều clone không xin trùng một người) và nhật ký giao dịch. Ý định `/pay` được ghi xuống đĩa **trước** khi gửi.
+
+An toàn tiền bạc (tóm tắt):
+- Số tiền xử lý bằng BigInt; `$13.87M` là số làm tròn nên `/pay` chỉ gửi mức chắc chắn không vượt số dư thật (trừ 1 đơn vị hiển thị, vd `13860000`). Không đọc được số dư thì không chuyển và không mặc định bằng 0.
+- Dòng `Bạn nhận được / Bạn có / Bạn đã chuyển cho / ...` chỉ được tin khi khớp toàn dòng, bắt đầu bằng "»" và position là `system`; tin người chơi tự chat hoặc `/msg` giả mạo không bao giờ được tính. `/pay` không bao giờ được kích hoạt bởi tin "Bạn nhận được".
+- `/pay` gửi đúng một lần. Không có phản hồi hoặc mất kết nối ngay sau khi gửi thì giao dịch là `UNKNOWN`: tạm dừng cứng, tự đọc `/bal` để bạn đối chiếu, **không bao giờ tự gửi lại**; bạn kiểm tra rồi gõ `autobeg resume`.
+- Phản hồi luôn đi qua listener của chính bot đã gửi lệnh. Nhãn `[Server]`/`[S1]` trong console chỉ là cách hiển thị (ChatFilter), không dùng để định tuyến.
+- Hai khoản nhận tiền thật cùng người, cùng số tiền cách nhau quá `dedupWindowMs` đều được tính; chỉ tin lặp trong cửa sổ ngắn đó bị coi là gói trùng.
+Test: `test/money-parse.test.js`, `test/auto-beg.test.js`, `test/auto-beg-integration.test.js`.
+
 ## Chạy
 ```bash
 node load.js          # khuyên dùng: tự tải/cập nhật code từ GitHub rồi chạy

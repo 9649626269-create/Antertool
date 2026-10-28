@@ -304,6 +304,21 @@ function validateConfig(cfg) {
   checkAutoLogin(cfg.autoLogin, 'config');
   if (Array.isArray(cfg.bots)) cfg.bots.forEach((b, i) => { if (isObj(b)) checkAutoLogin(b.autoLogin, `bots[${i}]`); });
 
+  // autoBeg (toàn cục hoặc từng bot) — dùng đúng bộ kiểm tra của module AutoBeg
+  const checkAutoBeg = (ab, where) => {
+    if (ab === undefined || ab === null) return;
+    if (!isObj(ab)) { errors.push(`${where}.autoBeg phải là object`); return; }
+    try {
+      const r = require('./AutoBeg').resolveOptions(ab);
+      for (const e of r.errors) errors.push(`${where}: ${e}`);
+      if (ab.enabled === true && r.o.autoTransfer && !r.o.ownerValid && !(isStr(ab.owner) && ab.owner.trim())) {
+        errors.push(`${where}.autoBeg.owner bắt buộc khi enabled:true và autoTransfer chưa tắt (không tự đoán tên owner)`);
+      }
+    } catch (e) { errors.push(`${where}.autoBeg: không kiểm tra được (${e.message})`); }
+  };
+  checkAutoBeg(cfg.autoBeg, 'config');
+  if (Array.isArray(cfg.bots)) cfg.bots.forEach((b, i) => { if (isObj(b)) checkAutoBeg(b.autoBeg, `bots[${i}]`); });
+
   // macros
   validateMacros(cfg.macros, 'macros', errors);
   if (Array.isArray(cfg.bots)) cfg.bots.forEach((b, i) => { if (isObj(b)) validateMacros(b.macros, `bots[${i}].macros`, errors); });

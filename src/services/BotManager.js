@@ -243,6 +243,7 @@ class BotManager {
       viewDistance: src.viewDistance || null,
       autoLogin: src.autoLogin || root.autoLogin || null,
       beggarGuard: src.beggarGuard || root.beggarGuard || null,
+      autoBeg: src.autoBeg || root.autoBeg || null,
       theme: src.theme || 'teal',
       authMode: src.authMode || 'offline',
       macros: src.macros || root.macros || {},

@@ -55,7 +55,7 @@ const DEFAULTS = Object.freeze({
 
 // Dữ liệu của người dùng / file hệ thống: tuyệt đối không xoá, không cách ly.
 const PROTECTED = new Set([
-  'config.json', 'config.json.bak', '.env', 'update.json', 'revenue.json', 'proxies.txt', 'beggars.json',
+  'config.json', 'config.json.bak', '.env', 'update.json', 'revenue.json', 'proxies.txt', 'beggars.json', 'autobeg.json',
   'ai_history.json', 'load.js', 'state.json', 'package.json', 'package-lock.json',
 ]);
 
