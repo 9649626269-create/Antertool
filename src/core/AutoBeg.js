@@ -845,7 +845,12 @@ class AutoBeg {
   }
   _onBalance(ev) {
     if (!this._balCtx || this._balCtx.done) return;           // chỉ nhận khi ĐANG chờ phản hồi /bal của chính mình
-    this._resolveBal(ev.amount.ok ? { ok: true, ...ev.amount } : { ok: false, reason: `ambiguous: ${ev.amount.reason}` });
+    let amt = ev.amount;
+    // "$0.2": số thập phân không hậu tố có phần nguyên = 0 thì chắc chắn < $1 (không thể là 200) -> coi như dưới ngưỡng, không phải lỗi mơ hồ
+    if (!amt.ok && amt.reason === 'ambiguous-decimal-without-suffix' && /»\s*Bạn có\s+\$0[.,]\d+\s*\.?$/.test(String(ev.line || ''))) {
+      amt = { ok: true, value: 0n, precision: 1n, suffix: '', exact: false };
+    }
+    this._resolveBal(amt.ok ? { ok: true, ...amt } : { ok: false, reason: `ambiguous: ${amt.reason}` });
   }
   _onPaid(ev) {
     const c = this._payCtx;
